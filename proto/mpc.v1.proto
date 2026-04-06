@@ -1,0 +1,80 @@
+syntax = "proto3";
+
+package mpc.v1;
+
+option go_package = "github.com/BroLabel/brosettlement-mpc-co-signer/api/proto/mpc/v1;mpcv1";
+
+import "google/protobuf/timestamp.proto";
+
+service ControlService {
+  rpc StartDkg(StartDkgRequest) returns (StartDkgResponse);
+  rpc StartSign(StartSignRequest) returns (StartSignResponse);
+}
+
+service RelayService {
+  rpc Connect(stream Frame) returns (stream Frame);
+}
+
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  SESSION_STATUS_RUNNING = 1;
+  SESSION_STATUS_COMPLETED = 2;
+  SESSION_STATUS_FAILED = 3;
+  SESSION_STATUS_TIMED_OUT = 4;
+}
+
+message SessionConfig {
+  string org_id = 1;
+  string chain = 2;
+  string algorithm = 3;
+  string curve = 4;
+  uint32 threshold = 5;
+  repeated string parties = 6;
+  uint32 session_ttl_seconds = 7;
+}
+
+message StartDkgRequest {
+  string request_id = 1;
+  string correlation_id = 2;
+  string session_id = 3;
+  SessionConfig config = 4;
+}
+
+message StartDkgResponse {
+  string session_id = 1;
+  SessionStatus status = 2;
+}
+
+message StartSignRequest {
+  string request_id = 1;
+  string correlation_id = 2;
+  string session_id = 3;
+  string key_id = 4;
+  bytes digest = 5;
+  SessionConfig config = 6;
+  repeated string participants = 7;
+}
+
+message StartSignResponse {
+  string session_id = 1;
+  SessionStatus status = 2;
+}
+
+message Frame {
+  string session_id = 1;
+  string org_id = 2;
+  string message_id = 3;
+  uint64 seq = 4;
+  uint32 round = 5;
+  string from_party = 6;
+  string to_party = 7;
+  bytes payload = 8;
+  string correlation_id = 9;
+  google.protobuf.Timestamp sent_at = 10;
+  string stage = 11;
+  uint32 round_hint = 12;
+  bool broadcast = 13;
+  string protocol = 14;
+  string message_type = 15;
+  string payload_hash = 16;
+}
