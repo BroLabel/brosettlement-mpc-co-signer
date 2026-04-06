@@ -23,6 +23,9 @@ type StreamTransport struct {
 	inbound  chan protocol.Frame
 	outbound chan protocol.Frame
 	attachMu sync.Mutex
+	closeMu  sync.Once
+	doneMu   sync.Once
+	done     chan struct{}
 	attached bool
 }
 
@@ -30,6 +33,7 @@ func NewStreamTransport(bufSize int) *StreamTransport {
 	return &StreamTransport{
 		inbound:  make(chan protocol.Frame, bufSize),
 		outbound: make(chan protocol.Frame, bufSize),
+		done:     make(chan struct{}),
 	}
 }
 
@@ -45,6 +49,7 @@ func (t *StreamTransport) Attach(stream GRPCStream) error {
 
 	// reader: stream -> inbound
 	go func() {
+		defer t.closeDone()
 		defer close(t.inbound)
 		for {
 			frame, err := stream.Recv()
@@ -68,7 +73,10 @@ func (t *StreamTransport) Attach(stream GRPCStream) error {
 					return
 				}
 				_ = stream.Send(frame)
+			case <-t.done:
+				return
 			case <-stream.Context().Done():
+				t.closeDone()
 				return
 			}
 		}
@@ -82,6 +90,8 @@ func (t *StreamTransport) SendFrame(ctx context.Context, frame protocol.Frame) e
 	select {
 	case t.outbound <- frame:
 		return nil
+	case <-t.done:
+		return errors.New("stream closed")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -100,7 +110,30 @@ func (t *StreamTransport) RecvFrame(ctx context.Context) (protocol.Frame, error)
 	}
 }
 
+// PushInbound injects a frame into inbound queue (used to replay the first relay frame).
+func (t *StreamTransport) PushInbound(ctx context.Context, frame protocol.Frame) error {
+	select {
+	case t.inbound <- frame:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (t *StreamTransport) Done() <-chan struct{} {
+	return t.done
+}
+
 // Close drains and closes the outbound channel, signalling the writer goroutine to exit.
 func (t *StreamTransport) Close() {
-	close(t.outbound)
+	t.closeMu.Do(func() {
+		close(t.outbound)
+	})
+	t.closeDone()
+}
+
+func (t *StreamTransport) closeDone() {
+	t.doneMu.Do(func() {
+		close(t.done)
+	})
 }

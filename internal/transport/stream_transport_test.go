@@ -3,6 +3,7 @@ package transport_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,9 +13,10 @@ import (
 
 // fakeStream implements transport.GRPCStream for tests.
 type fakeStream struct {
-	recv chan protocol.Frame
-	sent []protocol.Frame
-	ctx  context.Context
+	recv   chan protocol.Frame
+	sent   []protocol.Frame
+	sentMu sync.Mutex
+	ctx    context.Context
 }
 
 func newFakeStream(ctx context.Context) *fakeStream {
@@ -22,8 +24,16 @@ func newFakeStream(ctx context.Context) *fakeStream {
 }
 
 func (f *fakeStream) Send(frame protocol.Frame) error {
+	f.sentMu.Lock()
+	defer f.sentMu.Unlock()
 	f.sent = append(f.sent, frame)
 	return nil
+}
+
+func (f *fakeStream) sentCount() int {
+	f.sentMu.Lock()
+	defer f.sentMu.Unlock()
+	return len(f.sent)
 }
 
 func (f *fakeStream) Recv() (protocol.Frame, error) {
@@ -65,8 +75,8 @@ func TestSendFrameAndRecvFrame(t *testing.T) {
 	}
 	// Give writer goroutine time to flush
 	time.Sleep(10 * time.Millisecond)
-	if len(stream.sent) != 1 {
-		t.Fatalf("expected 1 sent frame, got %d", len(stream.sent))
+	if stream.sentCount() != 1 {
+		t.Fatalf("expected 1 sent frame, got %d", stream.sentCount())
 	}
 }
 
