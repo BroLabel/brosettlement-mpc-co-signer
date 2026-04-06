@@ -4,39 +4,28 @@
 
 | Version | Supported |
 |---------|-----------|
-| latest (`main`) | ✅ |
-| older releases | ❌ — please upgrade |
+| `main` | Yes |
+| older releases | No |
 
-We only provide security fixes for the latest release. If you are running an older version, upgrade before reporting.
-
----
+We currently provide security fixes only for the latest code on `main`.
 
 ## Reporting a Vulnerability
 
-**Please do not file public GitHub issues for security vulnerabilities.**
+Do not file public GitHub issues for security vulnerabilities.
 
-MPC signing infrastructure is security-critical. A vulnerability here can result in loss of funds or key material. We take all reports seriously and will respond quickly.
+MPC signing infrastructure is security-critical. A vulnerability here can result in loss of funds or exposure of key material, so we treat reports with high priority.
 
 ### How to report
 
 Send an email to **security@brolabel.io** with:
 
-- **Subject**: `[SECURITY] <short description>`
-- A description of the vulnerability
-- Steps to reproduce (proof-of-concept code or test case if possible)
-- Affected component (`mpc-core` / `mpc-co-signer` / both)
-- Your assessment of the severity and potential impact
-- Your name / handle if you want credit (optional)
+- a short description of the issue
+- steps to reproduce
+- affected component or flow
+- impact and severity assessment, if known
+- your name or handle if you want credit
 
-You may encrypt your report using our PGP key (see below).
-
-### PGP Key
-
-```
-[publish your PGP fingerprint here once generated]
-```
-
----
+If you want to share encrypted details, mention that in the email and we can coordinate a secure follow-up channel.
 
 ## Response Timeline
 
@@ -45,66 +34,54 @@ You may encrypt your report using our PGP key (see below).
 | Initial acknowledgement | 48 hours |
 | Severity assessment | 5 business days |
 | Fix or mitigation plan | 15 business days |
-| Coordinated disclosure | Agreed with reporter |
+| Disclosure timing | Coordinated with the reporter |
 
-We follow **coordinated disclosure**: we ask that you give us reasonable time to fix the issue before publishing. We will credit you in the release notes unless you prefer to remain anonymous.
-
----
+We follow coordinated disclosure and ask for reasonable time to investigate and fix the issue before public disclosure.
 
 ## Scope
 
 ### In scope
 
-- Key generation (DKG) protocol — correctness and entropy
-- Signing protocol — unauthorized signing, signature forgery
-- Key share confidentiality — leakage of Share A, B, or C
-- Share encryption / decryption (`AES-256-GCM` implementation)
-- Memory safety — key material persistence beyond intended lifetime (e.g., Share B not zeroed on SIGTERM)
-- Authentication / authorization bypass on the co-signer RPC/REST interface
-- Dependency vulnerabilities in `tss-lib` or other cryptographic dependencies
-- Docker image attack surface (`mpc-co-signer`)
+- key generation and signing flow correctness
+- unauthorized signing
+- key share confidentiality
+- share encryption and decryption
+- key material remaining in memory longer than intended
+- authentication or authorization bypass on co-signer interfaces
+- vulnerabilities in cryptographic or signing dependencies
+- Docker image attack surface
 
 ### Out of scope
 
-- Vulnerabilities in infrastructure you control (your HSM, your secrets manager, your network)
-- Theoretical attacks with no practical exploit path
-- DoS / resource exhaustion (unless it leads to key material exposure)
-- Issues in test code or documentation
-
----
+- vulnerabilities in infrastructure outside this repository
+- purely theoretical attacks with no practical exploit path
+- denial of service issues unless they also expose key material
+- documentation or test-only issues without security impact
 
 ## Threat Model
 
-This library assumes:
+This project assumes:
 
-- The **server (MPC Signer)** may be compromised — the design should remain secure
-- The **client (Co-Signer)** may be compromised — the design should remain secure
-- Both parties being simultaneously compromised is outside scope (that is, by design, signing is possible)
-- Network transport is **untrusted** — all communication must be authenticated and encrypted
+- the signer side may be compromised
+- the co-signer side may be compromised
+- the network is untrusted
+- simultaneous compromise of both trusted parties is outside the intended security boundary
 
-Vulnerabilities that break the noncustodial guarantee (i.e., allow one party to sign without the other) are **critical severity**.
-
----
+Issues that break the noncustodial guarantee or allow unilateral signing are critical.
 
 ## Severity Classification
 
 | Severity | Examples |
 |----------|----------|
-| **Critical** | Unilateral signing without co-signer participation; full key reconstruction from one share |
-| **High** | Key share leakage; authentication bypass; Share B persists in memory after zeroing |
-| **Medium** | Side-channel information leakage; insecure defaults in config |
-| **Low** | Minor cryptographic weaknesses; non-exploitable logic errors |
-
----
+| Critical | Unilateral signing or private key reconstruction from one side |
+| High | Key share leakage, auth bypass, failure to clear sensitive material |
+| Medium | Insecure defaults, side-channel leakage with practical impact |
+| Low | Minor weaknesses without a practical exploit path |
 
 ## Bug Bounty
 
-We do not currently operate a formal bug bounty program. We offer **public recognition** (Hall of Fame in this repo) and may offer discretionary rewards for critical findings. Contact us to discuss before reporting if this matters to you.
-
----
+We do not currently run a formal bug bounty program. We may offer public recognition or discretionary rewards for significant findings.
 
 ## Hall of Fame
 
-Thank you to the security researchers who have responsibly disclosed vulnerabilities:
-
-*(none yet — be the first)*
+Thank you to the researchers who disclose issues responsibly.
