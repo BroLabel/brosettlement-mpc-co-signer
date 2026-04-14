@@ -180,6 +180,34 @@ type ClaimResult struct {
 deadline locally from `time.Now()` because the claim endpoint is the source of truth for the
 post-claim extension window.
 
+**Intent payload contract:** each claimed intent must contain enough data to build the exact TSS
+request expected by `brosettlement-mpc-core`.
+
+```go
+type Intent struct {
+    IntentID   string
+    SessionID  string
+    Type       string // "DKG" | "SIGN"
+    ExpiresAt  time.Time
+    Payload    IntentPayload
+}
+
+type IntentPayload struct {
+    OrgID      string
+    KeyID      string   // required for SIGN, ignored for DKG
+    Parties    []string
+    Threshold  uint32
+    Algorithm  string
+    Curve      string
+    Chain      string
+    Digest     []byte   // required for SIGN, empty for DKG
+    PartyID    string   // optional consistency-check field
+}
+```
+
+Validation happens **after claim succeeds**. If required fields are missing or inconsistent, the
+worker posts `FAILED / INVALID_INTENT` and does not start the MPC session.
+
 **Sequence model:** the design uses **two different sequence spaces** and they must not be
 collapsed into one field:
 
@@ -190,6 +218,22 @@ collapsed into one field:
 
 The monolith may store both values, but it must not overwrite the protocol frame sequence with the
 polling cursor.
+
+**Frame mapping contract:** outbound HTTP payloads may omit fields that the monolith can derive
+from the claimed intent (`OrgID`, `Stage`, `Protocol`, `FromParty`, `PayloadHash`, `SentAt`).
+Inbound messages returned to the worker must reconstruct a complete `protocol.Frame` with the
+canonical protocol fields populated, at minimum:
+
+- `SessionID`
+- `OrgID`
+- `Stage`
+- `FromParty`
+- `Seq`
+- `Payload`
+- `PayloadHash` (or enough information for the worker to recompute it deterministically)
+- `Broadcast` and/or `ToParty`
+
+Without these fields, core frame validation / dedupe semantics are no longer reliable.
 
 **Ed25519 signing:** encapsulated in a private `signRequest(req)` middleware — adds
 `X-Api-Key-Id`, `X-Api-Timestamp`, `X-Api-Signature`. Exact signing scheme (what bytes are
@@ -380,6 +424,16 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     // --- From here: intent is CLAIMED ---
     // All failures must either reach PostResult or be left to monolith timeout sweep.
 
+    if err := validateIntent(intent); err != nil {
+        log.Error("invalid intent payload", "err", err)
+        postResult(ctx, client, intent.IntentID, IntentResult{
+            Status:       "FAILED",
+            ErrorCode:    "INVALID_INTENT",
+            ErrorMessage: err.Error(),
+        }, log)
+        return
+    }
+
     if intent.Payload.PartyID != "" && intent.Payload.PartyID != localPartyID {
         log.Error("intent party mismatch", "intentPartyId", intent.Payload.PartyID,
                   "localPartyId", localPartyID)
@@ -459,6 +513,7 @@ func releaseSem(sem chan struct{}, repollCh chan struct{}) {
 | `runErr == nil` | `COMPLETED` | — |
 | `context.DeadlineExceeded` | `FAILED` | `"SESSION_TIMEOUT"` |
 | `context.Canceled` (shutdown) | `FAILED` | `"WORKER_SHUTDOWN"` |
+| Missing / malformed intent payload | `FAILED` | `"INVALID_INTENT"` |
 | Claimed intent already expired | `FAILED` | `"ALREADY_EXPIRED"` |
 | Party mismatch (`intent.payload.partyId` != local config) | `FAILED` | `"INVALID_PARTY"` |
 | MPC protocol error | `FAILED` | `"MPC_PROTOCOL_ERROR"` |
