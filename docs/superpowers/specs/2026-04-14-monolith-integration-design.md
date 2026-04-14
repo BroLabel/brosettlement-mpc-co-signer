@@ -162,6 +162,7 @@ GetMessages(ctx, sessionID string, afterCursor uint64) ([]InboundMessage, error)
     → `InboundMessage.Cursor` is a transport-level delivery offset, distinct from `InboundMessage.Frame.Seq`
 PostResult(ctx, intentID string, result IntentResult) error
     → IntentResult = { Status "COMPLETED"|"FAILED", ErrorCode string, ErrorMessage string }
+    → `ErrorCode` is a stable machine-readable contract owned by this service
 ```
 
 `ClaimIntent` sends `{ "claimedBy": client.workerID }` in the request body.
@@ -508,6 +509,10 @@ func releaseSem(sem chan struct{}, repollCh chan struct{}) {
 
 **Result classification:**
 
+The worker owns the mapping from internal/core errors to wire-level `errorCode`. Known
+`brosettlement-mpc-core` failures must be mapped explicitly and must not be collapsed into
+`INTERNAL_ERROR`.
+
 | Condition | Status | errorCode |
 |---|---|---|
 | `runErr == nil` | `COMPLETED` | — |
@@ -516,12 +521,17 @@ func releaseSem(sem chan struct{}, repollCh chan struct{}) {
 | Missing / malformed intent payload | `FAILED` | `"INVALID_INTENT"` |
 | Claimed intent already expired | `FAILED` | `"ALREADY_EXPIRED"` |
 | Party mismatch (`intent.payload.partyId` != local config) | `FAILED` | `"INVALID_PARTY"` |
+| Platform share not found (`shares.ErrShareNotFound`) | `FAILED` | `"SHARE_NOT_FOUND"` |
+| Share metadata mismatch (`shares.ErrMetadataMismatch`) | `FAILED` | `"SHARE_METADATA_MISMATCH"` |
+| DKG result missing public key (`tss.ErrMissingDKGPublicKey`) | `FAILED` | `"DKG_MISSING_PUBLIC_KEY"` |
+| DKG result missing address (`tss.ErrMissingDKGAddress`) | `FAILED` | `"DKG_MISSING_ADDRESS"` |
 | MPC protocol error | `FAILED` | `"MPC_PROTOCOL_ERROR"` |
-| Key not found | `FAILED` | `"KEY_NOT_FOUND"` |
 | Unknown intent type | `FAILED` | `"INVALID_INTENT"` |
 | Other | `FAILED` | `"INTERNAL_ERROR"` |
 
-`errorCode` is a string on the wire. Internally, constants are defined in `worker/errors.go`.
+`errorCode` is a string on the wire. Internally, constants are defined in `worker/errors.go`, and
+`buildResult` should use `errors.Is`-based matching so wrapped core errors still map to the stable
+wire codes above.
 
 ---
 
