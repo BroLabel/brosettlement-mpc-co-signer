@@ -28,9 +28,13 @@ BroSettlement called `ControlService.StartDkg` / `StartSign` over gRPC, then con
 
 ### Deployment model
 
-Single process, single instance for MVP. No distributed coordination required — the monolith's
-`POST /claim` compare-and-set provides sufficient mutual exclusion if multiple instances are ever
-deployed in the future.
+Single process, single instance for MVP. No distributed coordination required.
+
+If the service is horizontally scaled in the future, the monolith's `POST /claim` compare-and-set
+is sufficient only for **replicas of the same logical co-signer party** (same
+`CO_SIGNER_PARTY_ID`). Supporting multiple distinct co-signer parties requires party-scoped work
+routing in the monolith: `GET /intents/pending` must only return intents targeted to this local
+party (or `POST /claim` must reject party mismatch before ownership transfer).
 
 ### Crash recovery
 
@@ -161,8 +165,11 @@ GetMessages(ctx, sessionID string, afterCursor uint64) ([]InboundMessage, error)
     → returns only messages where cursor > afterCursor
     → `InboundMessage.Cursor` is a transport-level delivery offset, distinct from `InboundMessage.Frame.Seq`
 PostResult(ctx, intentID string, result IntentResult) error
-    → IntentResult = { Status "COMPLETED"|"FAILED", ErrorCode string, ErrorMessage string }
+    → IntentResult = { Status "COMPLETED"|"FAILED", ErrorCode string, ErrorMessage string,
+                       Output *IntentOutput }
     → `ErrorCode` is a stable machine-readable contract owned by this service
+    → on successful DKG, `Output.KeyID` is required and becomes the canonical key identity
+      for future SIGN intents
 ```
 
 `ClaimIntent` sends `{ "claimedBy": client.workerID }` in the request body.
@@ -208,6 +215,29 @@ type IntentPayload struct {
 
 Validation happens **after claim succeeds**. If required fields are missing or inconsistent, the
 worker posts `FAILED / INVALID_INTENT` and does not start the MPC session.
+
+```go
+type IntentOutput struct {
+    KeyID     string // required for successful DKG
+    PublicKey string // optional, included when available
+    Address   string // optional, included when available
+}
+```
+
+**Canonical key identity contract:** for DKG, the worker derives the canonical key identity as
+`NormalizeKeyID(intent.SessionID)` and returns it in `IntentResult.Output.KeyID` on success. The
+monolith must persist that value and use it as `payload.keyId` for subsequent SIGN intents. DKG
+intents do not accept caller-provided `payload.keyId` as a source of truth.
+
+**Validation rules:** `validateIntent(intent)` should reject at least:
+
+- empty `SessionID` or `Payload.OrgID`
+- `Type` outside `DKG|SIGN`
+- fewer than 2 unique parties
+- `Threshold < 2` or `Threshold > len(Parties)`
+- local party not present in `Payload.Parties`
+- unsupported `Algorithm` / `Curve` combination for the current core
+- `SIGN` intents with empty `KeyID` or empty `Digest`
 
 **Sequence model:** the design uses **two different sequence spaces** and they must not be
 collapsed into one field:
@@ -481,7 +511,7 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     log.Info("session finished", "result", outcomeOf(runErr, sessionCtx),
              "durationMs", time.Since(start).Milliseconds())
 
-    result := buildResult(runErr, sessionCtx)
+    result := buildResult(runErr, sessionCtx, intent)
 
     // PostResult uses a background context on shutdown (main ctx may be cancelled).
     postCtx := ctx
@@ -531,7 +561,8 @@ The worker owns the mapping from internal/core errors to wire-level `errorCode`.
 
 `errorCode` is a string on the wire. Internally, constants are defined in `worker/errors.go`, and
 `buildResult` should use `errors.Is`-based matching so wrapped core errors still map to the stable
-wire codes above.
+wire codes above. On successful DKG, `buildResult` must also populate `Output.KeyID`; `Output`
+remains empty for failure cases and for SIGN completion unless the contract is extended later.
 
 ---
 
@@ -591,7 +622,7 @@ inbound `cursor` when available.
 **Warn-level:** backoff increase, transient errors during polling, `claim outcome unknown`,
 `claim failed after retries`.
 
-**Error-level:** `intent party mismatch`, `failed to post result`.
+**Error-level:** `invalid intent payload`, `intent party mismatch`, `failed to post result`.
 
 ---
 
