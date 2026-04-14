@@ -168,8 +168,9 @@ PostResult(ctx, intentID string, result IntentResult) error
     → IntentResult = { Status "COMPLETED"|"FAILED", ErrorCode string, ErrorMessage string,
                        Output *IntentOutput }
     → `ErrorCode` is a stable machine-readable contract owned by this service
-    → on successful DKG, `Output.KeyID` is required and becomes the canonical key identity
-      for future SIGN intents
+    → on successful DKG, `Output.KeyID`, `Output.PublicKey`, and `Output.Address` are required
+    → `Output.KeyID` becomes the canonical key identity for future SIGN intents
+    → `Output` remains empty for failure cases and for successful SIGN in MVP
 ```
 
 `ClaimIntent` sends `{ "claimedBy": client.workerID }` in the request body.
@@ -219,8 +220,8 @@ worker posts `FAILED / INVALID_INTENT` and does not start the MPC session.
 ```go
 type IntentOutput struct {
     KeyID     string // required for successful DKG
-    PublicKey string // optional, included when available
-    Address   string // optional, included when available
+    PublicKey string // required for successful DKG
+    Address   string // required for successful DKG
 }
 ```
 
@@ -228,6 +229,17 @@ type IntentOutput struct {
 `NormalizeKeyID(intent.SessionID)` and returns it in `IntentResult.Output.KeyID` on success. The
 monolith must persist that value and use it as `payload.keyId` for subsequent SIGN intents. DKG
 intents do not accept caller-provided `payload.keyId` as a source of truth.
+
+**Successful DKG output contract:** successful DKG completion must produce a full `IntentOutput`,
+not just `KeyID`:
+
+- `Output.KeyID = NormalizeKeyID(intent.SessionID)`
+- `Output.PublicKey` is extracted from the completed DKG share bound to `intent.SessionID`
+- `Output.Address` is resolved from the completed DKG session bound to `intent.SessionID`
+
+The worker must not post a partial successful DKG result. If `PublicKey` or `Address` cannot be
+materialized after a nominally successful DKG run, the worker downgrades the result to
+`FAILED / INTERNAL_ERROR` instead of posting `COMPLETED` with missing fields.
 
 **Validation rules:** `validateIntent(intent)` should reject at least:
 
@@ -266,10 +278,39 @@ canonical protocol fields populated, at minimum:
 
 Without these fields, core frame validation / dedupe semantics are no longer reliable.
 
-**Ed25519 signing:** encapsulated in a private `signRequest(req)` middleware — adds
-`X-Api-Key-Id`, `X-Api-Timestamp`, `X-Api-Signature`. Exact signing scheme (what bytes are
-signed) must be aligned with the monolith before implementation; it is an implementation detail,
-not a design decision.
+**Ed25519 signing:** encapsulated in a private `signRequest(req)` middleware.
+
+- Required auth headers for every request: `X-Api-Key-Id`, `X-Api-Timestamp`,
+  `X-Api-Signature`
+- For requests with body, the client also sends `X-Api-Body-Hash = hex(sha256(raw_body_bytes))`
+- For body-less requests, the canonical body-hash component is the empty string; the client may
+  omit `X-Api-Body-Hash`
+- For `POST` / `PUT` / `PATCH` requests under API-key auth, the client must also send
+  `X-Idempotency-Key`
+
+Canonical string signed by Ed25519:
+
+```text
+UPPERCASE(method) + "\n" +
+path_without_query + "\n" +
+(x_api_body_hash || "") + "\n" +
+x_api_timestamp
+```
+
+Rules:
+
+- `method` is normalized with `strings.ToUpper`
+- `path_without_query` is the request path exactly as sent, excluding everything after `?`
+- query string is **not** part of the signature
+- `X-Api-Key-Id` is **not** part of the signature payload
+- `content-type` is **not** part of the signature payload
+- `X-Api-Timestamp` is Unix time in whole seconds
+- `X-Api-Signature` is base64-encoded Ed25519 signature over the canonical UTF-8 bytes
+- default allowed clock skew is `+-300s` on the monolith side
+
+The worker should hash the exact raw bytes it sends on the wire when populating
+`X-Api-Body-Hash`. The current monolith signing guard validates the signature against the supplied
+header value and does **not** independently recompute the body hash from the raw request body.
 
 **Retry policy:** transient network errors and 5xx responses — up to 3 attempts with exponential
 backoff. 4xx responses (except the typed errors above) — immediate error return. `PostMessage` and
@@ -425,6 +466,26 @@ func nextBackoff(current time.Duration, cfg SchedulerConfig) time.Duration {
 
 ### SessionWorker (`internal/worker/session_worker.go`)
 
+The worker depends on a slightly richer runner interface than the removed gRPC server because a
+successful DKG must return wire-level output, not just `nil` error:
+
+```go
+type DKGOutput struct {
+    PublicKey string
+    Address   string
+}
+
+type tssRunner interface {
+    RunDKGSession(ctx context.Context, req tss.DKGSessionRequest) error
+    RunSignSession(ctx context.Context, req tss.SignSessionRequest) error
+    ReadDKGOutput(sessionID string) (DKGOutput, error)
+}
+```
+
+`ReadDKGOutput` is a thin adapter over the current `brosettlement-mpc-core` service methods
+(`ExportECDSAKeyShare(sessionID)` + `ECDSAAddress(sessionID)`), so `session_worker.go` stays
+decoupled from tss-lib internals while still being able to populate `IntentResult.Output`.
+
 ```go
 func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     runner tssRunner, localPartyID string, framePollInterval time.Duration,
@@ -511,7 +572,7 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     log.Info("session finished", "result", outcomeOf(runErr, sessionCtx),
              "durationMs", time.Since(start).Milliseconds())
 
-    result := buildResult(runErr, sessionCtx, intent)
+    result := buildResult(runErr, sessionCtx, intent, runner)
 
     // PostResult uses a background context on shutdown (main ctx may be cancelled).
     postCtx := ctx
@@ -552,17 +613,23 @@ The worker owns the mapping from internal/core errors to wire-level `errorCode`.
 | Claimed intent already expired | `FAILED` | `"ALREADY_EXPIRED"` |
 | Party mismatch (`intent.payload.partyId` != local config) | `FAILED` | `"INVALID_PARTY"` |
 | Platform share not found (`shares.ErrShareNotFound`) | `FAILED` | `"SHARE_NOT_FOUND"` |
+| Platform share disabled (`shares.ErrShareDisabled`) | `FAILED` | `"SHARE_DISABLED"` |
+| Corrupt share payload (`shares.ErrInvalidSharePayload`) | `FAILED` | `"INVALID_SHARE_PAYLOAD"` |
 | Share metadata mismatch (`shares.ErrMetadataMismatch`) | `FAILED` | `"SHARE_METADATA_MISMATCH"` |
 | DKG result missing public key (`tss.ErrMissingDKGPublicKey`) | `FAILED` | `"DKG_MISSING_PUBLIC_KEY"` |
 | DKG result missing address (`tss.ErrMissingDKGAddress`) | `FAILED` | `"DKG_MISSING_ADDRESS"` |
 | MPC protocol error | `FAILED` | `"MPC_PROTOCOL_ERROR"` |
 | Unknown intent type | `FAILED` | `"INVALID_INTENT"` |
+| Successful DKG but output materialization failed | `FAILED` | `"INTERNAL_ERROR"` |
 | Other | `FAILED` | `"INTERNAL_ERROR"` |
 
 `errorCode` is a string on the wire. Internally, constants are defined in `worker/errors.go`, and
 `buildResult` should use `errors.Is`-based matching so wrapped core errors still map to the stable
-wire codes above. On successful DKG, `buildResult` must also populate `Output.KeyID`; `Output`
-remains empty for failure cases and for SIGN completion unless the contract is extended later.
+wire codes above. On successful DKG, `buildResult` must populate all three output fields:
+`Output.KeyID = NormalizeKeyID(intent.SessionID)` plus `Output.PublicKey` / `Output.Address` from
+`runner.ReadDKGOutput(intent.SessionID)`. `Output` remains empty for failure cases and for SIGN
+completion unless the contract is extended later. Share-store I/O, decrypt, or OS errors that do
+not map to typed core sentinels remain `INTERNAL_ERROR` in MVP.
 
 ---
 
@@ -622,7 +689,8 @@ inbound `cursor` when available.
 **Warn-level:** backoff increase, transient errors during polling, `claim outcome unknown`,
 `claim failed after retries`.
 
-**Error-level:** `invalid intent payload`, `intent party mismatch`, `failed to post result`.
+**Error-level:** `invalid intent payload`, `intent party mismatch`, `failed to build dkg output`,
+`failed to post result`.
 
 ---
 
@@ -656,8 +724,22 @@ SIGINT / SIGTERM
 
 ---
 
-## Open Questions for Implementation
+## Monolith Auth Contract
 
-1. **Ed25519 signing scheme** — the exact bytes signed for `X-Api-Signature` (e.g.,
-   `timestamp + method + path + body_hash`) must be aligned with the monolith before implementing
-   `signRequest`. This is an implementation detail, not a design decision.
+The current BroSettlement implementation defines the following auth/error behavior for API-key
+requests:
+
+- missing signing headers → `401 Unauthorized` / `api_key.errors.MISSING_HEADERS`
+- malformed timestamp → `401 Unauthorized` / `api_key.errors.INVALID_TIMESTAMP`
+- clock skew beyond allowed window → `401 Unauthorized` / `api_key.errors.CLOCK_SKEW`
+- unknown or revoked key id → `401 Unauthorized` / `api_key.errors.INVALID_OR_REVOKED_KEY`
+- source IP blocked by key policy → `401 Unauthorized` / `api_key.errors.IP_NOT_ALLOWED`
+- invalid stored public key → `401 Unauthorized` / `api_key.errors.INVALID_PUBLIC_KEY`
+- malformed signature encoding / length → `401 Unauthorized` / `api_key.errors.INVALID_SIGNATURE_FORMAT`
+- signature verification failure → `401 Unauthorized` / `api_key.errors.INVALID_SIGNATURE`
+- missing `X-Idempotency-Key` on `POST` / `PUT` / `PATCH` → `400 Bad Request` /
+  `api_key.errors.IDEMPOTENCY_KEY_REQUIRED`
+
+Replay protection in the currently deployed monolith is limited to the timestamp skew window.
+`X-Idempotency-Key` is enforced for mutating requests, but there is no active nonce store or
+server-side replay ledger beyond that in the signing layer today.
