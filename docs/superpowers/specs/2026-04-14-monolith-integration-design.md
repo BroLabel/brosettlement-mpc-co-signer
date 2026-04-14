@@ -97,7 +97,7 @@ internal/sharestore/file_store.go
 ```
 main.go
   ├── creates MonolithClient (URL, Ed25519 key, HTTP timeout)
-  ├── creates Scheduler (client, tssRunner, semaphore, backoff config)
+  ├── creates Scheduler (client, tssRunner, localPartyID, framePollInterval, semaphore, backoff config)
   └── go scheduler.Run(ctx)
 
 Scheduler
@@ -110,14 +110,15 @@ Scheduler
 runSession goroutine
   ├── defer releaseSem(sem, repollCh)   [always: release slot + best-effort repoll signal]
   ├── client.ClaimIntent(ctx, intentID) [single point of work capture]
-  │     ErrAlreadyClaimed / ErrNotFound → log + return  (intent was PENDING, no claim made)
-  │     network/5xx after retries       → log + return  (intent stays PENDING)
+  │     ErrAlreadyClaimed               → log + return  (another worker owns the claim)
+  │     ErrNotFound                     → log + return  (intent was removed or expired)
+  │     ErrClaimOutcomeUnknown          → log + return  (worker must not assume it owns the claim)
   ├── [intent is now CLAIMED — all subsequent errors lead to PostResult or monolith timeout]
-  ├── tr := NewHTTPTransport(client, sessionID, partyID)
+  ├── sessionCtx = derived from claim.expiresAt
+  ├── tr := NewHTTPTransport(client, sessionID, framePollInterval, log)
   ├── defer tr.Close()
-  ├── tr.Start(ctx)                     [idempotent, always succeeds, no error returned]
-  ├── sessionCtx = derived from intent.expiresAt (+ optional local safety buffer)
-  ├── tssRunner.Run{DKG,Sign}Session(sessionCtx, ..., tr)
+  ├── tr.Start(sessionCtx)              [idempotent, always succeeds, no error returned]
+  ├── tssRunner.Run{DKG,Sign}Session(sessionCtx, ..., localPartyID, tr)
   ├── client.PostResult(ctx, intentID, result)
   │     on failure: best-effort; intent stays CLAIMED until monolith timeout sweep
   └── [releaseSem fires via defer]
@@ -145,15 +146,37 @@ type Client struct {
 
 ```
 GetPendingIntents(ctx) ([]Intent, error)
-ClaimIntent(ctx, intentID string) error
+ClaimIntent(ctx, intentID string) (ClaimResult, error)
     → ErrAlreadyClaimed on 409, ErrNotFound on 404
-PostMessage(ctx, sessionID string, frame OutboundFrame) (seq int64, error)
+    → ErrClaimOutcomeUnknown if retries exhaust after an ambiguous timeout / connection loss
+    → ClaimResult carries the authoritative post-claim deadline (see below)
+PostMessage(ctx, sessionID string, frame OutboundFrame) (seq uint64, error)
     → X-Idempotency-Key = frame.MessageID
-GetMessages(ctx, sessionID string, afterSeq int64) ([]InboundMessage, error)
+    → OutboundFrame = { Seq uint64, Round uint32, RoundHint uint32, Broadcast bool,
+                        ToPartyID string, MessageType string, CorrelationID string,
+                        Payload []byte, MessageID string }
+    → fromPartyId is derived server-side — the client never sends it
+GetMessages(ctx, sessionID string, afterSeq uint64) ([]InboundMessage, error)
+    → returns only messages where seq > afterSeq
 PostResult(ctx, intentID string, result IntentResult) error
+    → IntentResult = { Status "COMPLETED"|"FAILED", ErrorCode string, ErrorMessage string }
 ```
 
 `ClaimIntent` sends `{ "claimedBy": client.workerID }` in the request body.
+The monolith claim contract must be **idempotent per worker**: if the same `claimedBy` retries a
+claim after a lost response, the endpoint returns `200` with the same `ClaimResult` instead of `409`.
+
+**ClaimResult:**
+
+```go
+type ClaimResult struct {
+    ExpiresAt time.Time  // post-claim deadline (original + 10 min extension)
+}
+```
+
+`expiresAt` is a required part of the successful claim response. The worker must not infer the
+deadline locally from `time.Now()` because the claim endpoint is the source of truth for the
+post-claim extension window.
 
 **Ed25519 signing:** encapsulated in a private `signRequest(req)` middleware — adds
 `X-Api-Key-Id`, `X-Api-Timestamp`, `X-Api-Signature`. Exact signing scheme (what bytes are
@@ -163,7 +186,9 @@ not a design decision.
 **Retry policy:** transient network errors and 5xx responses — up to 3 attempts with exponential
 backoff. 4xx responses (except the typed errors above) — immediate error return. `PostMessage` and
 `PostResult` are safe to retry because the monolith enforces idempotency via idempotency key /
-DB-level state respectively.
+DB-level state respectively. `ClaimIntent` retries are safe only because the claim contract is
+idempotent for the same `claimedBy`; otherwise the client returns `ErrClaimOutcomeUnknown` and the
+worker does not start the MPC session blindly.
 
 ---
 
@@ -174,20 +199,24 @@ Structurally similar to the removed `StreamTransport`.
 
 ```go
 type HTTPTransport struct {
-    client      *monolith.Client
-    sessionID   string
-    fromPartyID string
-    inbound     chan protocol.Frame  // buffered, default size 256
-    startOnce   sync.Once
-    closeOnce   sync.Once
-    done        chan struct{}
-    log         *slog.Logger
+    client       *monolith.Client
+    sessionID    string
+    pollInterval time.Duration
+    inbound      chan protocol.Frame  // buffered, default size 256
+    startOnce    sync.Once
+    closeOnce    sync.Once
+    done         chan struct{}
+    log          *slog.Logger
 }
 ```
 
+Note: no `fromPartyID` field. `fromPartyId` is derived server-side by the monolith from the
+claimed intent — the transport never needs it for `SendFrame`.
+
 **Contract:**
 
-- `Start(ctx)` — idempotent via `sync.Once`; launches exactly one polling goroutine; never returns
+- `Start(ctx)` — idempotent via `sync.Once`; launches exactly one polling goroutine bound to the
+  session context; never returns
   an error.
 - `Close()` — idempotent via `sync.Once`; closes `done`; polling goroutine exits on next iteration.
   Does **not** drain `inbound` — any buffered frames are discarded. This is acceptable for MVP:
@@ -205,14 +234,14 @@ type HTTPTransport struct {
 **Background polling goroutine:**
 
 ```
-afterSeq := int64(0)
+afterSeq := uint64(0)
 for {
     select { case <-done: return; default: }
 
     msgs, err := client.GetMessages(ctx, sessionID, afterSeq)
     if err:
         if ctx is done → return
-        log.Warn; sleep(framePollInterval); continue
+        log.Warn; sleep(pollInterval); continue
 
     sort msgs by seq ASC  // transport sorts if API does not guarantee order
 
@@ -221,12 +250,12 @@ for {
         afterSeq = max(afterSeq, msg.Seq)
 
     if len(msgs) == 0:
-        sleep(framePollInterval)
+        sleep(pollInterval)
     // if msgs were non-empty: loop immediately (more may be available)
 }
 ```
 
-Frame polling uses a **fixed** `framePollInterval` (no adaptive backoff) because session latency
+Frame polling uses a **fixed** `pollInterval` (no adaptive backoff) because session latency
 takes priority over reduced request volume.
 
 ---
@@ -234,20 +263,28 @@ takes priority over reduced request volume.
 ### Scheduler (`internal/worker/scheduler.go`)
 
 ```go
+type SchedulerConfig struct {
+    MinInterval   time.Duration  // lower bound on poll interval (backoff floor)
+    MaxInterval   time.Duration  // upper bound on poll interval (backoff ceiling)
+    BackoffFactor float64        // multiplier applied on empty / failed polls
+}
+
 type Scheduler struct {
-    client   *monolith.Client
-    runner   tssRunner
-    sem      chan struct{}      // buffered cap=maxConcurrent; acquire=send, release=recv
-    repollCh chan struct{}      // buffered cap=1; best-effort immediate-repoll signal
-    cfg      SchedulerConfig   // MinInterval, MaxInterval, BackoffFactor
-    log      *slog.Logger
+    client            *monolith.Client
+    runner            tssRunner
+    localPartyID      string
+    framePollInterval time.Duration
+    sem               chan struct{}     // buffered cap=maxConcurrent; acquire=send, release=recv
+    repollCh          chan struct{}     // buffered cap=1; best-effort immediate-repoll signal
+    cfg               SchedulerConfig
+    log               *slog.Logger
 }
 ```
 
 **Main loop:**
 
 ```go
-backoff := cfg.MinInterval
+backoff := s.cfg.MinInterval
 for {
     select {
     case <-ctx.Done():
@@ -258,34 +295,40 @@ for {
 
     intents, err := s.client.GetPendingIntents(ctx)
     if err != nil {
-        s.log.Warn("monolith request failed", "err", err)
-        backoff = min(backoff*cfg.BackoffFactor, cfg.MaxInterval)
+        s.log.Warn("monolith request retry exhausted", "operation", "getPendingIntents", "err", err)
+        backoff = nextBackoff(backoff, s.cfg)
         continue
     }
 
     if len(intents) == 0 {
-        backoff = min(backoff*cfg.BackoffFactor, cfg.MaxInterval)
+        backoff = nextBackoff(backoff, s.cfg)
         continue
     }
-    backoff = cfg.MinInterval  // reset on any intents
+    backoff = s.cfg.MinInterval  // reset on any intents returned
 
+dispatch:
     for _, intent := range intents {
         select {
         case s.sem <- struct{}{}:
-            go runSession(ctx, intent, s.client, s.runner, s.sem, s.repollCh, s.log)
+            go runSession(ctx, intent, s.client, s.runner, s.localPartyID,
+                s.framePollInterval, s.sem, s.repollCh, s.log)
         default:
             // No free slots. Remaining intents stay PENDING and will be re-fetched
-            // on the next poll cycle. We stop trying to dispatch further intents
-            // in this batch — use a labeled break to exit the for loop.
-            goto waitNext
+            // on the next poll cycle. Labeled break exits the for loop (bare `break`
+            // inside a `select` would only exit the select).
+            break dispatch
         }
     }
-waitNext:
+}
+
+func nextBackoff(current time.Duration, cfg SchedulerConfig) time.Duration {
+    next := time.Duration(float64(current) * cfg.BackoffFactor)
+    if next > cfg.MaxInterval {
+        return cfg.MaxInterval
+    }
+    return next
 }
 ```
-
-Note: `goto waitNext` is used instead of `break` because a bare `break` inside a `select` in Go
-exits the `select` statement, not the enclosing `for` loop.
 
 ---
 
@@ -293,7 +336,8 @@ exits the `select` statement, not the enclosing `for` loop.
 
 ```go
 func runSession(ctx context.Context, intent Intent, client *monolith.Client,
-    runner tssRunner, sem chan struct{}, repollCh chan struct{}, log *slog.Logger) {
+    runner tssRunner, localPartyID string, framePollInterval time.Duration,
+    sem chan struct{}, repollCh chan struct{}, log *slog.Logger) {
 
     defer releaseSem(sem, repollCh)  // invariant: always releases slot
 
@@ -301,37 +345,65 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
                    "type", intent.Type)
 
     // --- Claim (side-effect free until here) ---
-    if err := client.ClaimIntent(ctx, intent.IntentID); err != nil {
+    claim, err := client.ClaimIntent(ctx, intent.IntentID)
+    if err != nil {
         switch {
-        case errors.Is(err, monolith.ErrAlreadyClaimed),
-             errors.Is(err, monolith.ErrNotFound):
-            log.Info("intent skipped", "reason", err)
+        case errors.Is(err, monolith.ErrAlreadyClaimed):
+            log.Info("intent skipped", "reason", "already_claimed")
+        case errors.Is(err, monolith.ErrNotFound):
+            log.Info("intent skipped", "reason", "not_found")
+        case errors.Is(err, monolith.ErrClaimOutcomeUnknown):
+            log.Warn("claim outcome unknown", "err", err)
         default:
             log.Warn("claim failed after retries", "err", err)
         }
-        return  // intent remains PENDING; monolith or another worker will handle it
+        return  // no local session starts unless ownership of the claim is confirmed
     }
-    log.Info("intent claimed")
+    log.Info("intent claimed", "expiresAt", claim.ExpiresAt)
 
     // --- From here: intent is CLAIMED ---
     // All failures must either reach PostResult or be left to monolith timeout sweep.
 
-    tr := transport.NewHTTPTransport(client, intent.SessionID, intent.Payload.PartyID, log)
-    defer tr.Close()
-    tr.Start(ctx)
+    if intent.Payload.PartyID != "" && intent.Payload.PartyID != localPartyID {
+        log.Error("intent party mismatch", "intentPartyId", intent.Payload.PartyID,
+                  "localPartyId", localPartyID)
+        postResult(ctx, client, intent.IntentID, IntentResult{
+            Status:    "FAILED",
+            ErrorCode: "INVALID_PARTY",
+        }, log)
+        return
+    }
 
-    // Session deadline: intent.expiresAt extended by monolith on claim (+10 min).
-    // Use that as the hard deadline; add a small local safety buffer if needed.
-    sessionCtx, cancel := context.WithDeadline(ctx, intent.ExpiresAt)
+    // Edge case: if claim.ExpiresAt is already in the past (clock skew, slow network,
+    // monolith contract mismatch), skip running MPC and report FAILED immediately.
+    if !claim.ExpiresAt.After(time.Now()) {
+        log.Warn("claimed intent already expired", "expiresAt", claim.ExpiresAt)
+        postResult(ctx, client, intent.IntentID, IntentResult{
+            Status:    "FAILED",
+            ErrorCode: "ALREADY_EXPIRED",
+        }, log)
+        return
+    }
+
+    // Session deadline: use the post-claim expiresAt returned by the monolith.
+    // This is the extended value (original + 10 min) and is the authoritative
+    // deadline — not intent.ExpiresAt from the pre-claim GetPendingIntents response.
+    sessionCtx, cancel := context.WithDeadline(ctx, claim.ExpiresAt)
     defer cancel()
+
+    tr := transport.NewHTTPTransport(client, intent.SessionID, framePollInterval, log)
+    defer tr.Close()
+    tr.Start(sessionCtx)
+
+    log.Info("session started", "expiresAt", claim.ExpiresAt, "partyId", localPartyID)
 
     start := time.Now()
     var runErr error
     switch intent.Type {
     case "DKG":
-        runErr = runner.RunDKGSession(sessionCtx, buildDKGRequest(intent, tr))
+        runErr = runner.RunDKGSession(sessionCtx, buildDKGRequest(intent, localPartyID, tr))
     case "SIGN":
-        runErr = runner.RunSignSession(sessionCtx, buildSignRequest(intent, tr))
+        runErr = runner.RunSignSession(sessionCtx, buildSignRequest(intent, localPartyID, tr))
     default:
         runErr = fmt.Errorf("unknown intent type: %s", intent.Type)
     }
@@ -371,6 +443,8 @@ func releaseSem(sem chan struct{}, repollCh chan struct{}) {
 | `runErr == nil` | `COMPLETED` | — |
 | `context.DeadlineExceeded` | `FAILED` | `"SESSION_TIMEOUT"` |
 | `context.Canceled` (shutdown) | `FAILED` | `"WORKER_SHUTDOWN"` |
+| Claimed intent already expired | `FAILED` | `"ALREADY_EXPIRED"` |
+| Party mismatch (`intent.payload.partyId` != local config) | `FAILED` | `"INVALID_PARTY"` |
 | MPC protocol error | `FAILED` | `"MPC_PROTOCOL_ERROR"` |
 | Key not found | `FAILED` | `"KEY_NOT_FOUND"` |
 | Unknown intent type | `FAILED` | `"INVALID_INTENT"` |
@@ -404,10 +478,10 @@ func releaseSem(sem chan struct{}, repollCh chan struct{}) {
 
 `CO_SIGNER_HTTP_ADDR`, `CO_SIGNER_SHARES_DIR`, `CO_SIGNER_PARTY_ID`
 
-**Note on `CO_SIGNER_PARTY_ID`:** if `partyId` is provided per-intent by the monolith (in
-`payload.partyId`), the config variable becomes a fallback or consistency check, not the source
-of truth. This must be clarified before implementation. For MVP, `intent.Payload.PartyID` takes
-precedence; `CO_SIGNER_PARTY_ID` is used only if the intent payload omits it.
+**Note on `CO_SIGNER_PARTY_ID`:** for MVP this remains the authoritative local identity of the
+co-signer process because the current TSS service requires a stable `LocalPartyID` per worker.
+If the monolith also includes `payload.partyId`, the worker treats it as a consistency check and
+fails the intent with `INVALID_PARTY` on mismatch; it does not switch identities per intent.
 
 ### Worker identity
 
@@ -423,18 +497,19 @@ All logging via `slog` (JSON format). No external metrics in MVP.
 
 | Event | Key fields |
 |---|---|
-| `intent claimed` | `intentId`, `sessionId`, `type`, `workerID` |
-| `session started` | `intentId`, `sessionId`, `type`, `expiresAt` |
+| `intent claimed` | `intentId`, `sessionId`, `type`, `expiresAt` |
+| `session started` | `intentId`, `sessionId`, `type`, `partyId`, `expiresAt` |
 | `session finished` | `intentId`, `sessionId`, `type`, `result`, `durationMs` |
 | `result posted` | `intentId`, `status` |
 | `intent skipped` | `intentId`, `reason` (`already_claimed`, `not_found`) |
 | `monolith request retry exhausted` | `operation`, `err` |
-| `claim failed after retries` | `intentId`, `err` |
-| `failed to post result` | `intentId`, `err`, `result` |
 
 **Debug-level:** each `SendFrame` / `RecvFrame` with `sessionId`, `round`, `seq`.
 
-**Warn-level:** backoff increase, transient errors during polling.
+**Warn-level:** backoff increase, transient errors during polling, `claim outcome unknown`,
+`claim failed after retries`.
+
+**Error-level:** `intent party mismatch`, `failed to post result`.
 
 ---
 
@@ -473,11 +548,3 @@ SIGINT / SIGTERM
 1. **Ed25519 signing scheme** — the exact bytes signed for `X-Api-Signature` (e.g.,
    `timestamp + method + path + body_hash`) must be aligned with the monolith before implementing
    `signRequest`. This is an implementation detail, not a design decision.
-
-2. **`CO_SIGNER_PARTY_ID` source of truth** — clarify whether `payload.partyId` from the intent
-   is always present. If yes, the config variable can be deprecated; if it may be absent, keep it
-   as a required fallback.
-
-3. **`expiresAt` after claim** — the monolith extends `expiresAt` by 10 minutes on successful
-   claim. Confirm whether the extended value is returned in the `200` response body of
-   `POST /claim`, or whether the service must compute it locally (`claimedAt + 10min`).
