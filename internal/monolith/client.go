@@ -55,7 +55,7 @@ func (c *Client) GetPendingIntents(ctx context.Context) ([]Intent, error) {
 func (c *Client) ClaimIntent(ctx context.Context, intentID string) (ClaimResult, error) {
 	path := "/api/v1/co-signer/intents/" + url.PathEscape(intentID) + "/claim"
 	var out ClaimResult
-	if err := c.doJSON(ctx, http.MethodPost, path, nil, "", &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, intentID, &out); err != nil {
 		switch {
 		case statusCode(err) == http.StatusConflict:
 			return ClaimResult{}, ErrAlreadyClaimed

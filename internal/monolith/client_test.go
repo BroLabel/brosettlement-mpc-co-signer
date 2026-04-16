@@ -29,10 +29,12 @@ func TestClaimIntentReturnsAlreadyClaimed(t *testing.T) {
 	}
 }
 
-func TestClaimIntentSendsNoBody(t *testing.T) {
+func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 	var gotContentLength int64
+	var gotIdempotency string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotContentLength = r.ContentLength
+		gotIdempotency = r.Header.Get("X-Idempotency-Key")
 		_, _ = w.Write([]byte(`{"expiresAt":"2026-04-16T12:00:00Z"}`))
 	}))
 	defer srv.Close()
@@ -43,6 +45,9 @@ func TestClaimIntentSendsNoBody(t *testing.T) {
 	}
 	if gotContentLength > 0 {
 		t.Fatalf("ClaimIntent() sent unexpected body, ContentLength = %d", gotContentLength)
+	}
+	if gotIdempotency != "intent-1" {
+		t.Fatalf("X-Idempotency-Key = %q, want %q", gotIdempotency, "intent-1")
 	}
 }
 
