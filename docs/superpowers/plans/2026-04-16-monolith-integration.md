@@ -30,7 +30,7 @@ internal/monolith/
   client_test.go                        # signing, retry, decoding, idempotency coverage
 
 internal/transport/
-  http_transport.go                     # tss.Transport over GetMessages/PostMessage polling
+  http_transport.go                     # tss.Transport over GetMessages/PostMessage polling + frame reconstruction context
   http_transport_test.go
 
 internal/worker/
@@ -422,7 +422,12 @@ func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 			},
 		}},
 	}
-	tr := transport.NewHTTPTransport(client, "session-1", time.Millisecond, slog.Default())
+	tr := transport.NewHTTPTransport(client, transport.FrameContext{
+		SessionID: "session-1",
+		Stage:     "dkg",
+		OrgID:     "org-1",
+		Protocol:  "ECDSA",
+	}, time.Millisecond, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -431,14 +436,17 @@ func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecvFrame() error = %v", err)
 	}
-	if frame.Seq != 7 || frame.FromParty != "party-2" {
+	if frame.SessionID != "session-1" || frame.Stage != "dkg" || frame.Seq != 7 || frame.FromParty != "party-2" {
 		t.Fatalf("frame was not preserved: %+v", frame)
 	}
 }
 
 func TestSendFrameMapsOutboundPayload(t *testing.T) {
 	client := &stubClient{}
-	tr := transport.NewHTTPTransport(client, "session-1", time.Millisecond, slog.Default())
+	tr := transport.NewHTTPTransport(client, transport.FrameContext{
+		SessionID: "session-1",
+		Stage:     "sign",
+	}, time.Millisecond, slog.Default())
 	err := tr.SendFrame(context.Background(), protocol.Frame{
 		MessageID: "msg-1",
 		Seq:       9,
@@ -467,6 +475,13 @@ Expected: FAIL because `HTTPTransport` is not implemented yet.
 ```go
 var ErrTransportClosed = errors.New("transport closed")
 
+type FrameContext struct {
+	SessionID string
+	Stage     string
+	OrgID     string
+	Protocol  string
+}
+
 type messageClient interface {
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
 	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)
@@ -474,13 +489,24 @@ type messageClient interface {
 
 type HTTPTransport struct {
 	client       messageClient
-	sessionID    string
+	frameCtx     FrameContext
 	pollInterval time.Duration
 	inbound      chan protocol.Frame
 	startOnce    sync.Once
 	closeOnce    sync.Once
 	done         chan struct{}
 	log          *slog.Logger
+}
+
+func NewHTTPTransport(client messageClient, frameCtx FrameContext, pollInterval time.Duration, log *slog.Logger) *HTTPTransport {
+	return &HTTPTransport{
+		client:       client,
+		frameCtx:     frameCtx,
+		pollInterval: pollInterval,
+		inbound:      make(chan protocol.Frame, 256),
+		done:         make(chan struct{}),
+		log:          log,
+	}
 }
 
 func (t *HTTPTransport) Start(ctx context.Context) {
@@ -490,13 +516,28 @@ func (t *HTTPTransport) Start(ctx context.Context) {
 }
 
 func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) error {
-	return t.client.PostMessage(ctx, t.sessionID, monolith.OutboundFrame{
+	return t.client.PostMessage(ctx, t.frameCtx.SessionID, monolith.OutboundFrame{
 		MessageID: frame.MessageID,
 		Seq:       frame.Seq,
 		Round:     frame.Round,
 		ToPartyID: frame.ToParty,
 		Payload:   frame.Payload,
 	})
+}
+
+func (t *HTTPTransport) toFrame(msg monolith.InboundMessage) protocol.Frame {
+	return protocol.Frame{
+		SessionID: t.frameCtx.SessionID,
+		Stage:     t.frameCtx.Stage,
+		OrgID:     t.frameCtx.OrgID,
+		Protocol:  t.frameCtx.Protocol,
+		MessageID: msg.MessageID,
+		Seq:       msg.Seq,
+		Round:     msg.Round,
+		FromParty: msg.FromPartyID,
+		ToParty:   msg.ToPartyID,
+		Payload:   msg.Payload,
+	}
 }
 ```
 
@@ -603,7 +644,14 @@ func RunSession(ctx context.Context, intent monolith.Intent, client sessionClien
 	sessionCtx, cancel := context.WithDeadline(ctx, claim.ExpiresAt)
 	defer cancel()
 
-	tr := transport.NewHTTPTransport(client, intent.SessionID, framePollInterval, log)
+	frameCtx := transport.FrameContext{
+		SessionID: intent.SessionID,
+		Stage:     strings.ToLower(intent.Type),
+		OrgID:     intent.Payload.OrgID,
+		Protocol:  intent.Payload.Algorithm,
+	}
+
+	tr := transport.NewHTTPTransport(client, frameCtx, framePollInterval, log)
 	defer tr.Close()
 	tr.Start(sessionCtx)
 
@@ -906,8 +954,8 @@ git commit -m "refactor: remove grpc interface for monolith integration"
   Task 1 covers the new environment contract and removes `CO_SIGNER_API_KEY` / `CO_SIGNER_GRPC_ADDR`.
   The Monolith Contract Assumption section makes the required `BroSettlement` wire contract explicit before local implementation starts.
   Task 2 covers all five monolith endpoints, signing headers, idempotency keys, retry semantics, typed claim errors, and the split between protocol `seq` and delivery `deliverySeq`.
-  Task 3 covers the two-sequence transport model and replaces gRPC frame streaming with HTTP polling.
-  Task 4 covers claim lifecycle, intent validation, party checks, session deadline handling, and terminal result mapping without DKG output on the co-signer result endpoint.
+  Task 3 covers the two-sequence transport model, immutable frame reconstruction context, and replacement of gRPC frame streaming with HTTP polling.
+  Task 4 covers claim lifecycle, intent validation, party checks, session deadline handling, frame-context construction from intent metadata, and terminal result mapping without DKG output on the co-signer result endpoint.
   Task 5 covers adaptive pending-intent polling, repoll signaling, and bounded concurrency.
   Task 6 covers process startup, graceful shutdown, and retained health behavior.
   Task 7 covers removal of obsolete gRPC/proto/session assets and full verification.

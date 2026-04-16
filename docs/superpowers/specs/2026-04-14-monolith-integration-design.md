@@ -119,7 +119,8 @@ runSession goroutine
   │     ErrClaimOutcomeUnknown          → log + return  (worker must not assume it owns the claim)
   ├── [intent is now CLAIMED — all subsequent errors lead to PostResult or monolith timeout]
   ├── sessionCtx = derived from claim.expiresAt
-  ├── tr := NewHTTPTransport(client, sessionID, framePollInterval, log)
+  ├── frameCtx = derived from claimed intent metadata
+  ├── tr := NewHTTPTransport(client, frameCtx, framePollInterval, log)
   ├── defer tr.Close()
   ├── tr.Start(sessionCtx)              [idempotent, always succeeds, no error returned]
   ├── tssRunner.Run{DKG,Sign}Session(sessionCtx, ..., localPartyID, tr)
@@ -281,7 +282,10 @@ Inbound messages returned to the worker must include at minimum:
 - `Payload`
 
 The worker reconstructs the remaining `protocol.Frame` fields locally from the claimed intent,
-route parameters, and payload bytes.
+route parameters, and payload bytes. To make that reconstruction explicit in code,
+`HTTPTransport` receives immutable per-session `FrameContext` derived from the claimed intent,
+at minimum `SessionID` and `Stage`, and may also carry static fields such as `OrgID` /
+`Protocol` that do not change during the session.
 
 Without these fields, core frame validation / dedupe semantics are no longer reliable.
 
@@ -334,9 +338,16 @@ Implements `tss.Transport` (`SendFrame` / `RecvFrame`) over HTTP polling.
 Structurally similar to the removed `StreamTransport`.
 
 ```go
+type FrameContext struct {
+    SessionID string
+    Stage     string
+    OrgID     string
+    Protocol  string
+}
+
 type HTTPTransport struct {
     client       *monolith.Client
-    sessionID    string
+    frameCtx     FrameContext
     pollInterval time.Duration
     inbound      chan protocol.Frame  // buffered, default size 256
     startOnce    sync.Once
@@ -347,7 +358,8 @@ type HTTPTransport struct {
 ```
 
 Note: no `fromPartyID` field. `fromPartyId` is derived server-side by the monolith from the
-claimed intent — the transport never needs it for `SendFrame`.
+claimed intent — the transport never needs it for `SendFrame`. The immutable `frameCtx` carries
+the static inbound fields the monolith does not echo back on every message.
 
 **Contract:**
 
@@ -384,7 +396,7 @@ for {
     sort msgs by deliverySeq ASC  // transport sorts if API does not guarantee order
 
     for each msg:
-        // toFrame(msg) preserves protocol seq from msg.Seq while polling advances by msg.DeliverySeq
+        // toFrame(msg) merges msg fields with frameCtx so SessionID/Stage stay stable
         select { case inbound <- toFrame(msg): ; case <-done: return }
         afterSeq = max(afterSeq, msg.DeliverySeq)
 
@@ -557,7 +569,14 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     sessionCtx, cancel := context.WithDeadline(ctx, claim.ExpiresAt)
     defer cancel()
 
-    tr := transport.NewHTTPTransport(client, intent.SessionID, framePollInterval, log)
+    frameCtx := transport.FrameContext{
+        SessionID: intent.SessionID,
+        Stage:     strings.ToLower(intent.Type),
+        OrgID:     intent.Payload.OrgID,
+        Protocol:  intent.Payload.Algorithm,
+    }
+
+    tr := transport.NewHTTPTransport(client, frameCtx, framePollInterval, log)
     defer tr.Close()
     tr.Start(sessionCtx)
 
