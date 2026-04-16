@@ -142,7 +142,6 @@ type Client struct {
     keyID      string
     privateKey ed25519.PrivateKey
     httpClient *http.Client   // configured timeout
-    workerID   string         // "<hostname>-<pid>", generated at startup
 }
 ```
 
@@ -156,26 +155,21 @@ ClaimIntent(ctx, intentID string) (ClaimResult, error)
     → ClaimResult carries the authoritative post-claim deadline (see below)
 PostMessage(ctx, sessionID string, frame OutboundFrame) error
     → X-Idempotency-Key = frame.MessageID
-    → OutboundFrame = { Seq uint64, Round uint32, RoundHint uint32, Broadcast bool,
-                        ToPartyID string, MessageType string, CorrelationID string,
-                        Payload []byte, MessageID string }
-    → frame.Seq is the sender-local protocol sequence from `protocol.Frame.Seq`, not the polling cursor
-    → fromPartyId is derived server-side — the client never sends it
-GetMessages(ctx, sessionID string, afterCursor uint64) ([]InboundMessage, error)
-    → returns only messages where cursor > afterCursor
-    → `InboundMessage.Cursor` is a transport-level delivery offset, distinct from `InboundMessage.Frame.Seq`
+    → OutboundFrame = { MessageID string, Seq uint64, Round uint32, ToPartyID string, Payload []byte }
+    → frame.Seq is the sender-local protocol sequence from `protocol.Frame.Seq`, not the delivery cursor
+    → successful API response returns `deliverySeq`, but the client does not use it for protocol logic
+GetMessages(ctx, sessionID string, afterSeq uint64) ([]InboundMessage, error)
+    → returns only messages where deliverySeq > afterSeq
+    → `InboundMessage.DeliverySeq` is a transport-level polling cursor, distinct from `InboundMessage.Seq`
 PostResult(ctx, intentID string, result IntentResult) error
-    → IntentResult = { Status "COMPLETED"|"FAILED", ErrorCode string, ErrorMessage string,
-                       Output *IntentOutput }
+    → IntentResult = { Status "COMPLETED"|"FAILED", ErrorCode string, ErrorMessage string }
     → `ErrorCode` is a stable machine-readable contract owned by this service
-    → on successful DKG in MVP (ECDSA-only), `Output.KeyID`, `Output.PublicKey`, and `Output.Address` are required
-    → `Output.KeyID` becomes the canonical key identity for future SIGN intents
-    → `Output` remains empty for failure cases and for successful SIGN in MVP
+    → this endpoint is terminal ack only; DKG key metadata is not returned here
 ```
 
-`ClaimIntent` sends `{ "claimedBy": client.workerID }` in the request body.
-The monolith claim contract must be **idempotent per worker**: if the same `claimedBy` retries a
-claim after a lost response, the endpoint returns `200` with the same `ClaimResult` instead of `409`.
+`ClaimIntent` does not send a request body. The monolith derives the logical caller from the
+authenticated API key and must keep claim idempotent for repeated retries by that same caller:
+after a lost response, a retry returns `200` with the same `ClaimResult` instead of `409`.
 
 **ClaimResult:**
 
@@ -218,34 +212,31 @@ Validation happens **after claim succeeds**. If required fields are missing or i
 worker posts `FAILED / INVALID_INTENT` and does not start the MPC session.
 
 ```go
-type IntentOutput struct {
-    KeyID     string // required for successful DKG in MVP
-    PublicKey string // required for successful ECDSA DKG in MVP
-    Address   string // required for successful ECDSA DKG in MVP
+type InboundMessage struct {
+    DeliverySeq uint64
+    Seq         uint64
+    MessageID   string
+    Round       uint32
+    FromPartyID string
+    ToPartyID   string
+    Payload     []byte
+}
+
+type IntentResult struct {
+    Status       string
+    ErrorCode    string
+    ErrorMessage string
 }
 ```
 
 **MVP algorithm scope:** this monolith integration is currently specified only for ECDSA-based DKG
 and SIGN flows. Although `brosettlement-mpc-core` may evolve broader algorithm support over time,
 non-ECDSA intents are out of scope for this document and must be rejected as `INVALID_INTENT`
-until the wire-level output contract is extended beyond ECDSA.
+until the monolith integration contract is explicitly extended beyond ECDSA.
 
-**Canonical key identity contract:** for ECDSA DKG, the worker derives the canonical key identity as
-`NormalizeKeyID(intent.SessionID)` and returns it in `IntentResult.Output.KeyID` on success. The
-monolith must persist that value and use it as `payload.keyId` for subsequent SIGN intents. DKG
-intents do not accept caller-provided `payload.keyId` as a source of truth.
-
-**Successful DKG output contract:** successful ECDSA DKG completion must produce a full
-`IntentOutput`, not just `KeyID`:
-
-- `Output.KeyID = NormalizeKeyID(intent.SessionID)`
-- `Output.PublicKey` is extracted by `brosettlement-mpc-core` from the completed DKG share
-- `Output.Address` is derived by `brosettlement-mpc-core` from the same share
-
-The worker must not post a partial successful DKG result. `brosettlement-mpc-core` is responsible
-for materializing this output as part of the successful DKG path before any share cleanup that
-would make the derivation unavailable to callers. If `PublicKey` or `Address` cannot be
-materialized, the DKG call itself must fail rather than returning `COMPLETED` with missing fields.
+**DKG metadata contract:** `POST /intents/:intentId/result` is not used to return
+`keyId/publicKey/address`. If the monolith needs DKG key metadata, it must obtain and persist it
+through the signer-side status / key-metadata path rather than the co-signer terminal ack.
 
 **Validation rules:** `validateIntent(intent)` should reject at least:
 
@@ -263,25 +254,34 @@ collapsed into one field:
 
 - `protocol.Frame.Seq` is generated by the sender-side TSS engine and is preserved end-to-end
   because the core deduper keys on `(sessionID, stage, fromParty, frame.Seq, payloadHash)`.
-- `InboundMessage.Cursor` is generated by the monolith as a polling cursor so the worker can fetch
-  `cursor > afterCursor` without replaying already-delivered rows.
+- `InboundMessage.DeliverySeq` is generated by the monolith as a polling cursor so the worker can
+  fetch `deliverySeq > afterSeq` without replaying already-delivered rows.
 
 The monolith may store both values, but it must not overwrite the protocol frame sequence with the
-polling cursor.
+delivery cursor.
 
 **Frame mapping contract:** outbound HTTP payloads may omit fields that the monolith can derive
 from the claimed intent (`OrgID`, `Stage`, `Protocol`, `FromParty`, `PayloadHash`, `SentAt`).
-Inbound messages returned to the worker must reconstruct a complete `protocol.Frame` with the
-canonical protocol fields populated, at minimum:
+The current outbound request body carries at minimum:
 
-- `SessionID`
-- `OrgID`
-- `Stage`
-- `FromParty`
+- `MessageID`
 - `Seq`
+- `Round`
+- `ToPartyID`
 - `Payload`
-- `PayloadHash` (or enough information for the worker to recompute it deterministically)
-- `Broadcast` and/or `ToParty`
+
+Inbound messages returned to the worker must include at minimum:
+
+- `DeliverySeq`
+- `Seq`
+- `MessageID`
+- `Round`
+- `FromPartyID`
+- `ToPartyID`
+- `Payload`
+
+The worker reconstructs the remaining `protocol.Frame` fields locally from the claimed intent,
+route parameters, and payload bytes.
 
 Without these fields, core frame validation / dedupe semantics are no longer reliable.
 
@@ -323,8 +323,8 @@ header value and does **not** independently recompute the body hash from the raw
 backoff. 4xx responses (except the typed errors above) — immediate error return. `PostMessage` and
 `PostResult` are safe to retry because the monolith enforces idempotency via idempotency key /
 DB-level state respectively. `ClaimIntent` retries are safe only because the claim contract is
-idempotent for the same `claimedBy`; otherwise the client returns `ErrClaimOutcomeUnknown` and the
-worker does not start the MPC session blindly.
+idempotent for the same authenticated API-key caller; otherwise the client returns
+`ErrClaimOutcomeUnknown` and the worker does not start the MPC session blindly.
 
 ---
 
@@ -372,21 +372,21 @@ claimed intent — the transport never needs it for `SendFrame`.
 **Background polling goroutine:**
 
 ```
-afterCursor := uint64(0)
+afterSeq := uint64(0)
 for {
     select { case <-done: return; default: }
 
-    msgs, err := client.GetMessages(ctx, sessionID, afterCursor)
+    msgs, err := client.GetMessages(ctx, sessionID, afterSeq)
     if err:
         if ctx is done → return
         log.Warn; sleep(pollInterval); continue
 
-    sort msgs by cursor ASC  // transport sorts if API does not guarantee order
+    sort msgs by deliverySeq ASC  // transport sorts if API does not guarantee order
 
     for each msg:
-        // toFrame(msg) preserves the original protocol fields, including frame.Seq and fromParty
+        // toFrame(msg) preserves protocol seq from msg.Seq while polling advances by msg.DeliverySeq
         select { case inbound <- toFrame(msg): ; case <-done: return }
-        afterCursor = max(afterCursor, msg.Cursor)
+        afterSeq = max(afterSeq, msg.DeliverySeq)
 
     if len(msgs) == 0:
         sleep(pollInterval)
@@ -473,8 +473,9 @@ func nextBackoff(current time.Duration, cfg SchedulerConfig) time.Duration {
 
 ### SessionWorker (`internal/worker/session_worker.go`)
 
-The worker depends on a slightly richer runner interface than the removed gRPC server because a
-successful DKG must return wire-level output atomically with the DKG call itself:
+The worker uses the current `brosettlement-mpc-core` facade directly. `RunDKGSession` still
+returns `tss.DKGOutput` in the core API, but the worker does not forward DKG output through
+`PostResult`; the co-signer result endpoint is terminal ack only.
 
 ```go
 type tssRunner interface {
@@ -483,11 +484,11 @@ type tssRunner interface {
 }
 ```
 
-`mpc-co-signer` does **not** perform a second post-DKG read to assemble `IntentOutput`. The current
-design assumes `brosettlement-mpc-core` derives `KeyID` / `PublicKey` / `Address` before cleaning
-up any transient runner-held share state and returns them directly from `RunDKGSession`. A
-separate reread/recovery API in core may still be added later, but it is not a dependency of the
-MVP worker flow.
+`mpc-co-signer` does **not** perform a second post-DKG read to assemble result metadata for
+`PostResult`. `RunDKGSession` may still return `tss.DKGOutput` because that is the current
+`brosettlement-mpc-core` API, but the worker only uses the success/failure outcome on the
+co-signer wire path. Any signer-side persistence of DKG key metadata remains outside this worker
+flow.
 
 ```go
 func runSession(ctx context.Context, intent Intent, client *monolith.Client,
@@ -563,13 +564,10 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     log.Info("session started", "expiresAt", claim.ExpiresAt, "partyId", localPartyID)
 
     start := time.Now()
-    var (
-        runErr error
-        dkgOut tss.DKGOutput
-    )
+    var runErr error
     switch intent.Type {
     case "DKG":
-        dkgOut, runErr = runner.RunDKGSession(sessionCtx, buildDKGRequest(intent, localPartyID, tr))
+        _, runErr = runner.RunDKGSession(sessionCtx, buildDKGRequest(intent, localPartyID, tr))
     case "SIGN":
         runErr = runner.RunSignSession(sessionCtx, buildSignRequest(intent, localPartyID, tr))
     default:
@@ -578,7 +576,7 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     log.Info("session finished", "result", outcomeOf(runErr, sessionCtx),
              "durationMs", time.Since(start).Milliseconds())
 
-    result := buildResult(runErr, sessionCtx, intent, dkgOut)
+    result := buildResult(runErr, sessionCtx, intent)
 
     // PostResult uses a background context on shutdown (main ctx may be cancelled).
     postCtx := ctx
@@ -630,12 +628,9 @@ The worker owns the mapping from internal/core errors to wire-level `errorCode`.
 
 `errorCode` is a string on the wire. Internally, constants are defined in `worker/errors.go`, and
 `buildResult` should use `errors.Is`-based matching so wrapped core errors still map to the stable
-wire codes above. On successful ECDSA DKG, `buildResult` must populate all three output fields:
-`Output.KeyID = dkgOut.KeyID` plus `Output.PublicKey` / `Output.Address` from the successful
-`RunDKGSession` return value. `buildResult` must not perform a second read from runner state or
-from persisted share storage in the happy path. `Output` remains empty for failure cases and for
-SIGN completion unless the contract is extended later. Share-store I/O, decrypt, or OS errors that
-do not map to typed core sentinels remain `INTERNAL_ERROR` in MVP.
+wire codes above. Successful DKG and SIGN completion both post `COMPLETED` with no extra payload on
+the co-signer result endpoint. Share-store I/O, decrypt, or OS errors that do not map to typed
+core sentinels remain `INTERNAL_ERROR` in MVP.
 
 ---
 
@@ -648,6 +643,7 @@ do not map to typed core sentinels remain `INTERNAL_ERROR` in MVP.
 | `CO_SIGNER_MONOLITH_URL` | — (required) | Base URL of the BroSettlement monolith |
 | `CO_SIGNER_API_KEY_ID` | — (required) | `X-Api-Key-Id` for request signing |
 | `CO_SIGNER_API_PRIVATE_KEY` | — (required) | Ed25519 private key, hex or base64 |
+| `CO_SIGNER_SHARE_ENCRYPTION_KEY` | — (required) | Opaque secret used to derive the local AES-256 share-store key |
 | `CO_SIGNER_MAX_CONCURRENT` | `4` | Max parallel MPC sessions |
 | `CO_SIGNER_POLL_MIN_INTERVAL` | `2s` | Min intent poll interval |
 | `CO_SIGNER_POLL_MAX_INTERVAL` | `60s` | Max intent poll interval (backoff ceiling) |
@@ -663,16 +659,15 @@ do not map to typed core sentinels remain `INTERNAL_ERROR` in MVP.
 
 `CO_SIGNER_HTTP_ADDR`, `CO_SIGNER_SHARES_DIR`, `CO_SIGNER_PARTY_ID`
 
+**Share-store key migration:** existing deployments should initially set
+`CO_SIGNER_SHARE_ENCRYPTION_KEY` to the previous `CO_SIGNER_API_KEY` secret value so persisted
+shares remain decryptable after the gRPC/API-key config split. The share-store encryption contract
+stays local to this service and must not depend on public wire identifiers such as `APIKeyID`.
+
 **Note on `CO_SIGNER_PARTY_ID`:** for MVP this remains the authoritative local identity of the
 co-signer process because the current TSS service requires a stable `LocalPartyID` per worker.
 If the monolith also includes `payload.partyId`, the worker treats it as a consistency check and
 fails the intent with `INVALID_PARTY` on mismatch; it does not switch identities per intent.
-
-### Worker identity
-
-`workerID` is generated at startup as `<hostname>-<pid>`. Not configurable.
-
----
 
 ## Observability
 
@@ -690,13 +685,12 @@ All logging via `slog` (JSON format). No external metrics in MVP.
 | `monolith request retry exhausted` | `operation`, `err` |
 
 **Debug-level:** each `SendFrame` / `RecvFrame` with `sessionId`, `round`, `frameSeq`, and
-inbound `cursor` when available.
+inbound `deliverySeq` when available.
 
 **Warn-level:** backoff increase, transient errors during polling, `claim outcome unknown`,
 `claim failed after retries`.
 
-**Error-level:** `invalid intent payload`, `intent party mismatch`, `failed to build dkg output`,
-`failed to post result`.
+**Error-level:** `invalid intent payload`, `intent party mismatch`, `failed to post result`.
 
 ---
 
