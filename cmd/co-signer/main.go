@@ -2,29 +2,31 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/config"
-	cosgrpc "github.com/BroLabel/brosettlement-mpc-co-signer/internal/grpc"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
-	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/session"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/worker"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
 const (
-	version                = "0.1.0"
-	sessionCleanupInterval = time.Minute
-	sessionRetention       = 5 * time.Minute
-	shutdownTimeout        = 30 * time.Second
+	version         = "0.1.0"
+	shutdownTimeout = 30 * time.Second
 )
 
 func main() {
@@ -36,7 +38,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	shareStore, err := sharestore.NewFileStore(cfg.SharesDir, shareEncryptionKey(cfg.APIKey))
+	privateKey, err := decodePrivateKey(cfg.APIPrivateKey)
+	if err != nil {
+		log.Error("failed to decode API private key", "err", err)
+		os.Exit(1)
+	}
+
+	shareStore, err := sharestore.NewFileStore(cfg.SharesDir, shareEncryptionKey(cfg.ShareEncryptionKey))
 	if err != nil {
 		log.Error("failed to initialize share store", "err", err)
 		os.Exit(1)
@@ -57,35 +65,29 @@ func main() {
 		}
 	}()
 
-	store := session.NewStore()
-	go runSessionCleanup(ctx, store)
+	client := monolith.New(cfg.MonolithURL, cfg.APIKeyID, privateKey, cfg.HTTPTimeout)
+	scheduler := worker.NewScheduler(
+		client,
+		tssSvc,
+		cfg.PartyID,
+		cfg.FramePollInterval,
+		worker.SchedulerConfig{
+			MinInterval:   cfg.PollMinInterval,
+			MaxInterval:   cfg.PollMaxInterval,
+			BackoffFactor: cfg.PollBackoffFactor,
+		},
+		log,
+		cfg.MaxConcurrent,
+	)
 
-	grpcServer := cosgrpc.NewServer(tssSvc, store, cfg.PartyID, cfg.APIKey, log)
-
-	grpcListener, err := net.Listen("tcp", cfg.GRPCAddr)
-	if err != nil {
-		log.Error("failed to listen for gRPC", "addr", cfg.GRPCAddr, "err", err)
-		os.Exit(1)
-	}
-
-	httpServer := &http.Server{
+	healthServer := &http.Server{
 		Addr:    cfg.HTTPAddr,
 		Handler: health.NewHandler(version, cfg.SharesDir),
 	}
 
-	go func() {
-		log.Info("gRPC server listening", "addr", cfg.GRPCAddr)
-		if err := grpcServer.Serve(grpcListener); err != nil {
-			log.Error("gRPC server stopped", "err", err)
-		}
-	}()
+	go scheduler.Run(ctx)
 
-	go func() {
-		log.Info("health server listening", "addr", cfg.HTTPAddr)
-		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error("health server stopped", "err", err)
-		}
-	}()
+	go serveHealth(log, healthServer)
 
 	<-ctx.Done()
 	log.Info("shutdown started")
@@ -93,40 +95,64 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
-	gracefulDone := make(chan struct{})
-	go func() {
-		grpcServer.GracefulStop()
-		close(gracefulDone)
-	}()
-
-	select {
-	case <-gracefulDone:
-	case <-shutdownCtx.Done():
-		grpcServer.Stop()
-	}
-
-	if err := httpServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	if err := healthServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("failed to shutdown health server", "err", err)
+	}
+	if err := drainWorkers(shutdownCtx, scheduler.Semaphore()); err != nil {
+		log.Warn("worker drain interrupted", "err", err)
 	}
 
 	log.Info("shutdown complete")
 }
 
-func shareEncryptionKey(apiKey string) []byte {
-	sum := sha256.Sum256([]byte(apiKey))
+func decodePrivateKey(raw string) (ed25519.PrivateKey, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, errors.New("private key is empty")
+	}
+
+	bytes, err := hex.DecodeString(trimmed)
+	if err != nil {
+		bytes, err = base64.StdEncoding.DecodeString(trimmed)
+		if err != nil {
+			return nil, fmt.Errorf("private key must be hex or base64: %w", err)
+		}
+	}
+
+	switch len(bytes) {
+	case ed25519.PrivateKeySize:
+		return ed25519.PrivateKey(bytes), nil
+	case ed25519.SeedSize:
+		return ed25519.NewKeyFromSeed(bytes), nil
+	default:
+		return nil, fmt.Errorf("private key length must be %d or %d bytes, got %d", ed25519.PrivateKeySize, ed25519.SeedSize, len(bytes))
+	}
+}
+
+func shareEncryptionKey(secret string) []byte {
+	sum := sha256.Sum256([]byte(secret))
 	return sum[:]
 }
 
-func runSessionCleanup(ctx context.Context, store *session.Store) {
-	ticker := time.NewTicker(sessionCleanupInterval)
-	defer ticker.Stop()
+func serveHealth(log *slog.Logger, srv *http.Server) {
+	log.Info("health server listening", "addr", srv.Addr)
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error("health server stopped", "err", err)
+	}
+}
 
-	for {
+func drainWorkers(ctx context.Context, sem chan struct{}) error {
+	if sem == nil {
+		return nil
+	}
+
+	for i := 0; i < cap(sem); i++ {
 		select {
+		case sem <- struct{}{}:
 		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			store.Cleanup(sessionRetention)
+			return ctx.Err()
 		}
 	}
+
+	return nil
 }

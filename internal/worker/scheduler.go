@@ -107,6 +107,10 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 }
 
+func (s *Scheduler) Semaphore() chan struct{} {
+	return s.sem
+}
+
 func nextBackoff(current time.Duration, cfg SchedulerConfig) time.Duration {
 	if cfg.MinInterval <= 0 {
 		cfg.MinInterval = time.Millisecond
