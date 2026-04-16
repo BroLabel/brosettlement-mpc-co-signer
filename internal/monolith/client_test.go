@@ -99,6 +99,26 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	}
 }
 
+func TestPostResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
+	var gotIdempotency string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotIdempotency = r.Header.Get("X-Idempotency-Key")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	err := client.PostResult(context.Background(), "intent-42", IntentResult{
+		Status: "approved",
+	})
+	if err != nil {
+		t.Fatalf("PostResult() error = %v", err)
+	}
+	if gotIdempotency != "intent-42" {
+		t.Fatalf("X-Idempotency-Key = %q, want %q", gotIdempotency, "intent-42")
+	}
+}
+
 func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("afterSeq") != "10" {

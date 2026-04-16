@@ -88,7 +88,7 @@ func (c *Client) GetMessages(ctx context.Context, sessionID string, afterSeq uin
 
 func (c *Client) PostResult(ctx context.Context, intentID string, result IntentResult) error {
 	path := "/api/v1/co-signer/intents/" + url.PathEscape(intentID) + "/result"
-	return c.doJSON(ctx, http.MethodPost, path, result, "", nil)
+	return c.doJSON(ctx, http.MethodPost, path, result, intentID, nil)
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, payload any, idempotencyKey string, out any) error {
