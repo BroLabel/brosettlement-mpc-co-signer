@@ -21,7 +21,7 @@ BroSettlement called `ControlService.StartDkg` / `StartSign` over gRPC, then con
 ### New model
 
 `mpc-co-signer` becomes the **initiator**:
-1. Polls `GET /api/v1/co-signer/intents/pending` for work
+1. Polls `GET /api/v1/co-signer/intents/pending` for work from the shared pending queue of this co-signer deployment
 2. Claims intents atomically via `POST /intents/:id/claim`
 3. Drives MPC protocol rounds by polling inbound frames and pushing outbound frames over HTTP
 4. Reports final status via `POST /intents/:id/result`
@@ -30,11 +30,11 @@ BroSettlement called `ControlService.StartDkg` / `StartSign` over gRPC, then con
 
 Single process, single instance for MVP. No distributed coordination required.
 
-If the service is horizontally scaled in the future, the monolith's `POST /claim` compare-and-set
-is sufficient only for **replicas of the same logical co-signer party** (same
-`CO_SIGNER_PARTY_ID`). Supporting multiple distinct co-signer parties requires party-scoped work
-routing in the monolith: `GET /intents/pending` must only return intents targeted to this local
-party (or `POST /claim` must reject party mismatch before ownership transfer).
+The service represents a single logical co-signer party. All instances (if horizontally scaled)
+operate under the same `CO_SIGNER_PARTY_ID` and are considered replicas of the same logical party.
+The monolith exposes a shared pending queue for this deployment, and `POST /claim` compare-and-set
+is used only for coordination between replicas of this same party. Supporting multiple distinct
+co-signer parties is out of scope and not supported by this design.
 
 ### Crash recovery
 
@@ -197,7 +197,6 @@ type Intent struct {
 }
 
 type IntentPayload struct {
-    OrgID      string
     KeyID      string   // required for SIGN; for ECDSA DKG derived from SessionID
     Parties    []string
     Threshold  uint32
@@ -205,12 +204,15 @@ type IntentPayload struct {
     Curve      string
     Chain      string
     Digest     []byte   // required for SIGN, empty for DKG
-    PartyID    string   // optional consistency-check field
 }
 ```
 
 Validation happens **after claim succeeds**. If required fields are missing or inconsistent, the
 worker posts `FAILED / INVALID_INTENT` and does not start the MPC session.
+
+`CO_SIGNER_PARTY_ID` remains the fixed local identity passed to `brosettlement-mpc-core` as
+`LocalPartyID`, while `Payload.Parties` defines the MPC participant set for the intent. The worker
+always executes under that single configured identity and never switches party identity per intent.
 
 ```go
 type InboundMessage struct {
@@ -241,7 +243,7 @@ through the signer-side status / key-metadata path rather than the co-signer ter
 
 **Validation rules:** `validateIntent(intent)` should reject at least:
 
-- empty `SessionID` or `Payload.OrgID`
+- empty `SessionID`
 - `Type` outside `DKG|SIGN`
 - fewer than 2 unique parties
 - `Threshold < 2` or `Threshold > len(Parties)`
@@ -262,7 +264,7 @@ The monolith may store both values, but it must not overwrite the protocol frame
 delivery cursor.
 
 **Frame mapping contract:** outbound HTTP payloads may omit fields that the monolith can derive
-from the claimed intent (`OrgID`, `Stage`, `Protocol`, `FromParty`, `PayloadHash`, `SentAt`).
+from the claimed intent (`Stage`, `Protocol`, `FromParty`, `PayloadHash`, `SentAt`).
 The current outbound request body carries at minimum:
 
 - `MessageID`
@@ -284,8 +286,8 @@ Inbound messages returned to the worker must include at minimum:
 The worker reconstructs the remaining `protocol.Frame` fields locally from the claimed intent,
 route parameters, and payload bytes. To make that reconstruction explicit in code,
 `HTTPTransport` receives immutable per-session `FrameContext` derived from the claimed intent,
-at minimum `SessionID` and `Stage`, and may also carry static fields such as `OrgID` /
-`Protocol` that do not change during the session.
+at minimum `SessionID` and `Stage`, and may also carry static fields such as `Protocol` that do
+not change during the session.
 
 Without these fields, core frame validation / dedupe semantics are no longer reliable.
 
@@ -341,7 +343,6 @@ Structurally similar to the removed `StreamTransport`.
 type FrameContext struct {
     SessionID string
     Stage     string
-    OrgID     string
     Protocol  string
 }
 
@@ -359,7 +360,8 @@ type HTTPTransport struct {
 
 Note: no `fromPartyID` field. `fromPartyId` is derived server-side by the monolith from the
 claimed intent — the transport never needs it for `SendFrame`. The immutable `frameCtx` carries
-the static inbound fields the monolith does not echo back on every message.
+the static inbound fields the monolith does not echo back on every message. Party membership for
+MPC remains defined by `Payload.Parties`; the transport does not participate in party routing.
 
 **Contract:**
 
@@ -542,16 +544,6 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
         return
     }
 
-    if intent.Payload.PartyID != "" && intent.Payload.PartyID != localPartyID {
-        log.Error("intent party mismatch", "intentPartyId", intent.Payload.PartyID,
-                  "localPartyId", localPartyID)
-        postResult(ctx, client, intent.IntentID, IntentResult{
-            Status:    "FAILED",
-            ErrorCode: "INVALID_PARTY",
-        }, log)
-        return
-    }
-
     // Edge case: if claim.ExpiresAt is already in the past (clock skew, slow network,
     // monolith contract mismatch), skip running MPC and report FAILED immediately.
     if !claim.ExpiresAt.After(time.Now()) {
@@ -572,7 +564,6 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     frameCtx := transport.FrameContext{
         SessionID: intent.SessionID,
         Stage:     strings.ToLower(intent.Type),
-        OrgID:     intent.Payload.OrgID,
         Protocol:  intent.Payload.Algorithm,
     }
 
@@ -634,7 +625,6 @@ The worker owns the mapping from internal/core errors to wire-level `errorCode`.
 | `context.Canceled` (shutdown) | `FAILED` | `"WORKER_SHUTDOWN"` |
 | Missing / malformed intent payload | `FAILED` | `"INVALID_INTENT"` |
 | Claimed intent already expired | `FAILED` | `"ALREADY_EXPIRED"` |
-| Party mismatch (`intent.payload.partyId` != local config) | `FAILED` | `"INVALID_PARTY"` |
 | Platform share not found (`shares.ErrShareNotFound`) | `FAILED` | `"SHARE_NOT_FOUND"` |
 | Platform share disabled (`shares.ErrShareDisabled`) | `FAILED` | `"SHARE_DISABLED"` |
 | Corrupt share payload (`shares.ErrInvalidSharePayload`) | `FAILED` | `"INVALID_SHARE_PAYLOAD"` |
@@ -683,10 +673,11 @@ core sentinels remain `INTERNAL_ERROR` in MVP.
 shares remain decryptable after the gRPC/API-key config split. The share-store encryption contract
 stays local to this service and must not depend on public wire identifiers such as `APIKeyID`.
 
-**Note on `CO_SIGNER_PARTY_ID`:** for MVP this remains the authoritative local identity of the
-co-signer process because the current TSS service requires a stable `LocalPartyID` per worker.
-If the monolith also includes `payload.partyId`, the worker treats it as a consistency check and
-fails the intent with `INVALID_PARTY` on mismatch; it does not switch identities per intent.
+**Note on `CO_SIGNER_PARTY_ID`:** `CO_SIGNER_PARTY_ID` is the authoritative and fixed local
+identity of this co-signer deployment. It is passed to `brosettlement-mpc-core` as the process
+`LocalPartyID`; it is not a routing hint. The worker never switches party identity per intent, and
+the monolith does not assign or override party identity at runtime. If horizontal scaling is
+introduced, all replicas must use the same `CO_SIGNER_PARTY_ID`.
 
 ## Observability
 
@@ -709,7 +700,7 @@ inbound `deliverySeq` when available.
 **Warn-level:** backoff increase, transient errors during polling, `claim outcome unknown`,
 `claim failed after retries`.
 
-**Error-level:** `invalid intent payload`, `intent party mismatch`, `failed to post result`.
+**Error-level:** `invalid intent payload`, `failed to post result`.
 
 ---
 

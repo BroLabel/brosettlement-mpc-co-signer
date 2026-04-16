@@ -295,7 +295,6 @@ type Intent struct {
 }
 
 type IntentPayload struct {
-	OrgID     string   `json:"orgId"`
 	KeyID     string   `json:"keyId"`
 	Parties   []string `json:"parties"`
 	Threshold uint32   `json:"threshold"`
@@ -303,7 +302,6 @@ type IntentPayload struct {
 	Curve     string   `json:"curve"`
 	Chain     string   `json:"chain"`
 	Digest    []byte   `json:"digest"`
-	PartyID   string   `json:"partyId"`
 }
 
 type OutboundFrame struct {
@@ -425,7 +423,6 @@ func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 	tr := transport.NewHTTPTransport(client, transport.FrameContext{
 		SessionID: "session-1",
 		Stage:     "dkg",
-		OrgID:     "org-1",
 		Protocol:  "ECDSA",
 	}, time.Millisecond, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
@@ -478,7 +475,6 @@ var ErrTransportClosed = errors.New("transport closed")
 type FrameContext struct {
 	SessionID string
 	Stage     string
-	OrgID     string
 	Protocol  string
 }
 
@@ -529,7 +525,6 @@ func (t *HTTPTransport) toFrame(msg monolith.InboundMessage) protocol.Frame {
 	return protocol.Frame{
 		SessionID: t.frameCtx.SessionID,
 		Stage:     t.frameCtx.Stage,
-		OrgID:     t.frameCtx.OrgID,
 		Protocol:  t.frameCtx.Protocol,
 		MessageID: msg.MessageID,
 		Seq:       msg.Seq,
@@ -574,7 +569,6 @@ func TestRunSessionRejectsInvalidIntent(t *testing.T) {
 		SessionID: "session-1",
 		Type: "SIGN",
 		Payload: monolith.IntentPayload{
-			OrgID: "org-1",
 			Parties: []string{"party-1", "party-2"},
 			Threshold: 2,
 		},
@@ -606,7 +600,6 @@ Expected: FAIL because the worker package does not exist yet.
 ```go
 const (
 	ErrorCodeInvalidIntent       = "INVALID_INTENT"
-	ErrorCodeInvalidParty        = "INVALID_PARTY"
 	ErrorCodeAlreadyExpired      = "ALREADY_EXPIRED"
 	ErrorCodeSessionTimeout      = "SESSION_TIMEOUT"
 	ErrorCodeWorkerShutdown      = "WORKER_SHUTDOWN"
@@ -647,7 +640,6 @@ func RunSession(ctx context.Context, intent monolith.Intent, client sessionClien
 	frameCtx := transport.FrameContext{
 		SessionID: intent.SessionID,
 		Stage:     strings.ToLower(intent.Type),
-		OrgID:     intent.Payload.OrgID,
 		Protocol:  intent.Payload.Algorithm,
 	}
 
