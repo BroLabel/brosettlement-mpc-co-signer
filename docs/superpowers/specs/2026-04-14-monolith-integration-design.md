@@ -168,7 +168,7 @@ PostResult(ctx, intentID string, result IntentResult) error
     → IntentResult = { Status "COMPLETED"|"FAILED", ErrorCode string, ErrorMessage string,
                        Output *IntentOutput }
     → `ErrorCode` is a stable machine-readable contract owned by this service
-    → on successful DKG, `Output.KeyID`, `Output.PublicKey`, and `Output.Address` are required
+    → on successful DKG in MVP (ECDSA-only), `Output.KeyID`, `Output.PublicKey`, and `Output.Address` are required
     → `Output.KeyID` becomes the canonical key identity for future SIGN intents
     → `Output` remains empty for failure cases and for successful SIGN in MVP
 ```
@@ -203,7 +203,7 @@ type Intent struct {
 
 type IntentPayload struct {
     OrgID      string
-    KeyID      string   // required for SIGN, ignored for DKG
+    KeyID      string   // required for SIGN; for ECDSA DKG derived from SessionID
     Parties    []string
     Threshold  uint32
     Algorithm  string
@@ -219,27 +219,33 @@ worker posts `FAILED / INVALID_INTENT` and does not start the MPC session.
 
 ```go
 type IntentOutput struct {
-    KeyID     string // required for successful DKG
-    PublicKey string // required for successful DKG
-    Address   string // required for successful DKG
+    KeyID     string // required for successful DKG in MVP
+    PublicKey string // required for successful ECDSA DKG in MVP
+    Address   string // required for successful ECDSA DKG in MVP
 }
 ```
 
-**Canonical key identity contract:** for DKG, the worker derives the canonical key identity as
+**MVP algorithm scope:** this monolith integration is currently specified only for ECDSA-based DKG
+and SIGN flows. Although `brosettlement-mpc-core` may evolve broader algorithm support over time,
+non-ECDSA intents are out of scope for this document and must be rejected as `INVALID_INTENT`
+until the wire-level output contract is extended beyond ECDSA.
+
+**Canonical key identity contract:** for ECDSA DKG, the worker derives the canonical key identity as
 `NormalizeKeyID(intent.SessionID)` and returns it in `IntentResult.Output.KeyID` on success. The
 monolith must persist that value and use it as `payload.keyId` for subsequent SIGN intents. DKG
 intents do not accept caller-provided `payload.keyId` as a source of truth.
 
-**Successful DKG output contract:** successful DKG completion must produce a full `IntentOutput`,
-not just `KeyID`:
+**Successful DKG output contract:** successful ECDSA DKG completion must produce a full
+`IntentOutput`, not just `KeyID`:
 
 - `Output.KeyID = NormalizeKeyID(intent.SessionID)`
-- `Output.PublicKey` is extracted from the completed DKG share bound to `intent.SessionID`
-- `Output.Address` is resolved from the completed DKG session bound to `intent.SessionID`
+- `Output.PublicKey` is extracted by `brosettlement-mpc-core` from the completed DKG share
+- `Output.Address` is derived by `brosettlement-mpc-core` from the same share
 
-The worker must not post a partial successful DKG result. If `PublicKey` or `Address` cannot be
-materialized after a nominally successful DKG run, the worker downgrades the result to
-`FAILED / INTERNAL_ERROR` instead of posting `COMPLETED` with missing fields.
+The worker must not post a partial successful DKG result. `brosettlement-mpc-core` is responsible
+for materializing this output as part of the successful DKG path before any share cleanup that
+would make the derivation unavailable to callers. If `PublicKey` or `Address` cannot be
+materialized, the DKG call itself must fail rather than returning `COMPLETED` with missing fields.
 
 **Validation rules:** `validateIntent(intent)` should reject at least:
 
@@ -248,7 +254,8 @@ materialized after a nominally successful DKG run, the worker downgrades the res
 - fewer than 2 unique parties
 - `Threshold < 2` or `Threshold > len(Parties)`
 - local party not present in `Payload.Parties`
-- unsupported `Algorithm` / `Curve` combination for the current core
+- any non-ECDSA `Algorithm` for MVP monolith integration
+- unsupported ECDSA `Curve` combination for the current core
 - `SIGN` intents with empty `KeyID` or empty `Digest`
 
 **Sequence model:** the design uses **two different sequence spaces** and they must not be
@@ -467,24 +474,20 @@ func nextBackoff(current time.Duration, cfg SchedulerConfig) time.Duration {
 ### SessionWorker (`internal/worker/session_worker.go`)
 
 The worker depends on a slightly richer runner interface than the removed gRPC server because a
-successful DKG must return wire-level output, not just `nil` error:
+successful DKG must return wire-level output atomically with the DKG call itself:
 
 ```go
-type DKGOutput struct {
-    PublicKey string
-    Address   string
-}
-
 type tssRunner interface {
-    RunDKGSession(ctx context.Context, req tss.DKGSessionRequest) error
+    RunDKGSession(ctx context.Context, req tss.DKGSessionRequest) (tss.DKGOutput, error)
     RunSignSession(ctx context.Context, req tss.SignSessionRequest) error
-    ReadDKGOutput(sessionID string) (DKGOutput, error)
 }
 ```
 
-`ReadDKGOutput` is a thin adapter over the current `brosettlement-mpc-core` service methods
-(`ExportECDSAKeyShare(sessionID)` + `ECDSAAddress(sessionID)`), so `session_worker.go` stays
-decoupled from tss-lib internals while still being able to populate `IntentResult.Output`.
+`mpc-co-signer` does **not** perform a second post-DKG read to assemble `IntentOutput`. The current
+design assumes `brosettlement-mpc-core` derives `KeyID` / `PublicKey` / `Address` before cleaning
+up any transient runner-held share state and returns them directly from `RunDKGSession`. A
+separate reread/recovery API in core may still be added later, but it is not a dependency of the
+MVP worker flow.
 
 ```go
 func runSession(ctx context.Context, intent Intent, client *monolith.Client,
@@ -560,10 +563,13 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     log.Info("session started", "expiresAt", claim.ExpiresAt, "partyId", localPartyID)
 
     start := time.Now()
-    var runErr error
+    var (
+        runErr error
+        dkgOut tss.DKGOutput
+    )
     switch intent.Type {
     case "DKG":
-        runErr = runner.RunDKGSession(sessionCtx, buildDKGRequest(intent, localPartyID, tr))
+        dkgOut, runErr = runner.RunDKGSession(sessionCtx, buildDKGRequest(intent, localPartyID, tr))
     case "SIGN":
         runErr = runner.RunSignSession(sessionCtx, buildSignRequest(intent, localPartyID, tr))
     default:
@@ -572,7 +578,7 @@ func runSession(ctx context.Context, intent Intent, client *monolith.Client,
     log.Info("session finished", "result", outcomeOf(runErr, sessionCtx),
              "durationMs", time.Since(start).Milliseconds())
 
-    result := buildResult(runErr, sessionCtx, intent, runner)
+    result := buildResult(runErr, sessionCtx, intent, dkgOut)
 
     // PostResult uses a background context on shutdown (main ctx may be cancelled).
     postCtx := ctx
@@ -620,16 +626,16 @@ The worker owns the mapping from internal/core errors to wire-level `errorCode`.
 | DKG result missing address (`tss.ErrMissingDKGAddress`) | `FAILED` | `"DKG_MISSING_ADDRESS"` |
 | MPC protocol error | `FAILED` | `"MPC_PROTOCOL_ERROR"` |
 | Unknown intent type | `FAILED` | `"INVALID_INTENT"` |
-| Successful DKG but output materialization failed | `FAILED` | `"INTERNAL_ERROR"` |
 | Other | `FAILED` | `"INTERNAL_ERROR"` |
 
 `errorCode` is a string on the wire. Internally, constants are defined in `worker/errors.go`, and
 `buildResult` should use `errors.Is`-based matching so wrapped core errors still map to the stable
-wire codes above. On successful DKG, `buildResult` must populate all three output fields:
-`Output.KeyID = NormalizeKeyID(intent.SessionID)` plus `Output.PublicKey` / `Output.Address` from
-`runner.ReadDKGOutput(intent.SessionID)`. `Output` remains empty for failure cases and for SIGN
-completion unless the contract is extended later. Share-store I/O, decrypt, or OS errors that do
-not map to typed core sentinels remain `INTERNAL_ERROR` in MVP.
+wire codes above. On successful ECDSA DKG, `buildResult` must populate all three output fields:
+`Output.KeyID = dkgOut.KeyID` plus `Output.PublicKey` / `Output.Address` from the successful
+`RunDKGSession` return value. `buildResult` must not perform a second read from runner state or
+from persisted share storage in the happy path. `Output` remains empty for failure cases and for
+SIGN completion unless the contract is extended later. Share-store I/O, decrypt, or OS errors that
+do not map to typed core sentinels remain `INTERNAL_ERROR` in MVP.
 
 ---
 
