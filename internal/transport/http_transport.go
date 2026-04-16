@@ -45,7 +45,7 @@ func NewHTTPTransport(client messageClient, frameCtx FrameContext, pollInterval 
 		client:       client,
 		frameCtx:     frameCtx,
 		pollInterval: pollInterval,
-		inbound:      make(chan protocol.Frame),
+		inbound:      make(chan protocol.Frame, 256),
 		done:         make(chan struct{}),
 		log:          log,
 	}

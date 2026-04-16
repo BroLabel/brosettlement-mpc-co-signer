@@ -116,3 +116,44 @@ func TestSendFrameMapsOutboundPayload(t *testing.T) {
 		t.Fatalf("ToPartyID = %q, want %q", client.lastOutbound.ToPartyID, "party-2")
 	}
 }
+
+func TestPollDoesNotBlockWithoutImmediateRecvFrame(t *testing.T) {
+	client := &stubClient{
+		inbound: []monolith.InboundMessage{
+			{
+				DeliverySeq: 1,
+				Seq:         1,
+				MessageID:   "msg-1",
+				Round:       1,
+				FromPartyID: "party-2",
+				ToPartyID:   "party-1",
+				Payload:     []byte("frame"),
+			},
+		},
+	}
+
+	tr := transport.NewHTTPTransport(
+		client,
+		transport.FrameContext{SessionID: "session-1", Stage: "dkg", Protocol: "ECDSA"},
+		time.Millisecond,
+		slog.Default(),
+	)
+	tr.Start(context.Background())
+	t.Cleanup(tr.Close)
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		client.mu.Lock()
+		getCalls := client.getCalls
+		client.mu.Unlock()
+		if getCalls >= 2 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	client.mu.Lock()
+	getCalls := client.getCalls
+	client.mu.Unlock()
+	t.Fatalf("GetMessages calls = %d, want at least 2 without calling RecvFrame", getCalls)
+}
