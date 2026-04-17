@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -83,5 +84,32 @@ func TestBuildResultMapsShareNotFound(t *testing.T) {
 	result := BuildResult(coretss.ErrShareNotFound, context.Background(), monolith.Intent{Type: "SIGN"})
 	if result.ErrorCode != ErrorCodeShareNotFound {
 		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeShareNotFound)
+	}
+}
+
+func TestBuildResultMapsKnownProtocolErrors(t *testing.T) {
+	result := BuildResult(errors.New("duplicate frame"), context.Background(), monolith.Intent{Type: "SIGN"})
+	if result.ErrorCode != ErrorCodeProtocol {
+		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeProtocol)
+	}
+}
+
+func TestBuildResultUsesCanceledSessionContext(t *testing.T) {
+	sessionCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result := BuildResult(errors.New("transport closed"), sessionCtx, monolith.Intent{Type: "SIGN"})
+	if result.ErrorCode != ErrorCodeWorkerShutdown {
+		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeWorkerShutdown)
+	}
+}
+
+func TestBuildResultUsesExpiredSessionContext(t *testing.T) {
+	sessionCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	result := BuildResult(errors.New("transport closed"), sessionCtx, monolith.Intent{Type: "SIGN"})
+	if result.ErrorCode != ErrorCodeSessionTimeout {
+		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeSessionTimeout)
 	}
 }

@@ -112,7 +112,7 @@ func RunSession(
 	postResult(ctx, client, intent.IntentID, BuildResult(runErr, sessionCtx, intent), log)
 }
 
-func BuildResult(runErr error, _ context.Context, _ monolith.Intent) monolith.IntentResult {
+func BuildResult(runErr error, sessionCtx context.Context, _ monolith.Intent) monolith.IntentResult {
 	if runErr == nil {
 		return monolith.IntentResult{Status: intentStatusCompleted}
 	}
@@ -143,8 +143,12 @@ func BuildResult(runErr error, _ context.Context, _ monolith.Intent) monolith.In
 		return failedResult(ErrorCodeMissingPublicKey, runErr)
 	case errors.Is(runErr, coretss.ErrMissingDKGAddress):
 		return failedResult(ErrorCodeMissingAddress, runErr)
-	case errors.Is(runErr, errMPCProtocol), isLikelyProtocolError(runErr):
+	case errors.Is(runErr, errMPCProtocol), isProtocolError(runErr):
 		return failedResult(ErrorCodeProtocol, runErr)
+	case sessionCtx != nil && errors.Is(sessionCtx.Err(), context.DeadlineExceeded):
+		return failedResult(ErrorCodeSessionTimeout, sessionCtx.Err())
+	case sessionCtx != nil && errors.Is(sessionCtx.Err(), context.Canceled):
+		return failedResult(ErrorCodeWorkerShutdown, sessionCtx.Err())
 	default:
 		return failedResult(ErrorCodeInternal, runErr)
 	}
@@ -284,9 +288,13 @@ func failedResult(code string, err error) monolith.IntentResult {
 	}
 }
 
-func isLikelyProtocolError(err error) bool {
+func isProtocolError(err error) bool {
 	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "protocol stalled") ||
+	return strings.Contains(msg, "duplicate frame") ||
+		strings.Contains(msg, "unknown party") ||
+		strings.Contains(msg, "frame payload too large") ||
+		strings.Contains(msg, "queue is full") ||
+		strings.Contains(msg, "protocol stalled") ||
 		strings.Contains(msg, "mpc protocol") ||
 		strings.Contains(msg, "protocol error")
 }
