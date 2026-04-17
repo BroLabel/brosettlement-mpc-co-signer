@@ -2,21 +2,20 @@
 
 ## Goal
 
-Replace the existing gRPC-based interface (where BroSettlement pushes work to `mpc-co-signer`) with
-an HTTP polling model where `mpc-co-signer` actively fetches work from the BroSettlement monolith,
-participates in MPC sessions over HTTP-based frame exchange, and reports results back.
+Describe the current HTTP polling model where `mpc-co-signer` actively fetches work from the
+BroSettlement monolith, participates in MPC sessions over HTTP-based frame exchange, and reports
+results back.
 
-The HTTP API of the monolith becomes the **sole external contract** of this service. No gRPC
-interface remains after this change.
+The HTTP API of the monolith is the **sole external contract** of this service.
 
 ---
 
 ## Context
 
-### Current state (being removed)
+### Previous model
 
-BroSettlement called `ControlService.StartDkg` / `StartSign` over gRPC, then connected
-`RelayService.Connect` for bidirectional frame streaming. `mpc-co-signer` was a passive server.
+BroSettlement previously initiated work through a server-driven control API and a bidirectional
+relay stream. That passive server model has been removed from the repository.
 
 ### New model
 
@@ -46,20 +45,11 @@ fail orphaned intents.
 
 ## What Changes
 
-### Removed
+### Removed legacy surface
 
-```
-internal/grpc/            — ControlService, RelayService, auth interceptors, all tests
-internal/session/         — in-memory business session store (state is owned by monolith)
-internal/transport/stream_transport.go  — replaced by HTTPTransport
-proto/                    — stripped gRPC contract
-api/proto/mpc/v1/         — generated protobuf code
-buf.yaml, buf.gen.yaml    — buf codegen config
-go.mod: grpc, protobuf dependencies
-```
-
-Note: runtime state (active transports, polling goroutines) is still maintained — it moves into
-the `transport` and `worker` layers.
+The old server-side control layer, relay transport, generated RPC contract, and in-process session
+state have all been removed. Runtime state still exists where needed, but now lives only in the
+current transport and worker layers.
 
 ### Added
 

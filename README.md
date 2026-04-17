@@ -2,9 +2,8 @@
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-`brosettlement-mpc-co-signer` no longer exposes a gRPC API.
-
 Runtime model:
+
 - polls BroSettlement monolith for pending intents
 - claims work over signed HTTP requests
 - exchanges MPC frames via monolith message endpoints
