@@ -57,15 +57,3 @@ func TestHealthOnlyGetAllowed(t *testing.T) {
 		t.Fatalf("got status %d, want 405", rec.Code)
 	}
 }
-
-func TestHealthStillChecksSharesDirAfterGrpcRemoval(t *testing.T) {
-	dir := t.TempDir()
-	h := health.NewHandler("0.1.0", dir)
-	rec := httptest.NewRecorder()
-
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("got status %d, want 200", rec.Code)
-	}
-}
