@@ -55,7 +55,7 @@ func Load() (Config, error) {
 		APIKeyID:           os.Getenv("CO_SIGNER_API_KEY_ID"),
 		APIPrivateKey:      os.Getenv("CO_SIGNER_API_PRIVATE_KEY"),
 		ShareEncryptionKey: os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY"),
-		PartyID:            os.Getenv("CO_SIGNER_PARTY_ID"),
+		PartyID:            envString("CO_SIGNER_PARTY_ID", "party-2"),
 		HTTPAddr:           envString("CO_SIGNER_HTTP_ADDR", "0.0.0.0:8081"),
 		SharesDir:          envString("CO_SIGNER_SHARES_DIR", "./data/shares"),
 		MaxConcurrent:      maxConcurrent,
@@ -74,9 +74,6 @@ func Load() (Config, error) {
 	}
 	if cfg.ShareEncryptionKey == "" {
 		return Config{}, errors.New("CO_SIGNER_SHARE_ENCRYPTION_KEY is required")
-	}
-	if cfg.PartyID == "" {
-		return Config{}, errors.New("CO_SIGNER_PARTY_ID is required")
 	}
 	if cfg.MaxConcurrent < 1 {
 		return Config{}, errors.New("CO_SIGNER_MAX_CONCURRENT must be >= 1")
