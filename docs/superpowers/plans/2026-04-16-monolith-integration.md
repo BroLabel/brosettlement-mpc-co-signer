@@ -248,7 +248,7 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 		MessageID: "msg-1",
 		Seq:       9,
 		Round:     2,
-		ToPartyID: "party-2",
+		ToPartyID: "co-signer",
 		Payload:   []byte("abc"),
 	})
 	if err != nil {
@@ -261,7 +261,7 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 
 func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"seq":7,"messageId":"msg-1","round":2,"fromPartyId":"party-2","toPartyId":"party-1","payload":"YWJj"}]}`))
+		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"seq":7,"messageId":"msg-1","round":2,"fromPartyId":"co-signer","toPartyId":"party-1","payload":"YWJj"}]}`))
 	}))
 	defer srv.Close()
 
@@ -414,7 +414,7 @@ func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 				Seq:         7,
 				MessageID:   "msg-1",
 				Round:       2,
-				FromPartyID: "party-2",
+				FromPartyID: "co-signer",
 				ToPartyID:   "party-1",
 				Payload:     []byte("frame"),
 			},
@@ -433,7 +433,7 @@ func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RecvFrame() error = %v", err)
 	}
-	if frame.SessionID != "session-1" || frame.Stage != "dkg" || frame.Seq != 7 || frame.FromParty != "party-2" {
+	if frame.SessionID != "session-1" || frame.Stage != "dkg" || frame.Seq != 7 || frame.FromParty != "co-signer" {
 		t.Fatalf("frame was not preserved: %+v", frame)
 	}
 }
@@ -448,13 +448,13 @@ func TestSendFrameMapsOutboundPayload(t *testing.T) {
 		MessageID: "msg-1",
 		Seq:       9,
 		Round:     2,
-		ToParty:   "party-2",
+		ToParty:   "co-signer",
 		Payload:   []byte("abc"),
 	})
 	if err != nil {
 		t.Fatalf("SendFrame() error = %v", err)
 	}
-	if client.lastOutbound.MessageID != "msg-1" || client.lastOutbound.Seq != 9 || client.lastOutbound.ToPartyID != "party-2" {
+	if client.lastOutbound.MessageID != "msg-1" || client.lastOutbound.Seq != 9 || client.lastOutbound.ToPartyID != "co-signer" {
 		t.Fatalf("unexpected outbound frame: %+v", client.lastOutbound)
 	}
 }
@@ -569,7 +569,7 @@ func TestRunSessionRejectsInvalidIntent(t *testing.T) {
 		SessionID: "session-1",
 		Type: "SIGN",
 		Payload: monolith.IntentPayload{
-			Parties: []string{"party-1", "party-2"},
+			Parties: []string{"party-1", "co-signer"},
 			Threshold: 2,
 		},
 	}

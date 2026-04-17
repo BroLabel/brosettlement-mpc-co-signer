@@ -55,7 +55,7 @@ func Load() (Config, error) {
 		APIKeyID:           os.Getenv("CO_SIGNER_API_KEY_ID"),
 		APIPrivateKey:      os.Getenv("CO_SIGNER_API_PRIVATE_KEY"),
 		ShareEncryptionKey: os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY"),
-		PartyID:            envString("CO_SIGNER_PARTY_ID", "party-2"),
+		PartyID:            envString("CO_SIGNER_PARTY_ID", "co-signer"),
 		HTTPAddr:           envString("CO_SIGNER_HTTP_ADDR", "0.0.0.0:8081"),
 		SharesDir:          envString("CO_SIGNER_SHARES_DIR", "./data/shares"),
 		MaxConcurrent:      maxConcurrent,

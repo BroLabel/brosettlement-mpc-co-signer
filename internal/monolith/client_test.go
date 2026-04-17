@@ -90,7 +90,7 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 		MessageID: "msg-1",
 		Seq:       9,
 		Round:     2,
-		ToPartyID: "party-2",
+		ToPartyID: "co-signer",
 		Payload:   []byte("abc"),
 	})
 	if err != nil {
@@ -129,7 +129,7 @@ func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 		if r.URL.Query().Get("afterSeq") != "10" {
 			t.Fatalf("afterSeq query = %q, want 10", r.URL.Query().Get("afterSeq"))
 		}
-		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"seq":7,"messageId":"msg-1","round":2,"fromPartyId":"party-2","toPartyId":"party-1","payload":"YWJj"}]}`))
+		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"seq":7,"messageId":"msg-1","round":2,"fromPartyId":"co-signer","toPartyId":"party-1","payload":"YWJj"}]}`))
 	}))
 	defer srv.Close()
 

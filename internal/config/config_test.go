@@ -29,8 +29,8 @@ func TestLoadMonolithDefaults(t *testing.T) {
 	if cfg.FramePollInterval != 500*time.Millisecond {
 		t.Errorf("got FramePollInterval=%s, want 500ms", cfg.FramePollInterval)
 	}
-	if cfg.PartyID != "party-2" {
-		t.Errorf("got PartyID=%q, want party-2", cfg.PartyID)
+	if cfg.PartyID != "co-signer" {
+		t.Errorf("got PartyID=%q, want co-signer", cfg.PartyID)
 	}
 }
 

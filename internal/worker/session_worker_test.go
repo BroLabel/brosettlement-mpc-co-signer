@@ -55,7 +55,7 @@ func TestRunSessionRejectsInvalidIntent(t *testing.T) {
 		SessionID: "session-1",
 		Type:      "SIGN",
 		Payload: monolith.IntentPayload{
-			Parties:   []string{"party-1", "party-2"},
+			Parties:   []string{"party-1", "co-signer"},
 			Threshold: 2,
 		},
 	}

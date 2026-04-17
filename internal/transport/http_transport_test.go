@@ -52,7 +52,7 @@ func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 				Seq:         7,
 				MessageID:   "msg-1",
 				Round:       2,
-				FromPartyID: "party-2",
+				FromPartyID: "co-signer",
 				ToPartyID:   "party-1",
 				Payload:     []byte("frame"),
 			},
@@ -81,8 +81,8 @@ func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 	if frame.Seq != 7 {
 		t.Fatalf("Seq = %d, want %d", frame.Seq, 7)
 	}
-	if frame.FromParty != "party-2" {
-		t.Fatalf("FromParty = %q, want %q", frame.FromParty, "party-2")
+	if frame.FromParty != "co-signer" {
+		t.Fatalf("FromParty = %q, want %q", frame.FromParty, "co-signer")
 	}
 }
 
@@ -99,7 +99,7 @@ func TestSendFrameMapsOutboundPayload(t *testing.T) {
 		MessageID: "msg-1",
 		Seq:       9,
 		Round:     2,
-		ToParty:   "party-2",
+		ToParty:   "co-signer",
 		Payload:   []byte("abc"),
 	})
 	if err != nil {
@@ -112,8 +112,8 @@ func TestSendFrameMapsOutboundPayload(t *testing.T) {
 	if client.lastOutbound.Seq != 9 {
 		t.Fatalf("Seq = %d, want %d", client.lastOutbound.Seq, 9)
 	}
-	if client.lastOutbound.ToPartyID != "party-2" {
-		t.Fatalf("ToPartyID = %q, want %q", client.lastOutbound.ToPartyID, "party-2")
+	if client.lastOutbound.ToPartyID != "co-signer" {
+		t.Fatalf("ToPartyID = %q, want %q", client.lastOutbound.ToPartyID, "co-signer")
 	}
 }
 
@@ -125,7 +125,7 @@ func TestPollDoesNotBlockWithoutImmediateRecvFrame(t *testing.T) {
 				Seq:         1,
 				MessageID:   "msg-1",
 				Round:       1,
-				FromPartyID: "party-2",
+				FromPartyID: "co-signer",
 				ToPartyID:   "party-1",
 				Payload:     []byte("frame"),
 			},
