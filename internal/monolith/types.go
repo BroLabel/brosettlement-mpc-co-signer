@@ -21,16 +21,16 @@ type IntentPayload struct {
 }
 
 type OutboundFrame struct {
-	MessageID string `json:"messageId"`
-	Seq       uint64 `json:"seq"`
-	Round     uint32 `json:"round"`
-	ToPartyID string `json:"toPartyId,omitempty"`
-	Payload   []byte `json:"payload"`
+	MessageID   string `json:"messageId"`
+	ProtocolSeq uint64 `json:"protocolSeq"`
+	Round       uint32 `json:"round"`
+	ToPartyID   string `json:"toPartyId"`
+	Payload     []byte `json:"payload"`
 }
 
 type InboundMessage struct {
 	DeliverySeq uint64 `json:"deliverySeq"`
-	Seq         uint64 `json:"seq"`
+	ProtocolSeq uint64 `json:"protocolSeq"`
 	MessageID   string `json:"messageId"`
 	Round       uint32 `json:"round"`
 	FromPartyID string `json:"fromPartyId"`

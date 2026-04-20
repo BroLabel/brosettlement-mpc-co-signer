@@ -14,6 +14,8 @@ import (
 
 var ErrTransportClosed = errors.New("transport closed")
 
+const signerPartyID = "mpc-signer"
+
 type FrameContext struct {
 	SessionID string
 	Stage     string
@@ -65,11 +67,11 @@ func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) err
 	}
 
 	return t.client.PostMessage(ctx, t.frameCtx.SessionID, monolith.OutboundFrame{
-		MessageID: frame.MessageID,
-		Seq:       frame.Seq,
-		Round:     frame.Round,
-		ToPartyID: frame.ToParty,
-		Payload:   frame.Payload,
+		MessageID:   frame.MessageID,
+		ProtocolSeq: frame.Seq,
+		Round:       frame.Round,
+		ToPartyID:   signerPartyID,
+		Payload:     frame.Payload,
 	})
 }
 
@@ -139,7 +141,7 @@ func (t *HTTPTransport) toFrame(msg monolith.InboundMessage) protocol.Frame {
 		Stage:     t.frameCtx.Stage,
 		Protocol:  t.frameCtx.Protocol,
 		MessageID: msg.MessageID,
-		Seq:       msg.Seq,
+		Seq:       msg.ProtocolSeq,
 		Round:     msg.Round,
 		FromParty: msg.FromPartyID,
 		ToParty:   msg.ToPartyID,

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -54,6 +55,7 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	var gotSignature, gotBodyHash, gotIdempotency string
 	var signatureIsValid bool
+	var gotPayload map[string]any
 	_, pub := newTestClient(t, "https://example.test")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
@@ -81,17 +83,20 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 		if gotBodyHash != hex.EncodeToString(wantBodyHash[:]) {
 			t.Fatalf("X-Api-Body-Hash = %q, want %q", gotBodyHash, hex.EncodeToString(wantBodyHash[:]))
 		}
+		if err := json.Unmarshal(body, &gotPayload); err != nil {
+			t.Fatalf("json.Unmarshal() error = %v", err)
+		}
 		_, _ = w.Write([]byte(`{"deliverySeq":17}`))
 	}))
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
 	err := client.PostMessage(context.Background(), "session-1", OutboundFrame{
-		MessageID: "msg-1",
-		Seq:       9,
-		Round:     2,
-		ToPartyID: "co-signer",
-		Payload:   []byte("abc"),
+		MessageID:   "msg-1",
+		ProtocolSeq: 9,
+		Round:       2,
+		ToPartyID:   "mpc-signer",
+		Payload:     []byte("abc"),
 	})
 	if err != nil {
 		t.Fatalf("PostMessage() error = %v", err)
@@ -101,6 +106,24 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	}
 	if !signatureIsValid {
 		t.Fatal("signature validation failed")
+	}
+	if gotPayload["messageId"] != "msg-1" {
+		t.Fatalf("messageId = %v, want %q", gotPayload["messageId"], "msg-1")
+	}
+	if gotPayload["protocolSeq"] != float64(9) {
+		t.Fatalf("protocolSeq = %v, want %d", gotPayload["protocolSeq"], 9)
+	}
+	if gotPayload["round"] != float64(2) {
+		t.Fatalf("round = %v, want %d", gotPayload["round"], 2)
+	}
+	if gotPayload["toPartyId"] != "mpc-signer" {
+		t.Fatalf("toPartyId = %v, want %q", gotPayload["toPartyId"], "mpc-signer")
+	}
+	if gotPayload["payload"] != base64.StdEncoding.EncodeToString([]byte("abc")) {
+		t.Fatalf("payload = %v, want %q", gotPayload["payload"], base64.StdEncoding.EncodeToString([]byte("abc")))
+	}
+	if _, exists := gotPayload["seq"]; exists {
+		t.Fatalf("unexpected legacy seq field in payload: %+v", gotPayload)
 	}
 }
 
@@ -129,7 +152,7 @@ func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 		if r.URL.Query().Get("afterSeq") != "10" {
 			t.Fatalf("afterSeq query = %q, want 10", r.URL.Query().Get("afterSeq"))
 		}
-		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"seq":7,"messageId":"msg-1","round":2,"fromPartyId":"co-signer","toPartyId":"party-1","payload":"YWJj"}]}`))
+		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"protocolSeq":7,"messageId":"msg-1","round":2,"fromPartyId":"co-signer","toPartyId":"mpc-signer","payload":"YWJj"}]}`))
 	}))
 	defer srv.Close()
 
@@ -138,7 +161,7 @@ func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMessages() error = %v", err)
 	}
-	if len(msgs) != 1 || msgs[0].DeliverySeq != 11 || msgs[0].Seq != 7 {
+	if len(msgs) != 1 || msgs[0].DeliverySeq != 11 || msgs[0].ProtocolSeq != 7 {
 		t.Fatalf("unexpected messages = %+v", msgs)
 	}
 }

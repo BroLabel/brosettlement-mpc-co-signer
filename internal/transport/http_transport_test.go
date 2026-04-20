@@ -49,11 +49,11 @@ func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 		inbound: []monolith.InboundMessage{
 			{
 				DeliverySeq: 11,
-				Seq:         7,
+				ProtocolSeq: 7,
 				MessageID:   "msg-1",
 				Round:       2,
 				FromPartyID: "co-signer",
-				ToPartyID:   "party-1",
+				ToPartyID:   "mpc-signer",
 				Payload:     []byte("frame"),
 			},
 		},
@@ -109,11 +109,11 @@ func TestSendFrameMapsOutboundPayload(t *testing.T) {
 	if client.lastOutbound.MessageID != "msg-1" {
 		t.Fatalf("MessageID = %q, want %q", client.lastOutbound.MessageID, "msg-1")
 	}
-	if client.lastOutbound.Seq != 9 {
-		t.Fatalf("Seq = %d, want %d", client.lastOutbound.Seq, 9)
+	if client.lastOutbound.ProtocolSeq != 9 {
+		t.Fatalf("ProtocolSeq = %d, want %d", client.lastOutbound.ProtocolSeq, 9)
 	}
-	if client.lastOutbound.ToPartyID != "co-signer" {
-		t.Fatalf("ToPartyID = %q, want %q", client.lastOutbound.ToPartyID, "co-signer")
+	if client.lastOutbound.ToPartyID != "mpc-signer" {
+		t.Fatalf("ToPartyID = %q, want %q", client.lastOutbound.ToPartyID, "mpc-signer")
 	}
 }
 
@@ -122,11 +122,11 @@ func TestPollDoesNotBlockWithoutImmediateRecvFrame(t *testing.T) {
 		inbound: []monolith.InboundMessage{
 			{
 				DeliverySeq: 1,
-				Seq:         1,
+				ProtocolSeq: 1,
 				MessageID:   "msg-1",
 				Round:       1,
 				FromPartyID: "co-signer",
-				ToPartyID:   "party-1",
+				ToPartyID:   "mpc-signer",
 				Payload:     []byte("frame"),
 			},
 		},
