@@ -6,6 +6,8 @@ import (
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -25,6 +27,10 @@ type Config struct {
 }
 
 func Load() (Config, error) {
+	if err := loadDotEnv(); err != nil {
+		return Config{}, err
+	}
+
 	maxConcurrent, err := envInt("CO_SIGNER_MAX_CONCURRENT", 4)
 	if err != nil {
 		return Config{}, err
@@ -86,6 +92,13 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func loadDotEnv() error {
+	if err := godotenv.Load(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("load .env: %w", err)
+	}
+	return nil
 }
 
 func envString(key, fallback string) string {

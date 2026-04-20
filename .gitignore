@@ -143,3 +143,5 @@ vite.config.ts.timestamp-*
 .claude/
 worktrees/
 .worktrees/
+go.work
+go.work.sum
