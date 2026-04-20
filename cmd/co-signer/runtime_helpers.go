@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,11 +21,24 @@ func decodePrivateKey(raw string) (ed25519.PrivateKey, error) {
 		return nil, errors.New("private key is empty")
 	}
 
+	if block, _ := pem.Decode([]byte(normalizePEMEnv(trimmed))); block != nil {
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("private key PEM must be valid PKCS#8: %w", err)
+		}
+
+		edKey, ok := key.(ed25519.PrivateKey)
+		if !ok {
+			return nil, fmt.Errorf("private key PEM must contain Ed25519 private key, got %T", key)
+		}
+		return edKey, nil
+	}
+
 	bytes, err := hex.DecodeString(trimmed)
 	if err != nil {
 		bytes, err = base64.StdEncoding.DecodeString(trimmed)
 		if err != nil {
-			return nil, fmt.Errorf("private key must be hex or base64: %w", err)
+			return nil, fmt.Errorf("private key must be PEM, hex or base64: %w", err)
 		}
 	}
 
@@ -35,6 +50,13 @@ func decodePrivateKey(raw string) (ed25519.PrivateKey, error) {
 	default:
 		return nil, fmt.Errorf("private key length must be %d or %d bytes, got %d", ed25519.PrivateKeySize, ed25519.SeedSize, len(bytes))
 	}
+}
+
+func normalizePEMEnv(raw string) string {
+	if strings.Contains(raw, `\n`) {
+		return strings.ReplaceAll(raw, `\n`, "\n")
+	}
+	return raw
 }
 
 func shareEncryptionKey(secret string) []byte {
