@@ -2,8 +2,6 @@ module github.com/BroLabel/brosettlement-mpc-co-signer
 
 go 1.24.0
 
-replace github.com/BroLabel/brosettlement-mpc-core => ../brosettlement-mpc-core
-
 require github.com/BroLabel/brosettlement-mpc-core v0.2.0
 
 require (
