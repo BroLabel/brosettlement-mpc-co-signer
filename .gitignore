@@ -141,3 +141,8 @@ vite.config.ts.timestamp-*
 
 # Local assistant config
 .claude/
+data/
+worktrees/
+.worktrees/
+go.work
+go.work.sum
