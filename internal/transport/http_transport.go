@@ -66,13 +66,32 @@ func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) err
 	default:
 	}
 
-	return t.client.PostMessage(ctx, t.frameCtx.SessionID, monolith.OutboundFrame{
+	t.log.Debug("http transport sending outbound frame",
+		"session_id", t.frameCtx.SessionID,
+		"stage", t.frameCtx.Stage,
+		"protocol", t.frameCtx.Protocol,
+		"message_id", frame.MessageID,
+		"protocol_seq", frame.Seq,
+		"round", frame.Round,
+		"round_hint", frame.RoundHint,
+		"message_type", frame.MessageType,
+		"to_party", signerPartyID,
+		"broadcast", frame.IsBroadcast(),
+		"payload_bytes", len(frame.Payload),
+	)
+
+	outbound := monolith.OutboundFrame{
 		MessageID:   frame.MessageID,
 		ProtocolSeq: frame.Seq,
 		Round:       frame.Round,
-		ToPartyID:   signerPartyID,
+		Broadcast:   frame.IsBroadcast(),
 		Payload:     frame.Payload,
-	})
+	}
+	if !frame.IsBroadcast() {
+		outbound.ToPartyID = signerPartyID
+	}
+
+	return t.client.PostMessage(ctx, t.frameCtx.SessionID, outbound)
 }
 
 func (t *HTTPTransport) RecvFrame(ctx context.Context) (protocol.Frame, error) {
@@ -119,6 +138,19 @@ func (t *HTTPTransport) poll(ctx context.Context) {
 
 		for _, msg := range msgs {
 			frame := t.toFrame(msg)
+			t.log.Debug("http transport received inbound frame",
+				"session_id", t.frameCtx.SessionID,
+				"stage", t.frameCtx.Stage,
+				"protocol", t.frameCtx.Protocol,
+				"message_id", msg.MessageID,
+				"delivery_seq", msg.DeliverySeq,
+				"protocol_seq", msg.ProtocolSeq,
+				"round", msg.Round,
+				"from_party", msg.FromPartyID,
+				"to_party", msg.ToPartyID,
+				"broadcast", msg.Broadcast,
+				"payload_bytes", len(msg.Payload),
+			)
 			select {
 			case t.inbound <- frame:
 			case <-t.done:
@@ -143,6 +175,7 @@ func (t *HTTPTransport) toFrame(msg monolith.InboundMessage) protocol.Frame {
 		MessageID: msg.MessageID,
 		Seq:       msg.ProtocolSeq,
 		Round:     msg.Round,
+		Broadcast: msg.Broadcast,
 		FromParty: msg.FromPartyID,
 		ToParty:   msg.ToPartyID,
 		Payload:   msg.Payload,

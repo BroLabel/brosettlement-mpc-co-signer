@@ -1,8 +1,10 @@
 package transport_test
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -156,4 +158,124 @@ func TestPollDoesNotBlockWithoutImmediateRecvFrame(t *testing.T) {
 	getCalls := client.getCalls
 	client.mu.Unlock()
 	t.Fatalf("GetMessages calls = %d, want at least 2 without calling RecvFrame", getCalls)
+}
+
+func TestTransportSuppressesFrameDiagnosticsAtInfoLevel(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	client := &stubClient{
+		inbound: []monolith.InboundMessage{
+			{
+				DeliverySeq: 11,
+				ProtocolSeq: 7,
+				MessageID:   "msg-in-1",
+				Round:       2,
+				FromPartyID: "mpc-signer",
+				ToPartyID:   "co-signer",
+				Payload:     []byte("frame"),
+			},
+		},
+	}
+
+	tr := transport.NewHTTPTransport(
+		client,
+		transport.FrameContext{SessionID: "session-1", Stage: "dkg", Protocol: "ECDSA"},
+		time.Millisecond,
+		logger,
+	)
+	tr.Start(context.Background())
+	t.Cleanup(tr.Close)
+
+	if _, err := tr.RecvFrame(context.Background()); err != nil {
+		t.Fatalf("RecvFrame: %v", err)
+	}
+
+	if err := tr.SendFrame(context.Background(), protocol.Frame{
+		MessageID: "msg-out-1",
+		Seq:       9,
+		Round:     3,
+		Payload:   []byte("abc"),
+	}); err != nil {
+		t.Fatalf("SendFrame: %v", err)
+	}
+
+	got := logs.String()
+	if strings.Contains(got, "http transport received inbound frame") {
+		t.Fatalf("logs = %q, want inbound diagnostic suppressed at info level", got)
+	}
+	if strings.Contains(got, "delivery_seq=11") || strings.Contains(got, "protocol_seq=7") {
+		t.Fatalf("logs = %q, want inbound seq diagnostics suppressed at info level", got)
+	}
+	if strings.Contains(got, "http transport sending outbound frame") {
+		t.Fatalf("logs = %q, want outbound diagnostic suppressed at info level", got)
+	}
+	if strings.Contains(got, "message_id=msg-out-1") || strings.Contains(got, "protocol_seq=9") {
+		t.Fatalf("logs = %q, want outbound frame identifiers suppressed at info level", got)
+	}
+}
+
+func TestRecvFrameRestoresBroadcastFlagFromPollingAPI(t *testing.T) {
+	client := &stubClient{
+		inbound: []monolith.InboundMessage{
+			{
+				DeliverySeq: 11,
+				ProtocolSeq: 7,
+				MessageID:   "msg-1",
+				Round:       1,
+				FromPartyID: "mpc-signer",
+				ToPartyID:   "",
+				Broadcast:   true,
+				Payload:     []byte("frame"),
+			},
+		},
+	}
+
+	tr := transport.NewHTTPTransport(
+		client,
+		transport.FrameContext{SessionID: "session-1", Stage: "dkg", Protocol: "ECDSA"},
+		time.Millisecond,
+		slog.Default(),
+	)
+	tr.Start(context.Background())
+	t.Cleanup(tr.Close)
+
+	frame, err := tr.RecvFrame(context.Background())
+	if err != nil {
+		t.Fatalf("RecvFrame: %v", err)
+	}
+	if !frame.Broadcast {
+		t.Fatalf("Broadcast = %v, want true", frame.Broadcast)
+	}
+	if !frame.IsBroadcast() {
+		t.Fatal("expected inbound frame to be treated as broadcast")
+	}
+}
+
+func TestSendFrameMapsBroadcastOutboundPayload(t *testing.T) {
+	client := &stubClient{}
+	tr := transport.NewHTTPTransport(
+		client,
+		transport.FrameContext{SessionID: "session-1", Stage: "dkg", Protocol: "ECDSA"},
+		time.Millisecond,
+		slog.Default(),
+	)
+
+	err := tr.SendFrame(context.Background(), protocol.Frame{
+		MessageID: "msg-broadcast-1",
+		Seq:       1,
+		Round:     1,
+		Broadcast: true,
+		Payload:   []byte("abc"),
+	})
+	if err != nil {
+		t.Fatalf("SendFrame: %v", err)
+	}
+
+	if !client.lastOutbound.Broadcast {
+		t.Fatalf("Broadcast = %v, want true", client.lastOutbound.Broadcast)
+	}
+	if client.lastOutbound.ToPartyID != "" {
+		t.Fatalf("ToPartyID = %q, want empty for broadcast frame", client.lastOutbound.ToPartyID)
+	}
 }

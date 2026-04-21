@@ -24,7 +24,8 @@ type OutboundFrame struct {
 	MessageID   string `json:"messageId"`
 	ProtocolSeq uint64 `json:"protocolSeq"`
 	Round       uint32 `json:"round"`
-	ToPartyID   string `json:"toPartyId"`
+	ToPartyID   string `json:"toPartyId,omitempty"`
+	Broadcast   bool   `json:"broadcast,omitempty"`
 	Payload     []byte `json:"payload"`
 }
 
@@ -35,6 +36,7 @@ type InboundMessage struct {
 	Round       uint32 `json:"round"`
 	FromPartyID string `json:"fromPartyId"`
 	ToPartyID   string `json:"toPartyId"`
+	Broadcast   bool   `json:"broadcast"`
 	Payload     []byte `json:"payload"`
 }
 
