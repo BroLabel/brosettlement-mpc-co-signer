@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -180,6 +181,10 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body []byt
 
 func (c *Client) signRequest(req *http.Request, body []byte) (*http.Request, error) {
 	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	nonce, err := newNonce()
+	if err != nil {
+		return nil, err
+	}
 	bodyHash := ""
 	if len(body) > 0 {
 		sum := sha256.Sum256(body)
@@ -192,13 +197,23 @@ func (c *Client) signRequest(req *http.Request, body []byte) (*http.Request, err
 		req.URL.Path,
 		bodyHash,
 		timestamp,
+		nonce,
 	}, "\n")
 	signature := ed25519.Sign(c.privateKey, []byte(canonical))
 
 	req.Header.Set("X-Api-Key-Id", c.keyID)
 	req.Header.Set("X-Api-Timestamp", timestamp)
+	req.Header.Set("X-Api-Nonce", nonce)
 	req.Header.Set("X-Api-Signature", base64.StdEncoding.EncodeToString(signature))
 	return req, nil
+}
+
+func newNonce() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
 }
 
 type httpStatusError struct {

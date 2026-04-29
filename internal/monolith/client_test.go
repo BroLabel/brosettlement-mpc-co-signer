@@ -53,7 +53,7 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 }
 
 func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
-	var gotSignature, gotBodyHash, gotIdempotency string
+	var gotSignature, gotBodyHash, gotIdempotency, gotNonce string
 	var signatureIsValid bool
 	var gotPayload map[string]any
 	_, pub := newTestClient(t, "https://example.test")
@@ -66,6 +66,7 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 		gotSignature = r.Header.Get("X-Api-Signature")
 		gotBodyHash = r.Header.Get("X-Api-Body-Hash")
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
+		gotNonce = r.Header.Get("X-Api-Nonce")
 
 		ts := r.Header.Get("X-Api-Timestamp")
 		canonical := strings.Join([]string{
@@ -73,6 +74,7 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 			r.URL.Path,
 			gotBodyHash,
 			ts,
+			gotNonce,
 		}, "\n")
 		sigBytes, err := base64.StdEncoding.DecodeString(gotSignature)
 		if err == nil {
@@ -103,6 +105,9 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	}
 	if gotSignature == "" || gotBodyHash == "" || gotIdempotency != "msg-1" {
 		t.Fatalf("missing required headers signature=%q bodyHash=%q idempotency=%q", gotSignature, gotBodyHash, gotIdempotency)
+	}
+	if gotNonce == "" {
+		t.Fatal("missing required X-Api-Nonce header")
 	}
 	if !signatureIsValid {
 		t.Fatal("signature validation failed")
