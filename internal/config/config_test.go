@@ -52,6 +52,22 @@ func TestLoadAllowsOverridingPartyID(t *testing.T) {
 	}
 }
 
+func TestLoadUsesRenderPortWhenHTTPAddrIsUnset(t *testing.T) {
+	t.Setenv("CO_SIGNER_MONOLITH_URL", "https://monolith.test")
+	t.Setenv("CO_SIGNER_API_KEY_ID", "key-1")
+	t.Setenv("CO_SIGNER_API_PRIVATE_KEY", "cHJpdmF0ZS1rZXk=")
+	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", "share-secret")
+	t.Setenv("PORT", "10000")
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.HTTPAddr != "0.0.0.0:10000" {
+		t.Errorf("got HTTPAddr=%q, want 0.0.0.0:10000", cfg.HTTPAddr)
+	}
+}
+
 func TestLoadRequiresSigningInputs(t *testing.T) {
 	t.Setenv("CO_SIGNER_MONOLITH_URL", "https://monolith.test")
 	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", "share-secret")

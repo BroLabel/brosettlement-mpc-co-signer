@@ -62,7 +62,7 @@ func Load() (Config, error) {
 		APIPrivateKey:      os.Getenv("CO_SIGNER_API_PRIVATE_KEY"),
 		ShareEncryptionKey: os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY"),
 		PartyID:            envString("CO_SIGNER_PARTY_ID", "co-signer"),
-		HTTPAddr:           envString("CO_SIGNER_HTTP_ADDR", "0.0.0.0:8081"),
+		HTTPAddr:           httpAddr(),
 		SharesDir:          envString("CO_SIGNER_SHARES_DIR", "./data/shares"),
 		MaxConcurrent:      maxConcurrent,
 		PollMinInterval:    pollMinInterval,
@@ -106,6 +106,16 @@ func envString(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func httpAddr() string {
+	if value := os.Getenv("CO_SIGNER_HTTP_ADDR"); value != "" {
+		return value
+	}
+	if port := os.Getenv("PORT"); port != "" {
+		return "0.0.0.0:" + port
+	}
+	return "0.0.0.0:8081"
 }
 
 func envInt(key string, fallback int) (int, error) {
