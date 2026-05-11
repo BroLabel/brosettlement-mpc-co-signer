@@ -147,6 +147,7 @@ Rules:
 
 - `orgId` is required for SIGN.
 - `keyId` is required for SIGN.
+- `digest` is required for SIGN and must decode to non-empty bytes.
 - `derivationContext` is required for SIGN.
 - A non-empty top-level `chainCode` in SIGN payload is `INVALID_INTENT`.
 - A non-empty top-level `derivationScheme` in SIGN payload is `INVALID_INTENT`.
@@ -333,6 +334,7 @@ Focused tests should cover the new boundary contract and mapping:
 - `validateIntent` rejects DKG with non-nil `derivationContext`.
 - `validateIntent` rejects DKG with non-empty `digest`.
 - `buildDKGRequest` passes `DerivationMaterial` into the core request.
+- `validateIntent` rejects SIGN without `digest`.
 - `validateIntent` rejects SIGN without `derivationContext`.
 - `validateIntent` rejects SIGN with a derivation context that fails
   `coretss.NormalizeDerivationContext` or `coretss.DerivationContextHashV1`.
@@ -355,6 +357,7 @@ Focused tests should cover the new boundary contract and mapping:
 - DKG and SIGN intents require explicit `orgId` from the monolith.
 - DKG and SIGN intents require explicit `keyId` from the monolith.
 - DKG intents require explicit `chainCode` and `derivationScheme`.
+- SIGN intents require explicit non-empty `digest`.
 - SIGN intents require explicit `derivationContext`.
 - Non-nil `derivationContext` and non-empty `digest` in DKG payload are rejected as
   `INVALID_INTENT`.
