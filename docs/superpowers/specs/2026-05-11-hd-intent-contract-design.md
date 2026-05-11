@@ -303,46 +303,6 @@ wrapping inside core does not break the wire contract:
 
 Existing share, runtime, protocol, timeout, and worker shutdown mappings remain unchanged.
 
----
-
-## Implementation Handoff
-
-### MPC co-signer
-
-- Extend `internal/monolith.IntentPayload` with `OrgID`, `ChainCode`, `DerivationScheme`, and
-  `DerivationContext`.
-- Add the co-signer wire `DerivationContext` type with camelCase JSON tags, then map it explicitly
-  into `coretss.DerivationContext`.
-- Validate `payload.orgId` as required for DKG and SIGN before session transport creation.
-- Validate DKG `chainCode` and `derivationScheme`, reject DKG `derivationContext`, and reject
-  non-empty DKG `digest`.
-- Validate SIGN `derivationContext` through core normalize/hash, reject non-empty top-level
-  `chainCode` and `derivationScheme`, and keep SIGN chain code out of the wire contract.
-- Map `payload.orgId` into `coretss.SessionDescriptor.OrgID` in both DKG and SIGN requests.
-- Map DKG `chainCode` and `derivationScheme` into `coretss.DKGDerivationMaterial`.
-- Map SIGN `payload.derivationContext` into `coretss.DerivationContext`.
-- Map new core derivation sentinel errors to `FAILED / INVALID_INTENT` with `errors.Is`.
-- Use a local `replace` for core only during development; final `go.mod` must use a tagged core
-  version and contain no local `replace`.
-
-### Monolith
-
-- Include `payload.orgId` on every DKG and SIGN intent sent to the co-signer.
-- Include `payload.chainCode` and `payload.derivationScheme` on every DKG intent.
-- Generate one 32-byte chain code per DKG intent and send the same lowercase 64-character hex value
-  to every participant for that intent.
-- Do not include `payload.derivationContext` or non-empty `payload.digest` on DKG intents.
-- Include `payload.derivationContext` and `payload.digest` on every SIGN intent.
-- Do not include non-empty top-level `payload.chainCode` or `payload.derivationScheme` on SIGN
-  intents.
-- Keep `payload.derivationContext.scheme` as the SIGN derivation scheme source.
-- Update monolith DTOs, validators, fixtures, and API contract tests to match this strict payload
-  contract.
-- Ensure `digest` is encoded in the JSON format expected by the co-signer Go decoder for `[]byte`
-  fields.
-
----
-
 ## Local Core Development
 
 During implementation, the co-signer may use the local core checkout:
