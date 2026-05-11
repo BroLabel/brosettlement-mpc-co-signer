@@ -36,6 +36,7 @@ that means DKG fails with `ErrChainCodeMissing` and SIGN fails with
 
 ```go
 type IntentPayload struct {
+    OrgID             string             `json:"orgId"`
     KeyID             string             `json:"keyId"`
     Parties           []string           `json:"parties"`
     Threshold         uint32             `json:"threshold"`
@@ -68,6 +69,9 @@ type DerivationContext struct {
 
 `chainCode` and top-level `derivationScheme` are DKG material fields. They are not SIGN fields.
 `derivationContext.scheme` is the SIGN derivation scheme field.
+`orgId` is required for DKG and SIGN because local core treats it as part of the MPC session
+descriptor. The monolith is the source of `orgId`; the co-signer must not derive it from API key,
+environment, party ID, or any other local default.
 The co-signer keeps this wire type separate from `coretss.DerivationContext` because the public
 core type has no JSON tags and the monolith contract uses camelCase JSON names.
 
@@ -77,6 +81,7 @@ For DKG, the payload must include explicit HD derivation material:
 
 ```json
 {
+  "orgId": "org-1",
   "keyId": "key-1",
   "parties": ["p1", "p2"],
   "threshold": 2,
@@ -90,6 +95,7 @@ For DKG, the payload must include explicit HD derivation material:
 
 Rules:
 
+- `orgId` is required for DKG.
 - `chainCode` is required for DKG.
 - `chainCode` must be lowercase hex, exactly 64 characters, matching `^[0-9a-f]{64}$`.
 - `derivationScheme` is required for DKG.
@@ -109,6 +115,7 @@ facade:
 
 ```json
 {
+  "orgId": "org-1",
   "keyId": "key-1",
   "parties": ["p1", "p2"],
   "threshold": 2,
@@ -137,6 +144,7 @@ facade:
 
 Rules:
 
+- `orgId` is required for SIGN.
 - `derivationContext` is required for SIGN.
 - A non-empty top-level `chainCode` in SIGN payload is `INVALID_INTENT`.
 - A non-empty top-level `derivationScheme` in SIGN payload is `INVALID_INTENT`.
@@ -193,6 +201,7 @@ func buildDKGRequest(intent monolith.Intent, localPartyID string, tr coretss.Tra
     return coretss.DKGSessionRequest{
         Session: coretss.SessionDescriptor{
             SessionID: intent.SessionID,
+            OrgID:     intent.Payload.OrgID,
             KeyID:     intent.Payload.KeyID,
             Parties:   intent.Payload.Parties,
             Threshold: intent.Payload.Threshold,
@@ -220,6 +229,7 @@ func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Tr
     return coretss.SignSessionRequest{
         Session: coretss.SessionDescriptor{
             SessionID: intent.SessionID,
+            OrgID:     intent.Payload.OrgID,
             KeyID:     intent.Payload.KeyID,
             Parties:   intent.Payload.Parties,
             Threshold: intent.Payload.Threshold,
@@ -295,6 +305,44 @@ Existing share, runtime, protocol, timeout, and worker shutdown mappings remain 
 
 ---
 
+## Implementation Handoff
+
+### MPC co-signer
+
+- Extend `internal/monolith.IntentPayload` with `OrgID`, `ChainCode`, `DerivationScheme`, and
+  `DerivationContext`.
+- Add the co-signer wire `DerivationContext` type with camelCase JSON tags, then map it explicitly
+  into `coretss.DerivationContext`.
+- Validate `payload.orgId` as required for DKG and SIGN before session transport creation.
+- Validate DKG `chainCode` and `derivationScheme`, reject DKG `derivationContext`, and reject
+  non-empty DKG `digest`.
+- Validate SIGN `derivationContext` through core normalize/hash, reject non-empty top-level
+  `chainCode` and `derivationScheme`, and keep SIGN chain code out of the wire contract.
+- Map `payload.orgId` into `coretss.SessionDescriptor.OrgID` in both DKG and SIGN requests.
+- Map DKG `chainCode` and `derivationScheme` into `coretss.DKGDerivationMaterial`.
+- Map SIGN `payload.derivationContext` into `coretss.DerivationContext`.
+- Map new core derivation sentinel errors to `FAILED / INVALID_INTENT` with `errors.Is`.
+- Use a local `replace` for core only during development; final `go.mod` must use a tagged core
+  version and contain no local `replace`.
+
+### Monolith
+
+- Include `payload.orgId` on every DKG and SIGN intent sent to the co-signer.
+- Include `payload.chainCode` and `payload.derivationScheme` on every DKG intent.
+- Generate one 32-byte chain code per DKG intent and send the same lowercase 64-character hex value
+  to every participant for that intent.
+- Do not include `payload.derivationContext` or non-empty `payload.digest` on DKG intents.
+- Include `payload.derivationContext` and `payload.digest` on every SIGN intent.
+- Do not include non-empty top-level `payload.chainCode` or `payload.derivationScheme` on SIGN
+  intents.
+- Keep `payload.derivationContext.scheme` as the SIGN derivation scheme source.
+- Update monolith DTOs, validators, fixtures, and API contract tests to match this strict payload
+  contract.
+- Ensure `digest` is encoded in the JSON format expected by the co-signer Go decoder for `[]byte`
+  fields.
+
+---
+
 ## Local Core Development
 
 During implementation, the co-signer may use the local core checkout:
@@ -313,6 +361,7 @@ the HD derivation API, and `go.mod` must not contain a local `replace`.
 
 Focused tests should cover the new boundary contract and mapping:
 
+- `validateIntent` rejects DKG and SIGN without `orgId`.
 - `validateIntent` rejects DKG without `chainCode`.
 - `validateIntent` rejects DKG with malformed, uppercase, non-hex, or non-64-character
   `chainCode`.
@@ -328,9 +377,11 @@ Focused tests should cover the new boundary contract and mapping:
 - `validateIntent` rejects SIGN with non-empty top-level `derivationScheme`.
 - `validateIntent` allows empty top-level `chainCode` and `derivationScheme` strings for the
   SIGN-specific top-level check, while still requiring a valid `derivationContext`.
+- `buildDKGRequest` and `buildSignRequest` pass `OrgID` into the core session descriptor.
 - `buildSignRequest` maps `payload.derivationContext` into `coretss.DerivationContext`.
 - `BuildResult` maps the new core derivation sentinels to `INVALID_INTENT` via `errors.Is`.
-- Monolith JSON decoding covers `chainCode`, `derivationScheme`, and nested `derivationContext`.
+- Monolith JSON decoding covers `orgId`, `chainCode`, `derivationScheme`, and nested
+  `derivationContext`.
 
 ---
 
@@ -338,6 +389,7 @@ Focused tests should cover the new boundary contract and mapping:
 
 - Co-signer implements a strict monolith payload contract with no fallback, defaulting, or legacy
   mode.
+- DKG and SIGN intents require explicit `orgId` from the monolith.
 - DKG intents require explicit `chainCode` and `derivationScheme`.
 - SIGN intents require explicit `derivationContext`.
 - Non-nil `derivationContext` and non-empty `digest` in DKG payload are rejected as
