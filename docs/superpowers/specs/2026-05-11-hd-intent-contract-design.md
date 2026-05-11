@@ -47,10 +47,29 @@ type IntentPayload struct {
     DerivationScheme  string             `json:"derivationScheme,omitempty"`
     DerivationContext *DerivationContext `json:"derivationContext,omitempty"`
 }
+
+type DerivationContext struct {
+    ProfileID         string `json:"profileId"`
+    Chain             string `json:"chain"`
+    Algorithm         string `json:"algorithm"`
+    Curve             string `json:"curve"`
+    Scheme            string `json:"scheme"`
+    AccountPath       string `json:"accountPath"`
+    ChildPath         string `json:"childPath"`
+    FullPath          string `json:"fullPath"`
+    AddressEncoding   string `json:"addressEncoding,omitempty"`
+    ExpectedAddress   string `json:"expectedAddress,omitempty"`
+    DerivedPublicKey  string `json:"derivedPublicKey,omitempty"`
+    Descriptor        string `json:"descriptor,omitempty"`
+    DescriptorVersion uint32 `json:"descriptorVersion,omitempty"`
+    ProfileVersion    uint32 `json:"profileVersion,omitempty"`
+}
 ```
 
 `chainCode` and top-level `derivationScheme` are DKG material fields. They are not SIGN fields.
 `derivationContext.scheme` is the SIGN derivation scheme field.
+The co-signer keeps this wire type separate from `coretss.DerivationContext` because the public
+core type has no JSON tags and the monolith contract uses camelCase JSON names.
 
 ### DKG payload
 
@@ -77,6 +96,8 @@ Rules:
 - The only supported `derivationScheme` at launch is `bip32_secp256k1`.
 - The co-signer does not default `derivationScheme` when `chainCode` is present.
 - The co-signer does not generate, rewrite, or normalize chain code.
+- A non-nil `derivationContext` in DKG payload is `INVALID_INTENT`.
+- A non-empty `digest` in DKG payload is `INVALID_INTENT`.
 
 This design treats all DKG intents as HD-aware. The current supported runtime scope remains
 ECDSA/secp256k1; unsupported algorithm/curve combinations continue to fail validation before core.
@@ -229,10 +250,11 @@ func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Tr
 }
 ```
 
-The co-signer may call `coretss.NormalizeDerivationContext` and
-`coretss.DerivationContextHashV1` during validation to fail early. That check is only a boundary
-validation check. Runtime still passes the original mapped context to `RunSignSession`, and core
-remains the source of runtime normalization and hashing.
+During SIGN validation, the co-signer maps `payload.derivationContext` into a
+`coretss.DerivationContext`, then calls `coretss.NormalizeDerivationContext` and
+`coretss.DerivationContextHashV1` to fail invalid contexts before creating session transport. That
+check is only a boundary validation check. Runtime still passes the original mapped context to
+`RunSignSession`, and core remains the source of runtime normalization and hashing.
 
 ---
 
@@ -296,8 +318,12 @@ Focused tests should cover the new boundary contract and mapping:
   `chainCode`.
 - `validateIntent` rejects DKG without `derivationScheme`.
 - `validateIntent` rejects DKG with unsupported `derivationScheme`.
+- `validateIntent` rejects DKG with non-nil `derivationContext`.
+- `validateIntent` rejects DKG with non-empty `digest`.
 - `buildDKGRequest` passes `DerivationMaterial` into the core request.
 - `validateIntent` rejects SIGN without `derivationContext`.
+- `validateIntent` rejects SIGN with a derivation context that fails
+  `coretss.NormalizeDerivationContext` or `coretss.DerivationContextHashV1`.
 - `validateIntent` rejects SIGN with non-empty top-level `chainCode`.
 - `validateIntent` rejects SIGN with non-empty top-level `derivationScheme`.
 - `validateIntent` allows empty top-level `chainCode` and `derivationScheme` strings for the
@@ -314,6 +340,8 @@ Focused tests should cover the new boundary contract and mapping:
   mode.
 - DKG intents require explicit `chainCode` and `derivationScheme`.
 - SIGN intents require explicit `derivationContext`.
+- Non-nil `derivationContext` and non-empty `digest` in DKG payload are rejected as
+  `INVALID_INTENT`.
 - Non-empty top-level `chainCode` or `derivationScheme` in SIGN payload is rejected as
   `INVALID_INTENT`.
 - Contract errors are detected before `FrameContext`, `HTTPTransport`, or core session creation.
