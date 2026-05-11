@@ -144,6 +144,11 @@ Validation runs after a successful claim because only claimed intents should rec
 results from this worker. Validation runs before `FrameContext`, `HTTPTransport`, and core calls so
 contract failures have no MPC session side effects.
 
+For DKG, a valid `chainCode` is not persisted or staged separately by the co-signer. Immediately
+after validation, the worker creates the session transport and starts `RunDKGSession` with
+`DKGDerivationMaterial{ChainCode, DerivationScheme}` from the claimed intent. Core owns DKG
+execution and persists the chain code only as part of successful DKG key material persistence.
+
 All pre-core validation failures post:
 
 ```json
@@ -228,6 +233,25 @@ The co-signer may call `coretss.NormalizeDerivationContext` and
 `coretss.DerivationContextHashV1` during validation to fail early. That check is only a boundary
 validation check. Runtime still passes the original mapped context to `RunSignSession`, and core
 remains the source of runtime normalization and hashing.
+
+---
+
+## Chain Code Persistence
+
+The co-signer treats `payload.chainCode` as transient DKG input:
+
+- It is read from the claimed monolith intent.
+- It is validated before session transport creation.
+- It is passed directly into `coretss.RunDKGSession` through `DKGDerivationMaterial`.
+- It is not stored in a separate co-signer table, file, cache, or sidecar payload.
+
+After successful ECDSA DKG, core persists the chain code together with the generated ECDSA key
+material through the configured `coretss.ShareStore`. With the current filesystem store, the outer
+`<shares_dir>/<keyID>.json` envelope contains share metadata and encrypted `ciphertext`; the raw
+chain code lives inside that encrypted key-material blob, not as a plaintext top-level JSON field.
+
+SIGN intents never provide chain code. During SIGN, core loads the stored key material by `keyId`
+and uses the chain code persisted from the prior successful DKG.
 
 ---
 
