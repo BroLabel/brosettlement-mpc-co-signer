@@ -22,8 +22,8 @@ The local `brosettlement-mpc-core` branch now requires HD derivation inputs:
   derivation context hash, bind that hash into protocol frames, and derive the child signing key.
 
 The current co-signer payload model already passes `chain` through `coretss.SessionDescriptor`, but
-does not carry `chainCode`, `derivationScheme`, or `derivationContext`. With the local core API,
-that means DKG fails with `ErrChainCodeMissing` and SIGN fails with
+does not carry `orgId`, `chainCode`, `derivationScheme`, or `derivationContext`. With the local core
+API, that means DKG fails with `ErrInvalidSessionDescriptor` or `ErrChainCodeMissing`, and SIGN fails with
 `ErrDerivationContextRequired`.
 
 ---
@@ -96,6 +96,7 @@ For DKG, the payload must include explicit HD derivation material:
 Rules:
 
 - `orgId` is required for DKG.
+- `keyId` is required for DKG.
 - `chainCode` is required for DKG.
 - `chainCode` must be lowercase hex, exactly 64 characters, matching `^[0-9a-f]{64}$`.
 - `derivationScheme` is required for DKG.
@@ -122,7 +123,7 @@ facade:
   "algorithm": "ECDSA",
   "curve": "secp256k1",
   "chain": "ethereum",
-  "digest": "base64-encoded-digest",
+  "digest": "AQID",
   "derivationContext": {
     "profileId": "profile-1",
     "chain": "ethereum",
@@ -145,6 +146,7 @@ facade:
 Rules:
 
 - `orgId` is required for SIGN.
+- `keyId` is required for SIGN.
 - `derivationContext` is required for SIGN.
 - A non-empty top-level `chainCode` in SIGN payload is `INVALID_INTENT`.
 - A non-empty top-level `derivationScheme` in SIGN payload is `INVALID_INTENT`.
@@ -322,6 +324,7 @@ the HD derivation API, and `go.mod` must not contain a local `replace`.
 Focused tests should cover the new boundary contract and mapping:
 
 - `validateIntent` rejects DKG and SIGN without `orgId`.
+- `validateIntent` rejects DKG and SIGN without `keyId`.
 - `validateIntent` rejects DKG without `chainCode`.
 - `validateIntent` rejects DKG with malformed, uppercase, non-hex, or non-64-character
   `chainCode`.
@@ -350,6 +353,7 @@ Focused tests should cover the new boundary contract and mapping:
 - Co-signer implements a strict monolith payload contract with no fallback, defaulting, or legacy
   mode.
 - DKG and SIGN intents require explicit `orgId` from the monolith.
+- DKG and SIGN intents require explicit `keyId` from the monolith.
 - DKG intents require explicit `chainCode` and `derivationScheme`.
 - SIGN intents require explicit `derivationContext`.
 - Non-nil `derivationContext` and non-empty `digest` in DKG payload are rejected as
