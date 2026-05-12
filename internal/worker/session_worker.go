@@ -202,7 +202,10 @@ func validateIntent(intent monolith.Intent, localPartyID string) error {
 	}
 
 	curve := strings.TrimSpace(intent.Payload.Curve)
-	if curve != "" && !strings.EqualFold(curve, "secp256k1") {
+	if curve == "" {
+		return fmt.Errorf("%w: curve is required", errInvalidIntent)
+	}
+	if !strings.EqualFold(curve, "secp256k1") {
 		return fmt.Errorf("%w: unsupported ecdsa curve %q", errInvalidIntent, intent.Payload.Curve)
 	}
 

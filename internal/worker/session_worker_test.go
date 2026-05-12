@@ -183,6 +183,7 @@ func TestValidateIntentDKGContract(t *testing.T) {
 	}{
 		{name: "missing org id", edit: func(intent *monolith.Intent) { intent.Payload.OrgID = "" }},
 		{name: "missing key id", edit: func(intent *monolith.Intent) { intent.Payload.KeyID = "" }},
+		{name: "missing curve", edit: func(intent *monolith.Intent) { intent.Payload.Curve = "" }},
 		{name: "non-empty chain", edit: func(intent *monolith.Intent) { intent.Payload.Chain = "ethereum" }},
 		{name: "missing chain code", edit: func(intent *monolith.Intent) { intent.Payload.ChainCode = "" }},
 		{name: "malformed chain code", edit: func(intent *monolith.Intent) { intent.Payload.ChainCode = "0x11" }},
