@@ -36,21 +36,33 @@ API, that means DKG fails with `ErrInvalidSessionDescriptor` or `ErrChainCodeMis
 
 ```go
 type IntentPayload struct {
+    Type              string             `json:"type,omitempty"`
     OrgID             string             `json:"orgId"`
+    WalletID          string             `json:"walletId,omitempty"`
     KeyID             string             `json:"keyId"`
+    ProfileID         string             `json:"profileId,omitempty"`
+    ProfileVersion    uint32             `json:"profileVersion,omitempty"`
+    ProfileTemplateID string             `json:"profileTemplateId,omitempty"`
     Parties           []string           `json:"parties"`
     Threshold         uint32             `json:"threshold"`
     Algorithm         string             `json:"algorithm"`
     Curve             string             `json:"curve"`
     Chain             string             `json:"chain"`
     Digest            []byte             `json:"digest"`
+    DigestType        string             `json:"digestType,omitempty"`
+    HashAlgorithm     string             `json:"hashAlgorithm,omitempty"`
+    SigningPayloadType string            `json:"signingPayloadType,omitempty"`
     ChainCode         string             `json:"chainCode,omitempty"`
+    ChainCodeHash     string             `json:"chainCodeHash,omitempty"`
     DerivationScheme  string             `json:"derivationScheme,omitempty"`
+    DerivationContextHash string          `json:"derivationContextHash,omitempty"`
+    PartyID           string             `json:"partyId,omitempty"`
     DerivationContext *DerivationContext `json:"derivationContext,omitempty"`
 }
 
 type DerivationContext struct {
     ProfileID         string `json:"profileId"`
+    ProfileTemplateID string `json:"profileTemplateId,omitempty"`
     Chain             string `json:"chain"`
     Algorithm         string `json:"algorithm"`
     Curve             string `json:"curve"`
@@ -60,15 +72,21 @@ type DerivationContext struct {
     FullPath          string `json:"fullPath"`
     AddressEncoding   string `json:"addressEncoding,omitempty"`
     ExpectedAddress   string `json:"expectedAddress,omitempty"`
-    DerivedPublicKey  string `json:"derivedPublicKey,omitempty"`
-    Descriptor        string `json:"descriptor,omitempty"`
+    ExpectedPublicKey string `json:"expectedPublicKey,omitempty"`
+    PublicKeyFormat   string `json:"publicKeyFormat,omitempty"`
     DescriptorVersion uint32 `json:"descriptorVersion,omitempty"`
     ProfileVersion    uint32 `json:"profileVersion,omitempty"`
+    KeyVersion        uint32 `json:"keyVersion,omitempty"`
 }
 ```
 
+`payload.type` mirrors the top-level intent `type` field returned by the monolith. If both are
+present, the co-signer validates that they match after trimming and uppercasing.
 `chainCode` and top-level `derivationScheme` are DKG material fields. They are not SIGN fields.
 `derivationContext.scheme` is the SIGN derivation scheme field.
+`expectedPublicKey` is the wire name from the monolith wallet snapshot. The co-signer maps it into
+`coretss.DerivationContext.DerivedPublicKey` because core names the same child public key from the
+cryptographic point of view.
 `orgId` is required for DKG and SIGN because local core treats it as part of the MPC session
 descriptor. The monolith is the source of `orgId`; the co-signer must not derive it from API key,
 environment, party ID, or any other local default.
@@ -81,6 +99,7 @@ For DKG, the payload must include explicit HD derivation material:
 
 ```json
 {
+  "type": "DKG",
   "orgId": "org-1",
   "keyId": "key-1",
   "parties": ["p1", "p2"],
@@ -89,6 +108,7 @@ For DKG, the payload must include explicit HD derivation material:
   "curve": "secp256k1",
   "chain": "ethereum",
   "chainCode": "1111111111111111111111111111111111111111111111111111111111111111",
+  "chainCodeHash": "base64url-sha256-chain-code",
   "derivationScheme": "bip32_secp256k1"
 }
 ```
@@ -96,15 +116,24 @@ For DKG, the payload must include explicit HD derivation material:
 Rules:
 
 - `orgId` is required for DKG.
+- `payload.type`, when present, must match top-level intent type `DKG`.
 - `keyId` is required for DKG.
 - `chainCode` is required for DKG.
 - `chainCode` must be lowercase hex, exactly 64 characters, matching `^[0-9a-f]{64}$`.
+- `chainCodeHash` is required for DKG and must match the monolith's canonical
+  `base64url(sha256(decoded_chain_code))` value.
 - `derivationScheme` is required for DKG.
 - The only supported `derivationScheme` at launch is `bip32_secp256k1`.
 - The co-signer does not default `derivationScheme` when `chainCode` is present.
 - The co-signer does not generate, rewrite, or normalize chain code.
 - A non-nil `derivationContext` in DKG payload is `INVALID_INTENT`.
 - A non-empty `digest` in DKG payload is `INVALID_INTENT`.
+
+The co-signer executes only pending/deliverable DKG payloads that still include raw `chainCode`.
+The monolith may keep a cleaned DKG payload after delivery with `chainCodeHash` and
+`derivationScheme` but without raw `chainCode`; that cleaned payload is audit/delivery state, not
+an executable co-signer session payload. If such a cleaned payload reaches claim/run, the co-signer
+reports `FAILED / INVALID_INTENT`.
 
 This design treats all DKG intents as HD-aware. The current supported runtime scope remains
 ECDSA/secp256k1; unsupported algorithm/curve combinations continue to fail validation before core.
@@ -116,6 +145,7 @@ facade:
 
 ```json
 {
+  "type": "SIGN",
   "orgId": "org-1",
   "keyId": "key-1",
   "parties": ["p1", "p2"],
@@ -124,8 +154,18 @@ facade:
   "curve": "secp256k1",
   "chain": "ethereum",
   "digest": "AQID",
+  "walletId": "wallet-1",
+  "profileId": "profile-1",
+  "profileVersion": 3,
+  "profileTemplateId": "tron-default",
+  "digestType": "transaction_hash",
+  "hashAlgorithm": "sha256",
+  "signingPayloadType": "tron_transaction",
+  "derivationContextHash": "base64url-context-hash",
+  "partyId": "co-signer",
   "derivationContext": {
     "profileId": "profile-1",
+    "profileTemplateId": "tron-default",
     "chain": "ethereum",
     "algorithm": "ecdsa",
     "curve": "secp256k1",
@@ -135,10 +175,11 @@ facade:
     "fullPath": "m/44'/60'/0'/0/15",
     "addressEncoding": "",
     "expectedAddress": "",
-    "derivedPublicKey": "",
-    "descriptor": "",
+    "expectedPublicKey": "",
+    "publicKeyFormat": "uncompressed_hex",
     "descriptorVersion": 7,
-    "profileVersion": 3
+    "profileVersion": 3,
+    "keyVersion": 1
   }
 }
 ```
@@ -146,9 +187,21 @@ facade:
 Rules:
 
 - `orgId` is required for SIGN.
+- `payload.type`, when present, must match top-level intent type `SIGN`.
 - `keyId` is required for SIGN.
 - `digest` is required for SIGN and must decode to non-empty bytes.
 - `derivationContext` is required for SIGN.
+- SIGN wire metadata includes `walletId`, `profileId`, `profileVersion`, `profileTemplateId`,
+  `digestType`, `hashAlgorithm`, `signingPayloadType`, `derivationContextHash`, and `partyId`.
+  The co-signer validates this monolith contract metadata at the boundary and keeps core mapping
+  focused on the fields required by `coretss.SignSessionRequest`.
+- SIGN `derivationContext` uses the monolith signer/core signing context shape:
+  `profileId`, `profileTemplateId`, `profileVersion`, `chain`, `algorithm`, `curve`, `scheme`,
+  `accountPath`, `childPath`, `fullPath`, `addressEncoding`, `expectedAddress`,
+  `expectedPublicKey`, `publicKeyFormat`, `descriptorVersion`, and `keyVersion`.
+- `derivationContextHash` is verified with `coretss.NormalizeDerivationContext` and
+  `coretss.DerivationContextHashV1`. The co-signer must not compute this hash through an
+  independent JSON canonicalization path.
 - A non-empty top-level `chainCode` in SIGN payload is `INVALID_INTENT`.
 - A non-empty top-level `derivationScheme` in SIGN payload is `INVALID_INTENT`.
 - SIGN derives scheme from `derivationContext.scheme`; top-level `derivationScheme` belongs only
@@ -253,8 +306,7 @@ func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Tr
             FullPath:          ctx.FullPath,
             AddressEncoding:   ctx.AddressEncoding,
             ExpectedAddress:   ctx.ExpectedAddress,
-            DerivedPublicKey:  ctx.DerivedPublicKey,
-            Descriptor:        ctx.Descriptor,
+            DerivedPublicKey:  ctx.ExpectedPublicKey,
             DescriptorVersion: ctx.DescriptorVersion,
             ProfileVersion:    ctx.ProfileVersion,
         },
@@ -266,8 +318,11 @@ func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Tr
 During SIGN validation, the co-signer maps `payload.derivationContext` into a
 `coretss.DerivationContext`, then calls `coretss.NormalizeDerivationContext` and
 `coretss.DerivationContextHashV1` to fail invalid contexts before creating session transport. That
-check is only a boundary validation check. Runtime still passes the original mapped context to
-`RunSignSession`, and core remains the source of runtime normalization and hashing.
+check must also compare the computed hash with top-level `payload.derivationContextHash`. Runtime
+still passes the original mapped context to `RunSignSession`, and core remains the source of runtime
+normalization and hashing. Wire fields that are not yet exposed by the public core
+`DerivationContext` stay at the monolith contract boundary until core adds them to the public
+facade.
 
 ---
 
@@ -325,8 +380,12 @@ the HD derivation API, and `go.mod` must not contain a local `replace`.
 Focused tests should cover the new boundary contract and mapping:
 
 - `validateIntent` rejects DKG and SIGN without `orgId`.
+- `validateIntent` rejects DKG and SIGN when `payload.type` conflicts with the top-level intent
+  type.
 - `validateIntent` rejects DKG and SIGN without `keyId`.
 - `validateIntent` rejects DKG without `chainCode`.
+- `validateIntent` rejects DKG without `chainCodeHash`.
+- `validateIntent` rejects DKG when `chainCodeHash` does not match `chainCode`.
 - `validateIntent` rejects DKG with malformed, uppercase, non-hex, or non-64-character
   `chainCode`.
 - `validateIntent` rejects DKG without `derivationScheme`.
@@ -336,17 +395,23 @@ Focused tests should cover the new boundary contract and mapping:
 - `buildDKGRequest` passes `DerivationMaterial` into the core request.
 - `validateIntent` rejects SIGN without `digest`.
 - `validateIntent` rejects SIGN without `derivationContext`.
+- `validateIntent` rejects SIGN without monolith metadata fields such as `walletId`, `profileId`,
+  `profileVersion`, `profileTemplateId`, `digestType`, `hashAlgorithm`, `signingPayloadType`,
+  `derivationContextHash`, and `partyId`, while still keeping unrelated metadata out of core.
 - `validateIntent` rejects SIGN with a derivation context that fails
   `coretss.NormalizeDerivationContext` or `coretss.DerivationContextHashV1`.
+- `validateIntent` rejects SIGN when top-level `derivationContextHash` does not match the hash
+  computed by `coretss.DerivationContextHashV1`.
 - `validateIntent` rejects SIGN with non-empty top-level `chainCode`.
 - `validateIntent` rejects SIGN with non-empty top-level `derivationScheme`.
 - `validateIntent` allows empty top-level `chainCode` and `derivationScheme` strings for the
   SIGN-specific top-level check, while still requiring a valid `derivationContext`.
 - `buildDKGRequest` and `buildSignRequest` pass `OrgID` into the core session descriptor.
-- `buildSignRequest` maps `payload.derivationContext` into `coretss.DerivationContext`.
+- `buildSignRequest` maps `payload.derivationContext` into `coretss.DerivationContext`, including
+  `expectedPublicKey -> DerivedPublicKey`.
 - `BuildResult` maps the new core derivation sentinels to `INVALID_INTENT` via `errors.Is`.
-- Monolith JSON decoding covers `orgId`, `chainCode`, `derivationScheme`, and nested
-  `derivationContext`.
+- Monolith JSON decoding covers `orgId`, `chainCode`, `chainCodeHash`, `derivationScheme`, SIGN
+  metadata fields, and nested `derivationContext`.
 
 ---
 
@@ -355,10 +420,16 @@ Focused tests should cover the new boundary contract and mapping:
 - Co-signer implements a strict monolith payload contract with no fallback, defaulting, or legacy
   mode.
 - DKG and SIGN intents require explicit `orgId` from the monolith.
+- DKG and SIGN intents reject conflicting top-level and payload intent types.
 - DKG and SIGN intents require explicit `keyId` from the monolith.
-- DKG intents require explicit `chainCode` and `derivationScheme`.
+- DKG intents require explicit `chainCode`, `chainCodeHash`, and `derivationScheme`.
+- Cleaned DKG payloads without raw `chainCode` are not executable co-signer session payloads and
+  fail as `INVALID_INTENT` if claimed for execution.
 - SIGN intents require explicit non-empty `digest`.
 - SIGN intents require explicit `derivationContext`.
+- SIGN intents require monolith wallet/profile/digest metadata fields: `walletId`, `profileId`,
+  `profileVersion`, `profileTemplateId`, `digestType`, `hashAlgorithm`, `signingPayloadType`,
+  `derivationContextHash`, and `partyId`.
 - Non-nil `derivationContext` and non-empty `digest` in DKG payload are rejected as
   `INVALID_INTENT`.
 - Non-empty top-level `chainCode` or `derivationScheme` in SIGN payload is rejected as
