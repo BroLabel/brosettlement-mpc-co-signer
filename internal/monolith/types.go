@@ -36,23 +36,25 @@ type IntentPayload struct {
 }
 
 type OutboundFrame struct {
-	MessageID   string `json:"messageId"`
-	ProtocolSeq uint64 `json:"protocolSeq"`
-	Round       uint32 `json:"round"`
-	ToPartyID   string `json:"toPartyId,omitempty"`
-	Broadcast   bool   `json:"broadcast,omitempty"`
-	Payload     []byte `json:"payload"`
+	MessageID             string `json:"messageId"`
+	ProtocolSeq           uint64 `json:"protocolSeq"`
+	Round                 uint32 `json:"round"`
+	ToPartyID             string `json:"toPartyId,omitempty"`
+	Broadcast             bool   `json:"broadcast,omitempty"`
+	Payload               []byte `json:"payload"`
+	DerivationContextHash string `json:"derivationContextHash,omitempty"`
 }
 
 type InboundMessage struct {
-	DeliverySeq uint64 `json:"deliverySeq"`
-	ProtocolSeq uint64 `json:"protocolSeq"`
-	MessageID   string `json:"messageId"`
-	Round       uint32 `json:"round"`
-	FromPartyID string `json:"fromPartyId"`
-	ToPartyID   string `json:"toPartyId"`
-	Broadcast   bool   `json:"broadcast"`
-	Payload     []byte `json:"payload"`
+	DeliverySeq           uint64 `json:"deliverySeq"`
+	ProtocolSeq           uint64 `json:"protocolSeq"`
+	MessageID             string `json:"messageId"`
+	Round                 uint32 `json:"round"`
+	FromPartyID           string `json:"fromPartyId"`
+	ToPartyID             string `json:"toPartyId"`
+	Broadcast             bool   `json:"broadcast"`
+	Payload               []byte `json:"payload"`
+	DerivationContextHash string `json:"derivationContextHash,omitempty"`
 }
 
 type ClaimResult struct {
@@ -63,10 +65,11 @@ type IntentResult struct {
 	Status       string                `json:"status"`
 	ErrorCode    string                `json:"errorCode,omitempty"`
 	ErrorMessage string                `json:"errorMessage,omitempty"`
-	DkgMaterial  *DkgParticipantResult `json:"dkgMaterial,omitempty"`
+	DkgMaterial  *DkgParticipantResult `json:"material,omitempty"`
 }
 
 type DkgParticipantResult struct {
+	PartyID          string `json:"partyId"`
 	KeyID            string `json:"keyId"`
 	AccountPublicKey string `json:"accountPublicKey"`
 	ChainCodeHash    string `json:"chainCodeHash"`

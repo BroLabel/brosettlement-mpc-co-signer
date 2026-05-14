@@ -348,7 +348,8 @@ func TestRunSessionPostsDkgMaterial(t *testing.T) {
 		t.Fatal("DkgMaterial is nil")
 	}
 	material := result.DkgMaterial
-	if material.KeyID != "key-1" ||
+	if material.PartyID != "co-signer" ||
+		material.KeyID != "key-1" ||
 		material.AccountPublicKey != "account-public-key" ||
 		material.ChainCodeHash != "AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw" ||
 		!material.ChainCodePresent ||

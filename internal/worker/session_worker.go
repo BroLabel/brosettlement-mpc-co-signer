@@ -115,7 +115,7 @@ func RunSession(
 
 	result := BuildResult(runErr, sessionCtx, intent)
 	if runErr == nil && strings.EqualFold(strings.TrimSpace(intent.Type), "DKG") {
-		result = buildDKGSuccessResult(intent, dkgOutput)
+		result = buildDKGSuccessResult(intent, localPartyID, dkgOutput)
 	}
 	postResult(ctx, client, intent.IntentID, result, log)
 }
@@ -447,10 +447,11 @@ func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Tr
 	}
 }
 
-func buildDKGSuccessResult(intent monolith.Intent, output coretss.DKGOutput) monolith.IntentResult {
+func buildDKGSuccessResult(intent monolith.Intent, localPartyID string, output coretss.DKGOutput) monolith.IntentResult {
 	return monolith.IntentResult{
 		Status: intentStatusCompleted,
 		DkgMaterial: &monolith.DkgParticipantResult{
+			PartyID:          localPartyID,
 			KeyID:            output.KeyID,
 			AccountPublicKey: output.PublicKey,
 			ChainCodeHash:    intent.Payload.ChainCodeHash,
