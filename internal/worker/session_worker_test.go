@@ -42,6 +42,17 @@ func (s *stubClient) GetMessages(context.Context, string, uint64) ([]monolith.In
 	return nil, nil
 }
 
+func claimResultForIntent(intent monolith.Intent) monolith.ClaimResult {
+	return monolith.ClaimResult{
+		IntentID:  intent.IntentID,
+		SessionID: intent.SessionID,
+		Type:      intent.Type,
+		Payload:   intent.Payload,
+		Status:    "CLAIMED",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+}
+
 type stubRunner struct{}
 
 func (s *stubRunner) RunDKGSession(context.Context, coretss.DKGSessionRequest) (coretss.DKGOutput, error) {
@@ -83,8 +94,6 @@ func (s *capturingRunner) RunSignSession(context.Context, coretss.SignSessionReq
 }
 
 func TestRunSessionRejectsInvalidIntent(t *testing.T) {
-	client := &stubClient{}
-	runner := &stubRunner{}
 	intent := monolith.Intent{
 		IntentID:  "intent-1",
 		SessionID: "session-1",
@@ -94,6 +103,8 @@ func TestRunSessionRejectsInvalidIntent(t *testing.T) {
 			Threshold: 2,
 		},
 	}
+	client := &stubClient{claimResult: claimResultForIntent(intent)}
+	runner := &stubRunner{}
 
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
@@ -333,12 +344,13 @@ func TestBuildSignRequestMapsHDPayload(t *testing.T) {
 }
 
 func TestRunSessionPostsDkgMaterial(t *testing.T) {
-	client := &stubClient{}
+	intent := validDKGIntent()
+	client := &stubClient{claimResult: claimResultForIntent(intent)}
 	runner := &capturingRunner{}
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSession(context.Background(), validDKGIntent(), client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSession(context.Background(), intent, client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	result := client.lastResult
 	if result.Status != intentStatusCompleted {
@@ -388,13 +400,40 @@ func TestRunSessionUsesClaimedPayloadForDkgExecution(t *testing.T) {
 	}
 }
 
+func TestRunSessionRejectsIncompleteClaimResponse(t *testing.T) {
+	pendingIntent := validDKGIntent()
+	client := &stubClient{
+		claimResult: monolith.ClaimResult{
+			IntentID:  pendingIntent.IntentID,
+			SessionID: pendingIntent.SessionID,
+			Type:      pendingIntent.Type,
+			ExpiresAt: time.Now().Add(time.Minute),
+		},
+	}
+	runner := &capturingRunner{}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+
+	RunSession(context.Background(), pendingIntent, client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
+
+	if client.lastResult.Status != intentStatusFailed ||
+		client.lastResult.ErrorCode != ErrorCodeInvalidIntent ||
+		client.lastResult.ErrorMessage == "" {
+		t.Fatalf("unexpected result = %+v", client.lastResult)
+	}
+	if runner.dkgReq.Session.SessionID != "" {
+		t.Fatalf("DKG should not run for incomplete claim response, got request = %+v", runner.dkgReq)
+	}
+}
+
 func TestRunSessionPostsFailedDkgWithoutMaterial(t *testing.T) {
-	client := &stubClient{}
+	intent := validDKGIntent()
+	client := &stubClient{claimResult: claimResultForIntent(intent)}
 	runner := &capturingRunner{dkgErr: coretss.ErrChainCodeMissing}
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSession(context.Background(), validDKGIntent(), client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSession(context.Background(), intent, client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	result := client.lastResult
 	if result.Status != intentStatusFailed ||

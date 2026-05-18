@@ -71,7 +71,7 @@ func RunSession(
 		}
 		return
 	}
-	intent = claim.IntentOrFallback(intent)
+	intent = claim.Intent()
 
 	if err := validateIntent(intent, localPartyID); err != nil {
 		postResult(ctx, client, intent.IntentID, monolith.IntentResult{

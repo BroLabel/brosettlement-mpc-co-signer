@@ -78,42 +78,6 @@ func (r ClaimResult) Intent() Intent {
 	}
 }
 
-func (r ClaimResult) IntentOrFallback(fallback Intent) Intent {
-	claimed := r.Intent()
-	if claimed.IntentID == "" {
-		claimed.IntentID = fallback.IntentID
-	}
-	if claimed.SessionID == "" {
-		claimed.SessionID = fallback.SessionID
-	}
-	if claimed.Type == "" {
-		claimed.Type = fallback.Type
-	}
-	if claimed.ExpiresAt.IsZero() {
-		claimed.ExpiresAt = fallback.ExpiresAt
-	}
-	if isEmptyPayload(claimed.Payload) {
-		claimed.Payload = fallback.Payload
-	}
-	return claimed
-}
-
-func isEmptyPayload(payload IntentPayload) bool {
-	return payload.Type == "" &&
-		payload.OrgID == "" &&
-		payload.KeyID == "" &&
-		len(payload.Parties) == 0 &&
-		payload.Threshold == 0 &&
-		payload.Algorithm == "" &&
-		payload.Curve == "" &&
-		payload.Chain == "" &&
-		len(payload.Digest) == 0 &&
-		payload.ChainCode == "" &&
-		payload.ChainCodeHash == "" &&
-		payload.DerivationScheme == "" &&
-		payload.DerivationContext == nil
-}
-
 type IntentResult struct {
 	Status       string                `json:"status"`
 	ErrorCode    string                `json:"errorCode,omitempty"`
