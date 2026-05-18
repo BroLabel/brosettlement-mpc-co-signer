@@ -52,6 +52,47 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 	}
 }
 
+func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"intentId":"intent-1",
+			"sessionId":"session-1",
+			"type":"DKG",
+			"status":"CLAIMED",
+			"expiresAt":"2026-04-16T12:00:00Z",
+			"payload":{
+				"type":"DKG",
+				"orgId":"org-1",
+				"keyId":"key-1",
+				"parties":["party-1","co-signer"],
+				"threshold":2,
+				"algorithm":"ECDSA",
+				"curve":"secp256k1",
+				"chainCode":"1111111111111111111111111111111111111111111111111111111111111111",
+				"chainCodeHash":"AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw",
+				"derivationScheme":"bip32_secp256k1"
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	claim, err := client.ClaimIntent(context.Background(), "intent-1")
+	if err != nil {
+		t.Fatalf("ClaimIntent() error = %v", err)
+	}
+
+	intent := claim.Intent()
+	if intent.IntentID != "intent-1" ||
+		intent.SessionID != "session-1" ||
+		intent.Type != "DKG" ||
+		intent.Payload.ChainCode != strings.Repeat("11", 32) ||
+		intent.Payload.ChainCodeHash != "AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw" ||
+		intent.Payload.DerivationScheme != "bip32_secp256k1" {
+		t.Fatalf("unexpected claimed intent = %+v", intent)
+	}
+}
+
 func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	var gotSignature, gotBodyHash, gotIdempotency, gotNonce string
 	var signatureIsValid bool

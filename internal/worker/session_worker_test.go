@@ -359,6 +359,35 @@ func TestRunSessionPostsDkgMaterial(t *testing.T) {
 	}
 }
 
+func TestRunSessionUsesClaimedPayloadForDkgExecution(t *testing.T) {
+	claimedIntent := validDKGIntent()
+	pendingIntent := claimedIntent
+	pendingIntent.Payload.ChainCode = ""
+	pendingIntent.Payload.ChainCodeHash = claimedIntent.Payload.ChainCodeHash
+	client := &stubClient{
+		claimResult: monolith.ClaimResult{
+			IntentID:  claimedIntent.IntentID,
+			SessionID: claimedIntent.SessionID,
+			Type:      claimedIntent.Type,
+			Payload:   claimedIntent.Payload,
+			Status:    "CLAIMED",
+			ExpiresAt: time.Now().Add(time.Minute),
+		},
+	}
+	runner := &capturingRunner{}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+
+	RunSession(context.Background(), pendingIntent, client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
+
+	if client.lastResult.Status != intentStatusCompleted {
+		t.Fatalf("status = %q, want %q result=%+v", client.lastResult.Status, intentStatusCompleted, client.lastResult)
+	}
+	if runner.dkgReq.DerivationMaterial == nil || runner.dkgReq.DerivationMaterial.ChainCode != claimedIntent.Payload.ChainCode {
+		t.Fatalf("unexpected DKG derivation material = %+v", runner.dkgReq.DerivationMaterial)
+	}
+}
+
 func TestRunSessionPostsFailedDkgWithoutMaterial(t *testing.T) {
 	client := &stubClient{}
 	runner := &capturingRunner{dkgErr: coretss.ErrChainCodeMissing}
