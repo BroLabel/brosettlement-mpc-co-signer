@@ -300,8 +300,7 @@ func TestBuildDKGRequestMapsHDPayload(t *testing.T) {
 		!sameStrings(req.Session.Parties, []string{"party-1", "co-signer"}) ||
 		req.Session.Threshold != 2 ||
 		req.Session.Algorithm != "ECDSA" ||
-		req.Session.Curve != "secp256k1" ||
-		req.Session.Chain != "" {
+		req.Session.Curve != "secp256k1" {
 		t.Fatalf("unexpected DKG session = %+v", req.Session)
 	}
 	if req.DerivationMaterial == nil {

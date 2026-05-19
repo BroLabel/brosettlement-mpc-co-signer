@@ -418,7 +418,6 @@ func buildDKGRequest(intent monolith.Intent, localPartyID string, tr coretss.Tra
 			Threshold: intent.Payload.Threshold,
 			Algorithm: intent.Payload.Algorithm,
 			Curve:     intent.Payload.Curve,
-			Chain:     "",
 		},
 		LocalPartyID: localPartyID,
 		DerivationMaterial: &coretss.DKGDerivationMaterial{
@@ -431,7 +430,7 @@ func buildDKGRequest(intent monolith.Intent, localPartyID string, tr coretss.Tra
 
 func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Transport) coretss.SignSessionRequest {
 	return coretss.SignSessionRequest{
-		Session: coretss.SessionDescriptor{
+		Session: coretss.SignSessionDescriptor{
 			SessionID: intent.SessionID,
 			OrgID:     intent.Payload.OrgID,
 			KeyID:     intent.Payload.KeyID,
