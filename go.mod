@@ -2,7 +2,7 @@ module github.com/BroLabel/brosettlement-mpc-co-signer
 
 go 1.24.0
 
-require github.com/BroLabel/brosettlement-mpc-core v0.2.1
+require github.com/BroLabel/brosettlement-mpc-core v0.2.2
 
 require (
 	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412 // indirect

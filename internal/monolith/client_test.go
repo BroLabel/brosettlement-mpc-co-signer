@@ -52,6 +52,47 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 	}
 }
 
+func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"intentId":"intent-1",
+			"sessionId":"session-1",
+			"type":"DKG",
+			"status":"CLAIMED",
+			"expiresAt":"2026-04-16T12:00:00Z",
+			"payload":{
+				"type":"DKG",
+				"orgId":"org-1",
+				"keyId":"key-1",
+				"parties":["party-1","co-signer"],
+				"threshold":2,
+				"algorithm":"ECDSA",
+				"curve":"secp256k1",
+				"chainCode":"1111111111111111111111111111111111111111111111111111111111111111",
+				"chainCodeHash":"AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw",
+				"derivationScheme":"bip32_secp256k1"
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	claim, err := client.ClaimIntent(context.Background(), "intent-1")
+	if err != nil {
+		t.Fatalf("ClaimIntent() error = %v", err)
+	}
+
+	intent := claim.Intent()
+	if intent.IntentID != "intent-1" ||
+		intent.SessionID != "session-1" ||
+		intent.Type != "DKG" ||
+		intent.Payload.ChainCode != strings.Repeat("11", 32) ||
+		intent.Payload.ChainCodeHash != "AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw" ||
+		intent.Payload.DerivationScheme != "bip32_secp256k1" {
+		t.Fatalf("unexpected claimed intent = %+v", intent)
+	}
+}
+
 func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	var gotSignature, gotBodyHash, gotIdempotency, gotNonce string
 	var signatureIsValid bool
@@ -168,6 +209,105 @@ func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 	}
 	if len(msgs) != 1 || msgs[0].DeliverySeq != 11 || msgs[0].ProtocolSeq != 7 {
 		t.Fatalf("unexpected messages = %+v", msgs)
+	}
+}
+
+func TestGetPendingIntentsDecodesHDIntentPayload(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"intents":[{
+			"intentId":"intent-1",
+			"sessionId":"session-1",
+			"type":"SIGN",
+			"expiresAt":"2026-04-16T12:00:00Z",
+			"payload":{
+				"type":"SIGN",
+				"orgId":"org-1",
+				"walletId":"wallet-1",
+				"keyId":"key-1",
+				"profileId":"profile-1",
+				"profileVersion":3,
+				"profileTemplateId":"ethereum-default",
+				"parties":["party-1","co-signer"],
+				"threshold":2,
+				"algorithm":"ECDSA",
+				"curve":"secp256k1",
+				"chain":"ethereum",
+				"digest":"AQID",
+				"digestType":"transaction_hash",
+				"hashAlgorithm":"sha256",
+				"signingPayloadType":"ethereum_transaction",
+				"chainCode":"1111111111111111111111111111111111111111111111111111111111111111",
+				"chainCodeHash":"AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw",
+				"derivationScheme":"bip32_secp256k1",
+				"derivationContextHash":"context-hash",
+				"partyId":"co-signer",
+				"derivationContext":{
+					"profileId":"profile-1",
+					"profileTemplateId":"ethereum-default",
+					"chain":"ethereum",
+					"algorithm":"ecdsa",
+					"curve":"secp256k1",
+					"scheme":"bip32_secp256k1",
+					"accountPath":"m/44'/60'/0'",
+					"childPath":"/0/15",
+					"fullPath":"m/44'/60'/0'/0/15",
+					"expectedPublicKey":"04abcdef",
+					"publicKeyFormat":"uncompressed_hex",
+					"descriptorVersion":7,
+					"profileVersion":3,
+					"keyVersion":1
+				}
+			}
+		}]}`))
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	intents, err := client.GetPendingIntents(context.Background())
+	if err != nil {
+		t.Fatalf("GetPendingIntents() error = %v", err)
+	}
+	if len(intents) != 1 {
+		t.Fatalf("len(intents) = %d, want 1", len(intents))
+	}
+
+	payload := intents[0].Payload
+	if payload.Type != "SIGN" ||
+		payload.OrgID != "org-1" ||
+		payload.WalletID != "wallet-1" ||
+		payload.KeyID != "key-1" ||
+		payload.ProfileID != "profile-1" ||
+		payload.ProfileVersion != 3 ||
+		payload.ProfileTemplateID != "ethereum-default" ||
+		payload.DigestType != "transaction_hash" ||
+		payload.HashAlgorithm != "sha256" ||
+		payload.SigningPayloadType != "ethereum_transaction" ||
+		payload.ChainCode != "1111111111111111111111111111111111111111111111111111111111111111" ||
+		payload.ChainCodeHash != "AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw" ||
+		payload.DerivationScheme != "bip32_secp256k1" ||
+		payload.DerivationContextHash != "context-hash" ||
+		payload.PartyID != "co-signer" {
+		t.Fatalf("unexpected HD payload = %+v", payload)
+	}
+	if payload.DerivationContext == nil {
+		t.Fatal("DerivationContext is nil")
+	}
+	ctx := payload.DerivationContext
+	if ctx.ProfileID != "profile-1" ||
+		ctx.ProfileTemplateID != "ethereum-default" ||
+		ctx.Chain != "ethereum" ||
+		ctx.Algorithm != "ecdsa" ||
+		ctx.Curve != "secp256k1" ||
+		ctx.Scheme != "bip32_secp256k1" ||
+		ctx.AccountPath != "m/44'/60'/0'" ||
+		ctx.ChildPath != "/0/15" ||
+		ctx.FullPath != "m/44'/60'/0'/0/15" ||
+		ctx.ExpectedPublicKey != "04abcdef" ||
+		ctx.PublicKeyFormat != "uncompressed_hex" ||
+		ctx.DescriptorVersion != 7 ||
+		ctx.ProfileVersion != 3 ||
+		ctx.KeyVersion != 1 {
+		t.Fatalf("unexpected derivation context = %+v", ctx)
 	}
 }
 

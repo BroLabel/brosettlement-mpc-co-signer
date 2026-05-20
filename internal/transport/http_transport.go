@@ -81,11 +81,12 @@ func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) err
 	)
 
 	outbound := monolith.OutboundFrame{
-		MessageID:   frame.MessageID,
-		ProtocolSeq: frame.Seq,
-		Round:       frame.Round,
-		Broadcast:   frame.IsBroadcast(),
-		Payload:     frame.Payload,
+		MessageID:             frame.MessageID,
+		ProtocolSeq:           frame.Seq,
+		Round:                 frame.Round,
+		Broadcast:             frame.IsBroadcast(),
+		Payload:               frame.Payload,
+		DerivationContextHash: frame.DerivationContextHash,
 	}
 	if !frame.IsBroadcast() {
 		outbound.ToPartyID = signerPartyID
@@ -169,16 +170,17 @@ func (t *HTTPTransport) poll(ctx context.Context) {
 
 func (t *HTTPTransport) toFrame(msg monolith.InboundMessage) protocol.Frame {
 	return protocol.Frame{
-		SessionID: t.frameCtx.SessionID,
-		Stage:     t.frameCtx.Stage,
-		Protocol:  t.frameCtx.Protocol,
-		MessageID: msg.MessageID,
-		Seq:       msg.ProtocolSeq,
-		Round:     msg.Round,
-		Broadcast: msg.Broadcast,
-		FromParty: msg.FromPartyID,
-		ToParty:   msg.ToPartyID,
-		Payload:   msg.Payload,
+		SessionID:             t.frameCtx.SessionID,
+		Stage:                 t.frameCtx.Stage,
+		Protocol:              t.frameCtx.Protocol,
+		MessageID:             msg.MessageID,
+		Seq:                   msg.ProtocolSeq,
+		Round:                 msg.Round,
+		Broadcast:             msg.Broadcast,
+		FromParty:             msg.FromPartyID,
+		ToParty:               msg.ToPartyID,
+		Payload:               msg.Payload,
+		DerivationContextHash: msg.DerivationContextHash,
 	}
 }
 
