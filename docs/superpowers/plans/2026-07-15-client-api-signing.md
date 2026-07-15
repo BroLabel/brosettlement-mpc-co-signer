@@ -77,7 +77,7 @@ For the first case, reconstruct the canonical request with `/resource?a=1&b=2` a
 
 - [ ] **Step 5: Run the focused tests and verify RED**
 
-Run: `go test ./internal/monolith`
+Run: `GOWORK=off go test ./internal/monolith`
 
 Expected: FAIL with signature-validation failures because production code still signs only `req.URL.Path` and omits the API key ID canonical line.
 
@@ -105,7 +105,7 @@ Do not change request construction, retry flow, idempotency headers, payload ser
 
 - [ ] **Step 2: Run the focused tests and verify GREEN**
 
-Run: `go test ./internal/monolith`
+Run: `GOWORK=off go test ./internal/monolith`
 
 Expected: PASS.
 
@@ -134,6 +134,6 @@ Expected: no whitespace errors and no changes outside signing-contract tests, im
 
 - [ ] **Step 3: Run the complete test suite**
 
-Run: `go test ./...`
+Run: `GOWORK=off go test ./...`
 
 Expected: PASS for every package.
