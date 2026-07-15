@@ -212,7 +212,7 @@ func TestPostResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
 }
 
 func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
-	var signatureIsValid bool
+	var signatureIsValid, changedQuerySignatureIsValid bool
 	var pub ed25519.PublicKey
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		wantRequestTarget := "/api/v1/co-signer/sessions/session-1/messages?afterSeq=10"
@@ -220,6 +220,14 @@ func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 			t.Fatalf("request target = %q, want %q", got, wantRequestTarget)
 		}
 		signatureIsValid = verifyRequestSignature(t, r, pub, "")
+		changedQuerySignatureIsValid = verifyRequestSignatureFor(
+			t,
+			r,
+			pub,
+			"/api/v1/co-signer/sessions/session-1/messages?afterSeq=11",
+			"",
+			testAPIKeyID,
+		)
 		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"protocolSeq":7,"messageId":"msg-1","round":2,"fromPartyId":"co-signer","toPartyId":"mpc-signer","payload":"YWJj"}]}`))
 	}))
 	defer srv.Close()
@@ -235,30 +243,36 @@ func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 	if !signatureIsValid {
 		t.Fatal("query-bearing GET signature validation failed")
 	}
+	if changedQuerySignatureIsValid {
+		t.Fatal("signature remained valid after changing query")
+	}
 }
 
 func TestNewRequestSignsExactRequestTarget(t *testing.T) {
 	client, pub := newTestClient(t, "https://example.test")
-	tests := []string{
-		"/resource?b=2&a=1",
-		"/resource?tag=one&tag=two&empty=",
-		"/resource?value=a%2Fb&space=a%20b",
+	tests := []struct {
+		name          string
+		requestTarget string
+	}{
+		{name: "parameter order", requestTarget: "/resource?b=2&a=1"},
+		{name: "repeated parameters and empty values", requestTarget: "/resource?tag=one&tag=two&empty=&bare"},
+		{name: "percent encoding", requestTarget: "/resource?value=a%2Fb&space=a%20b&plus=a+b"},
 	}
 
-	for _, requestTarget := range tests {
-		t.Run(requestTarget, func(t *testing.T) {
-			req, err := client.newRequest(context.Background(), http.MethodGet, requestTarget, nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := client.newRequest(context.Background(), http.MethodGet, tt.requestTarget, nil)
 			if err != nil {
 				t.Fatalf("newRequest() error = %v", err)
 			}
-			if got := req.URL.RequestURI(); got != requestTarget {
-				t.Fatalf("RequestURI() = %q, want %q", got, requestTarget)
+			if got := req.URL.RequestURI(); got != tt.requestTarget {
+				t.Fatalf("RequestURI() = %q, want %q", got, tt.requestTarget)
 			}
 			if !verifyRequestSignature(t, req, pub, "") {
-				t.Fatalf("signature validation failed for request target %q", requestTarget)
+				t.Fatalf("signature validation failed for request target %q", tt.requestTarget)
 			}
 
-			if requestTarget == "/resource?b=2&a=1" && verifyRequestSignatureFor(
+			if tt.requestTarget == "/resource?b=2&a=1" && verifyRequestSignatureFor(
 				t,
 				req,
 				pub,
@@ -372,10 +386,28 @@ func TestGetPendingIntentsDecodesHDIntentPayload(t *testing.T) {
 }
 
 func TestClaimIntentReturnsOutcomeUnknownAfterAmbiguousRetries(t *testing.T) {
-	client, _ := newTestClient(t, "https://example.test")
+	client, pub := newTestClient(t, "https://example.test")
 	attempts := 0
+	seenNonces := make(map[string]bool)
+	seenSignatures := make(map[string]bool)
 	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		attempts++
+		if r.Header.Get("X-Api-Timestamp") == "" {
+			t.Fatal("retry request is missing X-Api-Timestamp")
+		}
+		nonce := r.Header.Get("X-Api-Nonce")
+		if nonce == "" || seenNonces[nonce] {
+			t.Fatalf("retry request has missing or reused nonce %q", nonce)
+		}
+		seenNonces[nonce] = true
+		signature := r.Header.Get("X-Api-Signature")
+		if signature == "" || seenSignatures[signature] {
+			t.Fatalf("retry request has missing or reused signature %q", signature)
+		}
+		seenSignatures[signature] = true
+		if !verifyRequestSignature(t, r, pub, "") {
+			t.Fatal("retry request signature validation failed")
+		}
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection reset")}
 	})
 
