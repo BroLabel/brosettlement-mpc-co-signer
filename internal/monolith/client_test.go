@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+const testAPIKeyID = "11111111-2222-3333-4444-555555555555"
+
 func TestClaimIntentReturnsAlreadyClaimed(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
@@ -33,14 +35,19 @@ func TestClaimIntentReturnsAlreadyClaimed(t *testing.T) {
 func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 	var gotContentLength int64
 	var gotIdempotency string
+	var bodyHashHeaderIsAbsent bool
+	var signatureIsValid bool
+	var pub ed25519.PublicKey
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotContentLength = r.ContentLength
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
+		bodyHashHeaderIsAbsent = len(r.Header.Values("X-Api-Body-Hash")) == 0
+		signatureIsValid = verifyRequestSignature(t, r, pub, "")
 		_, _ = w.Write([]byte(`{"expiresAt":"2026-04-16T12:00:00Z"}`))
 	}))
 	defer srv.Close()
 
-	client, _ := newTestClient(t, srv.URL)
+	client, pub := newTestClient(t, srv.URL)
 	if _, err := client.ClaimIntent(context.Background(), "intent-1"); err != nil {
 		t.Fatalf("ClaimIntent() error = %v", err)
 	}
@@ -49,6 +56,12 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 	}
 	if gotIdempotency != "intent-1" {
 		t.Fatalf("X-Idempotency-Key = %q, want %q", gotIdempotency, "intent-1")
+	}
+	if !bodyHashHeaderIsAbsent {
+		t.Fatal("bodyless claim sent unexpected X-Api-Body-Hash header")
+	}
+	if !signatureIsValid {
+		t.Fatal("bodyless claim signature validation failed")
 	}
 }
 
@@ -94,8 +107,9 @@ func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
 }
 
 func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
-	var gotSignature, gotBodyHash, gotIdempotency, gotNonce string
+	var gotSignature, gotBodyHash, gotIdempotency, gotNonce, gotAPIKeyID string
 	var signatureIsValid bool
+	var signatureIsInvalidWithDifferentAPIKeyID bool
 	var gotPayload map[string]any
 	_, pub := newTestClient(t, "https://example.test")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -108,19 +122,17 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 		gotBodyHash = r.Header.Get("X-Api-Body-Hash")
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
 		gotNonce = r.Header.Get("X-Api-Nonce")
+		gotAPIKeyID = r.Header.Get("X-Api-Key-Id")
 
-		ts := r.Header.Get("X-Api-Timestamp")
-		canonical := strings.Join([]string{
-			strings.ToUpper(r.Method),
-			r.URL.Path,
+		signatureIsValid = verifyRequestSignature(t, r, pub, gotBodyHash)
+		signatureIsInvalidWithDifferentAPIKeyID = !verifyRequestSignatureFor(
+			t,
+			r,
+			pub,
+			r.URL.RequestURI(),
 			gotBodyHash,
-			ts,
-			gotNonce,
-		}, "\n")
-		sigBytes, err := base64.StdEncoding.DecodeString(gotSignature)
-		if err == nil {
-			signatureIsValid = ed25519.Verify(pub, []byte(canonical), sigBytes)
-		}
+			"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		)
 
 		wantBodyHash := sha256.Sum256(body)
 		if gotBodyHash != hex.EncodeToString(wantBodyHash[:]) {
@@ -150,8 +162,14 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	if gotNonce == "" {
 		t.Fatal("missing required X-Api-Nonce header")
 	}
+	if gotAPIKeyID != testAPIKeyID {
+		t.Fatalf("X-Api-Key-Id = %q, want %q", gotAPIKeyID, testAPIKeyID)
+	}
 	if !signatureIsValid {
 		t.Fatal("signature validation failed")
+	}
+	if !signatureIsInvalidWithDifferentAPIKeyID {
+		t.Fatal("signature remained valid after changing the API key ID")
 	}
 	if gotPayload["messageId"] != "msg-1" {
 		t.Fatalf("messageId = %v, want %q", gotPayload["messageId"], "msg-1")
@@ -194,21 +212,77 @@ func TestPostResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
 }
 
 func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
+	var signatureIsValid, changedQuerySignatureIsValid bool
+	var pub ed25519.PublicKey
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("afterSeq") != "10" {
-			t.Fatalf("afterSeq query = %q, want 10", r.URL.Query().Get("afterSeq"))
+		wantRequestTarget := "/api/v1/co-signer/sessions/session-1/messages?afterSeq=10"
+		if got := r.URL.RequestURI(); got != wantRequestTarget {
+			t.Fatalf("request target = %q, want %q", got, wantRequestTarget)
 		}
+		signatureIsValid = verifyRequestSignature(t, r, pub, "")
+		changedQuerySignatureIsValid = verifyRequestSignatureFor(
+			t,
+			r,
+			pub,
+			"/api/v1/co-signer/sessions/session-1/messages?afterSeq=11",
+			"",
+			testAPIKeyID,
+		)
 		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"protocolSeq":7,"messageId":"msg-1","round":2,"fromPartyId":"co-signer","toPartyId":"mpc-signer","payload":"YWJj"}]}`))
 	}))
 	defer srv.Close()
 
-	client, _ := newTestClient(t, srv.URL)
+	client, pub := newTestClient(t, srv.URL)
 	msgs, err := client.GetMessages(context.Background(), "session-1", 10)
 	if err != nil {
 		t.Fatalf("GetMessages() error = %v", err)
 	}
 	if len(msgs) != 1 || msgs[0].DeliverySeq != 11 || msgs[0].ProtocolSeq != 7 {
 		t.Fatalf("unexpected messages = %+v", msgs)
+	}
+	if !signatureIsValid {
+		t.Fatal("query-bearing GET signature validation failed")
+	}
+	if changedQuerySignatureIsValid {
+		t.Fatal("signature remained valid after changing query")
+	}
+}
+
+func TestNewRequestSignsExactRequestTarget(t *testing.T) {
+	client, pub := newTestClient(t, "https://example.test")
+	tests := []struct {
+		name          string
+		requestTarget string
+	}{
+		{name: "parameter order", requestTarget: "/resource?b=2&a=1"},
+		{name: "repeated parameters and empty values", requestTarget: "/resource?tag=one&tag=two&empty=&bare"},
+		{name: "percent encoding", requestTarget: "/resource?value=a%2Fb&space=a%20b&plus=a+b"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := client.newRequest(context.Background(), http.MethodGet, tt.requestTarget, nil)
+			if err != nil {
+				t.Fatalf("newRequest() error = %v", err)
+			}
+			if got := req.URL.RequestURI(); got != tt.requestTarget {
+				t.Fatalf("RequestURI() = %q, want %q", got, tt.requestTarget)
+			}
+			if !verifyRequestSignature(t, req, pub, "") {
+				t.Fatalf("signature validation failed for request target %q", tt.requestTarget)
+			}
+
+			if tt.requestTarget == "/resource?b=2&a=1" && verifyRequestSignatureFor(
+				t,
+				req,
+				pub,
+				"/resource?a=1&b=2",
+				"",
+				testAPIKeyID,
+			) {
+				t.Fatal("signature remained valid after changing query parameter order")
+			}
+		})
 	}
 }
 
@@ -312,10 +386,28 @@ func TestGetPendingIntentsDecodesHDIntentPayload(t *testing.T) {
 }
 
 func TestClaimIntentReturnsOutcomeUnknownAfterAmbiguousRetries(t *testing.T) {
-	client, _ := newTestClient(t, "https://example.test")
+	client, pub := newTestClient(t, "https://example.test")
 	attempts := 0
+	seenNonces := make(map[string]bool)
+	seenSignatures := make(map[string]bool)
 	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		attempts++
+		if r.Header.Get("X-Api-Timestamp") == "" {
+			t.Fatal("retry request is missing X-Api-Timestamp")
+		}
+		nonce := r.Header.Get("X-Api-Nonce")
+		if nonce == "" || seenNonces[nonce] {
+			t.Fatalf("retry request has missing or reused nonce %q", nonce)
+		}
+		seenNonces[nonce] = true
+		signature := r.Header.Get("X-Api-Signature")
+		if signature == "" || seenSignatures[signature] {
+			t.Fatalf("retry request has missing or reused signature %q", signature)
+		}
+		seenSignatures[signature] = true
+		if !verifyRequestSignature(t, r, pub, "") {
+			t.Fatal("retry request signature validation failed")
+		}
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection reset")}
 	})
 
@@ -336,8 +428,44 @@ func newTestClient(t *testing.T, baseURL string) (*Client, ed25519.PublicKey) {
 		seed[i] = byte(i + 1)
 	}
 	privateKey := ed25519.NewKeyFromSeed(seed)
-	client := New(baseURL, "key-1", privateKey, time.Second)
+	client := New(baseURL, testAPIKeyID, privateKey, time.Second)
 	return client, privateKey.Public().(ed25519.PublicKey)
+}
+
+func verifyRequestSignature(t *testing.T, r *http.Request, pub ed25519.PublicKey, bodyHash string) bool {
+	t.Helper()
+	return verifyRequestSignatureFor(
+		t,
+		r,
+		pub,
+		r.URL.RequestURI(),
+		bodyHash,
+		r.Header.Get("X-Api-Key-Id"),
+	)
+}
+
+func verifyRequestSignatureFor(
+	t *testing.T,
+	r *http.Request,
+	pub ed25519.PublicKey,
+	requestTarget string,
+	bodyHash string,
+	apiKeyID string,
+) bool {
+	t.Helper()
+	signature, err := base64.StdEncoding.DecodeString(r.Header.Get("X-Api-Signature"))
+	if err != nil {
+		t.Fatalf("DecodeString() error = %v", err)
+	}
+	canonical := strings.Join([]string{
+		strings.ToUpper(r.Method),
+		requestTarget,
+		bodyHash,
+		r.Header.Get("X-Api-Timestamp"),
+		r.Header.Get("X-Api-Nonce"),
+		apiKeyID,
+	}, "\n")
+	return ed25519.Verify(pub, []byte(canonical), signature)
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

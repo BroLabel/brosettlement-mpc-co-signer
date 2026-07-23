@@ -194,10 +194,11 @@ func (c *Client) signRequest(req *http.Request, body []byte) (*http.Request, err
 
 	canonical := strings.Join([]string{
 		strings.ToUpper(req.Method),
-		req.URL.Path,
+		req.URL.RequestURI(),
 		bodyHash,
 		timestamp,
 		nonce,
+		c.keyID,
 	}, "\n")
 	signature := ed25519.Sign(c.privateKey, []byte(canonical))
 
