@@ -14,6 +14,7 @@ func TestLoadMonolithDefaults(t *testing.T) {
 	t.Setenv("CO_SIGNER_API_KEY_ID", "key-1")
 	t.Setenv("CO_SIGNER_API_PRIVATE_KEY", "cHJpdmF0ZS1rZXk=")
 	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", "share-secret")
+	t.Setenv("CO_SIGNER_POLL_MAX_INTERVAL", "")
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -27,6 +28,9 @@ func TestLoadMonolithDefaults(t *testing.T) {
 	}
 	if cfg.PollMinInterval != 2*time.Second {
 		t.Errorf("got PollMinInterval=%s, want 2s", cfg.PollMinInterval)
+	}
+	if cfg.PollMaxInterval != 10*time.Second {
+		t.Errorf("got PollMaxInterval=%s, want 10s", cfg.PollMaxInterval)
 	}
 	if cfg.FramePollInterval != 500*time.Millisecond {
 		t.Errorf("got FramePollInterval=%s, want 500ms", cfg.FramePollInterval)
