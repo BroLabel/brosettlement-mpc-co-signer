@@ -39,7 +39,7 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	pollMaxInterval, err := envDuration("CO_SIGNER_POLL_MAX_INTERVAL", 60*time.Second)
+	pollMaxInterval, err := envDuration("CO_SIGNER_POLL_MAX_INTERVAL", 10*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
