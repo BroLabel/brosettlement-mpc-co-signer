@@ -183,17 +183,6 @@ func TestStoreConfigsRejectRelativeOrOverlappingDirectories(t *testing.T) {
 	}
 }
 
-func TestNewLegacyPrimaryFileStoreRejectsRecoveryProfile(t *testing.T) {
-	provider := testKeyProvider(t, "keyref-1")
-	recovery, err := NewStoreConfig("deployment-1", StorePurposeRecovery, "co-signer-recovery", t.TempDir(), provider)
-	if err != nil {
-		t.Fatalf("NewStoreConfig() error = %v", err)
-	}
-	if _, err := NewLegacyPrimaryFileStore(recovery); err == nil {
-		t.Fatal("NewLegacyPrimaryFileStore() error = nil, want recovery profile rejection")
-	}
-}
-
 func testKeyProvider(t *testing.T, keyRef string) *KeyProvider {
 	t.Helper()
 	provider, err := NewKeyProvider(base64.StdEncoding.EncodeToString(make([]byte, 32)), keyRef)

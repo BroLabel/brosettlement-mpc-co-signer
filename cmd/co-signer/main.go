@@ -38,13 +38,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	shareStore, err := sharestore.NewLegacyPrimaryFileStore(cfg.PrimaryStore)
+	primaryStore, err := sharestore.NewStore(cfg.PrimaryStore)
 	if err != nil {
-		log.Error("failed to initialize share store", "err", err)
+		log.Error("failed to initialize primary artifact store", "err", err)
+		os.Exit(1)
+	}
+	recoveryStore, err := sharestore.NewStore(cfg.RecoveryStore)
+	if err != nil {
+		log.Error("failed to initialize recovery artifact store", "err", err)
+		os.Exit(1)
+	}
+	if err := probeArtifactStores(context.Background(), primaryStore, recoveryStore); err != nil {
+		log.Error("artifact store capability check failed", "err", err)
+		os.Exit(1)
+	}
+	primaryReader, err := sharestore.NewPrimaryReader(primaryStore)
+	if err != nil {
+		log.Error("failed to initialize primary share reader", "err", err)
+		os.Exit(1)
+	}
+	routingWriter, err := sharestore.NewRoutingWriter(sharestore.NewActivePair(), primaryStore, recoveryStore)
+	if err != nil {
+		log.Error("failed to initialize routing share writer", "err", err)
 		os.Exit(1)
 	}
 
-	tssSvc := coretss.NewBnbService(log, coretss.WithShareStore(shareStore))
+	tssSvc := coretss.NewBnbService(
+		log,
+		coretss.WithShareReader(primaryReader),
+		coretss.WithShareWriter(routingWriter),
+	)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

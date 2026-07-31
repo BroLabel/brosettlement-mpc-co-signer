@@ -9,10 +9,52 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T) {
+	wantErr := errors.New("renameat2 unavailable")
+	primary := &stubArtifactCapabilityProber{err: wantErr}
+	recovery := &stubArtifactCapabilityProber{}
+
+	err := probeArtifactStores(context.Background(), primary, recovery)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("probeArtifactStores() error = %v, want %v", err, wantErr)
+	}
+	if primary.calls != 1 {
+		t.Fatalf("primary probe calls = %d, want 1", primary.calls)
+	}
+	if recovery.calls != 0 {
+		t.Fatalf("recovery probe calls = %d, want 0 after primary failure", recovery.calls)
+	}
+}
+
+func TestProbeArtifactStoresFailsClosedOnRecoveryCapability(t *testing.T) {
+	wantErr := errors.New("directory fsync unavailable")
+	primary := &stubArtifactCapabilityProber{}
+	recovery := &stubArtifactCapabilityProber{err: wantErr}
+
+	err := probeArtifactStores(context.Background(), primary, recovery)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("probeArtifactStores() error = %v, want %v", err, wantErr)
+	}
+	if primary.calls != 1 || recovery.calls != 1 {
+		t.Fatalf("probe calls = primary:%d recovery:%d, want 1 each", primary.calls, recovery.calls)
+	}
+}
+
+type stubArtifactCapabilityProber struct {
+	calls int
+	err   error
+}
+
+func (p *stubArtifactCapabilityProber) ProbePublishCapability(context.Context) error {
+	p.calls++
+	return p.err
+}
 
 func TestDrainWorkersConsumesAllSemaphoreSlots(t *testing.T) {
 	sem := make(chan struct{}, 2)

@@ -14,6 +14,23 @@ import (
 	"strings"
 )
 
+type artifactCapabilityProber interface {
+	ProbePublishCapability(context.Context) error
+}
+
+func probeArtifactStores(ctx context.Context, primary, recovery artifactCapabilityProber) error {
+	if primary == nil || recovery == nil {
+		return errors.New("both artifact store capabilities are required")
+	}
+	if err := primary.ProbePublishCapability(ctx); err != nil {
+		return fmt.Errorf("primary artifact store capability: %w", err)
+	}
+	if err := recovery.ProbePublishCapability(ctx); err != nil {
+		return fmt.Errorf("recovery artifact store capability: %w", err)
+	}
+	return nil
+}
+
 func decodePrivateKey(raw string) (ed25519.PrivateKey, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {

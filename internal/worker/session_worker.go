@@ -151,8 +151,6 @@ func BuildResult(runErr error, sessionCtx context.Context, _ monolith.Intent) mo
 		return failedResult(ErrorCodeAlreadyExpired, runErr)
 	case errors.Is(runErr, coretss.ErrShareNotFound):
 		return failedResult(ErrorCodeShareNotFound, runErr)
-	case errors.Is(runErr, coretss.ErrShareDisabled):
-		return failedResult(ErrorCodeShareDisabled, runErr)
 	case errors.Is(runErr, coretss.ErrInvalidSharePayload):
 		return failedResult(ErrorCodeInvalidSharePayload, runErr)
 	case errors.Is(runErr, coretss.ErrMetadataMismatch):
