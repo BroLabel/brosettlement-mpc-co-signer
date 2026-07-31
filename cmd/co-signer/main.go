@@ -13,6 +13,7 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/config"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/preparams"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/worker"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
@@ -64,13 +65,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	tssSvc := coretss.NewBnbService(
+	tssSvc, preParamsController, err := newDKGCoreService(
 		log,
-		coretss.WithShareReader(primaryReader),
-		coretss.WithShareWriter(routingWriter),
+		primaryReader,
+		routingWriter,
+		cfg.PreParamsGenerationParallelism,
 	)
+	if err != nil {
+		log.Error("failed to initialize dkg preparams service", "err", err)
+		os.Exit(1)
+	}
 	dkgCoordinator, err := worker.NewDKGCoordinator(
-		tssSvc,
+		preParamsController,
 		activePair,
 		primaryStore,
 		recoveryStore,
@@ -92,6 +98,7 @@ func main() {
 		log.Error("failed to start pre-params pool", "err", err)
 		os.Exit(1)
 	}
+	go preParamsController.Run(ctx)
 	defer func() {
 		if err := tssSvc.StopPreParamsPool(); err != nil {
 			log.Error("failed to stop pre-params pool", "err", err)
@@ -137,4 +144,27 @@ func main() {
 	}
 
 	log.Info("shutdown complete")
+}
+
+func newDKGCoreService(
+	log *slog.Logger,
+	reader coretss.ShareReader,
+	writer coretss.ShareWriter,
+	generationParallelism int,
+) (*coretss.Service, *preparams.Controller, error) {
+	profile, err := preparams.ProductionProfile(generationParallelism)
+	if err != nil {
+		return nil, nil, err
+	}
+	service := coretss.NewBnbService(
+		log,
+		coretss.WithPreParamsConfig(profile),
+		coretss.WithShareReader(reader),
+		coretss.WithShareWriter(writer),
+	)
+	controller, err := preparams.NewController(service)
+	if err != nil {
+		return nil, nil, err
+	}
+	return service, controller, nil
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -29,6 +30,24 @@ func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T
 	}
 	if recovery.calls != 0 {
 		t.Fatalf("recovery probe calls = %d, want 0 after primary failure", recovery.calls)
+	}
+}
+
+func TestNewDKGCoreServiceBindsExplicitPreParamsProfile(t *testing.T) {
+	service, controller, err := newDKGCoreService(slog.Default(), nil, nil, 0)
+	if err == nil {
+		t.Fatal("newDKGCoreService(0) error = nil")
+	}
+	if service != nil || controller != nil {
+		t.Fatal("invalid profile returned a partially initialized service")
+	}
+
+	service, controller, err = newDKGCoreService(slog.Default(), nil, nil, 1)
+	if err != nil {
+		t.Fatalf("newDKGCoreService(1) error = %v", err)
+	}
+	if service == nil || controller == nil {
+		t.Fatal("valid profile did not return one service-bound controller")
 	}
 }
 

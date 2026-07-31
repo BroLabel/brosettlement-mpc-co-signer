@@ -12,6 +12,7 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/localrouter"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/preparams"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
@@ -32,7 +33,7 @@ func TestDKGCoordinatorRunsTwoPartiesConcurrentlyThroughOneRunner(t *testing.T) 
 	activePair := sharestore.NewActivePair()
 
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		activePair,
 		primary,
 		recovery,
@@ -82,8 +83,19 @@ func TestDKGCoordinatorRunsTwoPartiesConcurrentlyThroughOneRunner(t *testing.T) 
 	if !bytes.Equal(primaryRequest.OpaqueDescriptorFingerprint, recoveryRequest.OpaqueDescriptorFingerprint) {
 		t.Fatal("B and C descriptor fingerprints differ")
 	}
+	if primaryRequest.DerivationMaterial == nil || recoveryRequest.DerivationMaterial == nil ||
+		primaryRequest.DerivationMaterial.ChainCode != intent.Payload.ChainCode ||
+		recoveryRequest.DerivationMaterial.ChainCode != intent.Payload.ChainCode {
+		t.Fatal("B and C did not receive the same just-in-time chain code")
+	}
 	if runner.Context(coordinatorPrimaryParty) == runner.Context(coordinatorRecoveryParty) {
 		t.Fatal("B and C shared one cancellation context")
+	}
+	for _, partyID := range []string{coordinatorPrimaryParty, coordinatorRecoveryParty} {
+		deadline, ok := runner.Context(partyID).Deadline()
+		if !ok || !deadline.Equal(intent.ExpiresAt) {
+			t.Fatalf("%s runtime deadline = %s/%t, want %s", partyID, deadline, ok, intent.ExpiresAt)
+		}
 	}
 
 	if primary.Calls() != 1 || recovery.Calls() != 1 {
@@ -103,6 +115,41 @@ func TestDKGCoordinatorRunsTwoPartiesConcurrentlyThroughOneRunner(t *testing.T) 
 	_ = lease.Release()
 }
 
+func TestDKGCoordinatorAcquiresTwoPreParamsHandlesAndUsesOnlyHandleAwareRuns(t *testing.T) {
+	intent := coordinatorIntent(t)
+	service := newHandleAwareDKGService()
+	primary := &recordingArtifactInspector{evidence: coordinatorEvidence(t, intent, coordinatorPrimaryParty, sharestore.StorePurposePrimary)}
+	recovery := &recordingArtifactInspector{evidence: coordinatorEvidence(t, intent, coordinatorRecoveryParty, sharestore.StorePurposeRecovery)}
+
+	coordinator, err := NewDKGCoordinator(
+		service,
+		sharestore.NewActivePair(),
+		primary,
+		recovery,
+		DKGCoordinatorConfig{
+			PlatformPartyID: coordinatorPlatformParty,
+			PrimaryPartyID:  coordinatorPrimaryParty,
+			RecoveryPartyID: coordinatorRecoveryParty,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := coordinator.Run(context.Background(), intent, &blockingTransport{}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got := service.AcquireCount(); got != 2 {
+		t.Fatalf("AcquireDKGPreParams() calls = %d, want 2", got)
+	}
+	if got := service.HandleRunCount(); got != 2 {
+		t.Fatalf("RunDKGSessionWithPreParams() calls = %d, want 2", got)
+	}
+	if got := service.LegacyRunCount(); got != 0 {
+		t.Fatalf("RunDKGSession() calls = %d, want 0", got)
+	}
+}
+
 func TestDKGCoordinatorCancelsSiblingAndJoinsBothParties(t *testing.T) {
 	intent := coordinatorIntent(t)
 	runner := &failingDKGRunner{
@@ -111,7 +158,7 @@ func TestDKGCoordinatorCancelsSiblingAndJoinsBothParties(t *testing.T) {
 		exited:      make(chan string, 2),
 	}
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		&recordingArtifactInspector{},
 		&recordingArtifactInspector{},
@@ -164,7 +211,7 @@ func TestDKGCoordinatorCancelsAndJoinsBothPartiesOnNetworkIntegrityFailure(t *te
 		nil,
 	)
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		primary,
 		recovery,
@@ -221,7 +268,7 @@ func TestDKGCoordinatorPrefersNetworkReceiveErrorOverRacingPartySuccess(t *testi
 	primary := &recordingArtifactInspector{evidence: coordinatorEvidence(t, intent, coordinatorPrimaryParty, sharestore.StorePurposePrimary)}
 	recovery := &recordingArtifactInspector{evidence: coordinatorEvidence(t, intent, coordinatorRecoveryParty, sharestore.StorePurposeRecovery)}
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		primary,
 		recovery,
@@ -271,7 +318,7 @@ func TestDKGCoordinatorFinishCapturesReturnedNetworkErrorBeforeInspection(t *tes
 	primary := &recordingArtifactInspector{evidence: coordinatorEvidence(t, intent, coordinatorPrimaryParty, sharestore.StorePurposePrimary)}
 	recovery := &recordingArtifactInspector{evidence: coordinatorEvidence(t, intent, coordinatorRecoveryParty, sharestore.StorePurposeRecovery)}
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		primary,
 		recovery,
@@ -332,7 +379,7 @@ func TestDKGCoordinatorNormalFinishJoinsReceiverBeforeInspection(t *testing.T) {
 		before:   checkJoined,
 	}
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		primary,
 		recovery,
@@ -363,7 +410,7 @@ func TestDKGCoordinatorRejectsPostRuntimeEvidenceMismatch(t *testing.T) {
 	recoveryEvidence := coordinatorEvidence(t, intent, coordinatorRecoveryParty, sharestore.StorePurposeRecovery)
 	recoveryEvidence.AccountPublicKey = []byte{0x03, 0x01}
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		&recordingArtifactInspector{evidence: primaryEvidence},
 		&recordingArtifactInspector{evidence: recoveryEvidence},
@@ -392,7 +439,7 @@ func TestDKGCoordinatorKeepsIndependentDescriptorCopyForReadback(t *testing.T) {
 	primary := &recordingArtifactInspector{evidence: coordinatorEvidence(t, intentWithDescriptor(intent, originalDescriptor), coordinatorPrimaryParty, sharestore.StorePurposePrimary)}
 	recovery := &recordingArtifactInspector{evidence: coordinatorEvidence(t, intentWithDescriptor(intent, originalDescriptor), coordinatorRecoveryParty, sharestore.StorePurposeRecovery)}
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		primary,
 		recovery,
@@ -425,7 +472,7 @@ func TestDKGCoordinatorRejectsCallerSuppliedLibraryThresholdOne(t *testing.T) {
 	)
 	runner := newConcurrentDKGRunner()
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		&recordingArtifactInspector{},
 		&recordingArtifactInspector{},
@@ -462,7 +509,7 @@ func TestDKGCoordinatorRejectsClaimKeyThatConflictsWithExactDescriptor(t *testin
 	}
 	runner := newConcurrentDKGRunner()
 	coordinator, err := NewDKGCoordinator(
-		runner,
+		serviceForRunner(runner),
 		sharestore.NewActivePair(),
 		&recordingArtifactInspector{},
 		&recordingArtifactInspector{},
@@ -493,6 +540,103 @@ type concurrentDKGRunner struct {
 	once      sync.Once
 	onRun     func()
 	onRunOnce sync.Once
+}
+
+type testPreParamsHandle struct{}
+
+func (*testPreParamsHandle) Discard() error { return nil }
+
+type testSessionRunner interface {
+	RunDKGSession(context.Context, coretss.DKGSessionRequest) (coretss.DKGOutput, error)
+}
+
+type runnerBackedDKGService struct {
+	runner testSessionRunner
+}
+
+func serviceForRunner(runner testSessionRunner) *runnerBackedDKGService {
+	return &runnerBackedDKGService{runner: runner}
+}
+
+func (*runnerBackedDKGService) BeginJob(context.Context) (func(), error) {
+	return func() {}, nil
+}
+
+func (*runnerBackedDKGService) AcquireDKGPreParams(context.Context) (preparams.Handle, error) {
+	return &testPreParamsHandle{}, nil
+}
+
+func (s *runnerBackedDKGService) RunDKGSessionWithPreParams(
+	ctx context.Context,
+	request coretss.DKGSessionRequest,
+	_ preparams.Handle,
+) (coretss.DKGOutput, error) {
+	return s.runner.RunDKGSession(ctx, request)
+}
+
+type handleAwareDKGService struct {
+	*concurrentDKGRunner
+
+	mu               sync.Mutex
+	acquireCount     int
+	handleRunCount   int
+	legacyRunCount   int
+	acquisitionOrder []int
+}
+
+func newHandleAwareDKGService() *handleAwareDKGService {
+	return &handleAwareDKGService{concurrentDKGRunner: newConcurrentDKGRunner()}
+}
+
+func (*handleAwareDKGService) BeginJob(context.Context) (func(), error) {
+	return func() {}, nil
+}
+
+func (s *handleAwareDKGService) AcquireDKGPreParams(context.Context) (preparams.Handle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.acquireCount++
+	s.acquisitionOrder = append(s.acquisitionOrder, s.acquireCount)
+	return &testPreParamsHandle{}, nil
+}
+
+func (s *handleAwareDKGService) RunDKGSessionWithPreParams(
+	ctx context.Context,
+	request coretss.DKGSessionRequest,
+	_ preparams.Handle,
+) (coretss.DKGOutput, error) {
+	s.mu.Lock()
+	s.handleRunCount++
+	s.mu.Unlock()
+	return s.concurrentDKGRunner.RunDKGSession(ctx, request)
+}
+
+func (s *handleAwareDKGService) RunDKGSession(
+	ctx context.Context,
+	request coretss.DKGSessionRequest,
+) (coretss.DKGOutput, error) {
+	s.mu.Lock()
+	s.legacyRunCount++
+	s.mu.Unlock()
+	return s.concurrentDKGRunner.RunDKGSession(ctx, request)
+}
+
+func (s *handleAwareDKGService) AcquireCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.acquireCount
+}
+
+func (s *handleAwareDKGService) HandleRunCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.handleRunCount
+}
+
+func (s *handleAwareDKGService) LegacyRunCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.legacyRunCount
 }
 
 func newConcurrentDKGRunner() *concurrentDKGRunner {
@@ -804,12 +948,14 @@ func coordinatorIntent(t *testing.T) monolith.Intent {
 		IntentID:  "intent-1",
 		SessionID: "session-1",
 		Type:      "DKG",
+		ExpiresAt: time.Now().Add(time.Minute),
 		Payload: monolith.IntentPayload{
 			OrgID:                 "org-1",
 			KeyID:                 coordinatorKeyID,
 			DescriptorBytes:       descriptorBytes,
 			DescriptorFingerprint: fingerprint.String(),
 			ChainCode:             strings.Repeat("00", 32),
+			ChainCodeHash:         chainCodeHash,
 		},
 	}
 }

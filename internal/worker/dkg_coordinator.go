@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/localrouter"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/preparams"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
@@ -37,8 +39,10 @@ type DKGResult struct {
 	Recovery sharestore.ArtifactEvidence
 }
 
-type dkgSessionRunner interface {
-	RunDKGSession(context.Context, coretss.DKGSessionRequest) (coretss.DKGOutput, error)
+type dkgService interface {
+	BeginJob(context.Context) (func(), error)
+	AcquireDKGPreParams(context.Context) (preparams.Handle, error)
+	RunDKGSessionWithPreParams(context.Context, coretss.DKGSessionRequest, preparams.Handle) (coretss.DKGOutput, error)
 }
 
 type artifactInspector interface {
@@ -46,7 +50,7 @@ type artifactInspector interface {
 }
 
 type DKGCoordinator struct {
-	runner     dkgSessionRunner
+	service    dkgService
 	activePair *sharestore.ActivePair
 	primary    artifactInspector
 	recovery   artifactInspector
@@ -54,14 +58,14 @@ type DKGCoordinator struct {
 }
 
 func NewDKGCoordinator(
-	runner dkgSessionRunner,
+	service dkgService,
 	activePair *sharestore.ActivePair,
 	primary artifactInspector,
 	recovery artifactInspector,
 	config DKGCoordinatorConfig,
 ) (*DKGCoordinator, error) {
-	if runner == nil || activePair == nil || primary == nil || recovery == nil {
-		return nil, errors.New("dkg coordinator requires one runner, an active pair, and both inspectors")
+	if service == nil || activePair == nil || primary == nil || recovery == nil {
+		return nil, errors.New("dkg coordinator requires one service, an active pair, and both inspectors")
 	}
 	if config.PlatformPartyID == "" || config.PrimaryPartyID == "" || config.RecoveryPartyID == "" ||
 		config.PlatformPartyID == config.PrimaryPartyID ||
@@ -70,7 +74,7 @@ func NewDKGCoordinator(
 		return nil, errors.New("dkg coordinator requires three distinct parties")
 	}
 	return &DKGCoordinator{
-		runner:     runner,
+		service:    service,
 		activePair: activePair,
 		primary:    primary,
 		recovery:   recovery,
@@ -89,6 +93,8 @@ func (c *DKGCoordinator) Run(ctx context.Context, intent monolith.Intent, networ
 	if err != nil {
 		return DKGResult{}, err
 	}
+	runCtx, cancelRun := context.WithDeadline(ctx, runtimeContext.deadline)
+	defer cancelRun()
 
 	router, err := localrouter.New(network, localrouter.Config{
 		SessionID:       intent.SessionID,
@@ -101,7 +107,7 @@ func (c *DKGCoordinator) Run(ctx context.Context, intent monolith.Intent, networ
 	if err != nil {
 		return DKGResult{}, fmt.Errorf("%w: create local router", ErrInvalidDKGContext)
 	}
-	router.Start(ctx)
+	router.Start(runCtx)
 	defer router.Close()
 
 	primaryTransport, err := router.Transport(c.config.PrimaryPartyID)
@@ -113,6 +119,29 @@ func (c *DKGCoordinator) Run(ctx context.Context, intent monolith.Intent, networ
 		return DKGResult{}, err
 	}
 
+	finishJob, err := c.service.BeginJob(runCtx)
+	if err != nil {
+		return DKGResult{}, fmt.Errorf("pause preparams refill: %w", err)
+	}
+	jobFinished := false
+	defer func() {
+		if !jobFinished {
+			finishJob()
+		}
+	}()
+
+	primaryHandle, err := c.service.AcquireDKGPreParams(runCtx)
+	if err != nil {
+		return DKGResult{}, fmt.Errorf("acquire primary preparams: %w", err)
+	}
+	recoveryHandle, err := c.service.AcquireDKGPreParams(runCtx)
+	if err != nil {
+		return DKGResult{}, errors.Join(
+			fmt.Errorf("acquire recovery preparams: %w", err),
+			discardHandle("primary", primaryHandle),
+		)
+	}
+
 	lease, err := c.activePair.RegisterPair(sharestore.PairRegistration{
 		SessionID:       intent.SessionID,
 		KeyID:           runtimeContext.descriptor.KeyID,
@@ -121,14 +150,55 @@ func (c *DKGCoordinator) Run(ctx context.Context, intent monolith.Intent, networ
 		DescriptorBytes: runtimeContext.descriptorBytes,
 	})
 	if err != nil {
-		return DKGResult{}, err
+		return DKGResult{}, errors.Join(
+			err,
+			discardHandle("primary", primaryHandle),
+			discardHandle("recovery", recoveryHandle),
+		)
+	}
+	releaseBeforeStart := func(runErr error) error {
+		return errors.Join(
+			runErr,
+			lease.Release(),
+			discardHandle("primary", primaryHandle),
+			discardHandle("recovery", recoveryHandle),
+		)
+	}
+	if err := runCtx.Err(); err != nil {
+		return DKGResult{}, releaseBeforeStart(err)
+	}
+	if err := validatePartyStart(runtimeContext); err != nil {
+		return DKGResult{}, releaseBeforeStart(fmt.Errorf("validate primary runtime binding: %w", err))
+	}
+	if err := validatePartyStart(runtimeContext); err != nil {
+		return DKGResult{}, releaseBeforeStart(fmt.Errorf("validate recovery runtime binding: %w", err))
+	}
+	primaryRequest := buildPartyDKGRequest(runtimeContext, c.config.PrimaryPartyID, primaryTransport)
+	if err := primaryRequest.Validate(); err != nil {
+		return DKGResult{}, releaseBeforeStart(fmt.Errorf("validate primary runtime request: %w", err))
+	}
+	recoveryRequest := buildPartyDKGRequest(runtimeContext, c.config.RecoveryPartyID, recoveryTransport)
+	if err := recoveryRequest.Validate(); err != nil {
+		return DKGResult{}, releaseBeforeStart(fmt.Errorf("validate recovery runtime request: %w", err))
+	}
+	if err := runCtx.Err(); err != nil {
+		return DKGResult{}, releaseBeforeStart(err)
 	}
 
-	runErr := c.runParties(ctx, runtimeContext, router, primaryTransport, recoveryTransport)
+	runErr := c.runParties(
+		runCtx,
+		router,
+		primaryRequest,
+		recoveryRequest,
+		primaryHandle,
+		recoveryHandle,
+	)
 	if finishErr := router.Finish(); finishErr != nil {
 		runErr = finishErr
 	}
 	releaseErr := lease.Release()
+	finishJob()
+	jobFinished = true
 	if runErr != nil || releaseErr != nil {
 		return DKGResult{}, errors.Join(runErr, releaseErr)
 	}
@@ -138,11 +208,11 @@ func (c *DKGCoordinator) Run(ctx context.Context, intent monolith.Intent, networ
 		KeyID:           runtimeContext.descriptor.KeyID,
 		DescriptorBytes: append([]byte(nil), runtimeContext.descriptorBytes...),
 	}
-	primaryEvidence, err := c.primary.InspectExisting(ctx, expected)
+	primaryEvidence, err := c.primary.InspectExisting(runCtx, expected)
 	if err != nil {
 		return DKGResult{}, fmt.Errorf("inspect primary dkg artifact: %w", err)
 	}
-	recoveryEvidence, err := c.recovery.InspectExisting(ctx, expected)
+	recoveryEvidence, err := c.recovery.InspectExisting(runCtx, expected)
 	if err != nil {
 		return DKGResult{}, fmt.Errorf("inspect recovery dkg artifact: %w", err)
 	}
@@ -158,13 +228,16 @@ type validatedDKGContext struct {
 	fingerprint     mpc2of3.DescriptorFingerprint
 	descriptorBytes []byte
 	chainCode       string
+	deadline        time.Time
 }
 
 func (c *DKGCoordinator) validateRuntimeContext(intent monolith.Intent) (validatedDKGContext, error) {
 	if !strings.EqualFold(strings.TrimSpace(intent.Type), "DKG") ||
 		strings.TrimSpace(intent.SessionID) == "" ||
 		strings.TrimSpace(intent.Payload.OrgID) == "" ||
-		len(intent.Payload.DescriptorBytes) == 0 {
+		len(intent.Payload.DescriptorBytes) == 0 ||
+		intent.ExpiresAt.IsZero() ||
+		!intent.ExpiresAt.After(time.Now()) {
 		return validatedDKGContext{}, fmt.Errorf("%w: incomplete intent", ErrInvalidDKGContext)
 	}
 	descriptorBytes := append([]byte(nil), intent.Payload.DescriptorBytes...)
@@ -189,7 +262,8 @@ func (c *DKGCoordinator) validateRuntimeContext(intent monolith.Intent) (validat
 		return validatedDKGContext{}, fmt.Errorf("%w: chain code", ErrInvalidDKGContext)
 	}
 	defer clear(chainCode)
-	if mpc2of3.ChainCodeHashFor(chainCode).String() != descriptor.ChainCodeHash {
+	if intent.Payload.ChainCodeHash != descriptor.ChainCodeHash ||
+		mpc2of3.ChainCodeHashFor(chainCode).String() != descriptor.ChainCodeHash {
 		return validatedDKGContext{}, fmt.Errorf("%w: chain code hash", ErrInvalidDKGContext)
 	}
 	intent.Payload.DescriptorBytes = append([]byte(nil), descriptorBytes...)
@@ -200,15 +274,40 @@ func (c *DKGCoordinator) validateRuntimeContext(intent monolith.Intent) (validat
 		fingerprint:     fingerprint,
 		descriptorBytes: descriptorBytes,
 		chainCode:       intent.Payload.ChainCode,
+		deadline:        intent.ExpiresAt,
 	}, nil
+}
+
+func validatePartyStart(runtimeContext validatedDKGContext) error {
+	chainCode, err := hex.DecodeString(runtimeContext.chainCode)
+	if err != nil || len(chainCode) != 32 || hex.EncodeToString(chainCode) != runtimeContext.chainCode {
+		clear(chainCode)
+		return fmt.Errorf("%w: chain code", ErrInvalidDKGContext)
+	}
+	defer clear(chainCode)
+	if mpc2of3.ChainCodeHashFor(chainCode).String() != runtimeContext.descriptor.ChainCodeHash {
+		return fmt.Errorf("%w: chain code hash", ErrInvalidDKGContext)
+	}
+	return nil
+}
+
+func discardHandle(name string, handle preparams.Handle) error {
+	if handle == nil {
+		return nil
+	}
+	if err := handle.Discard(); err != nil {
+		return fmt.Errorf("discard %s preparams: %w", name, err)
+	}
+	return nil
 }
 
 func (c *DKGCoordinator) runParties(
 	ctx context.Context,
-	runtimeContext validatedDKGContext,
 	router *localrouter.Router,
-	primaryTransport coretss.Transport,
-	recoveryTransport coretss.Transport,
+	primaryRequest coretss.DKGSessionRequest,
+	recoveryRequest coretss.DKGSessionRequest,
+	primaryHandle preparams.Handle,
+	recoveryHandle preparams.Handle,
 ) error {
 	primaryCtx, cancelPrimary := context.WithCancel(ctx)
 	recoveryCtx, cancelRecovery := context.WithCancel(ctx)
@@ -225,27 +324,43 @@ func (c *DKGCoordinator) runParties(
 	run := func(
 		runCtx context.Context,
 		cancelSibling context.CancelFunc,
-		partyID string,
-		partyTransport coretss.Transport,
+		request coretss.DKGSessionRequest,
+		handle preparams.Handle,
 	) {
 		defer group.Done()
-		_, err := c.runner.RunDKGSession(
+		_, err := c.service.RunDKGSessionWithPreParams(
 			runCtx,
-			buildPartyDKGRequest(runtimeContext, partyID, partyTransport),
+			request,
+			handle,
 		)
 		if err != nil {
 			cancelSibling()
 		}
 		results <- partyRunResult{
 			key: PersistenceRunKey{
-				SessionID:    runtimeContext.intent.SessionID,
-				LocalPartyID: partyID,
+				SessionID:    request.Session.SessionID,
+				LocalPartyID: request.LocalPartyID,
 			},
 			err: err,
 		}
 	}
-	go run(primaryCtx, cancelRecovery, c.config.PrimaryPartyID, primaryTransport)
-	go run(recoveryCtx, cancelPrimary, c.config.RecoveryPartyID, recoveryTransport)
+	start := make(chan struct{})
+	var ready sync.WaitGroup
+	ready.Add(2)
+	startRun := func(
+		runCtx context.Context,
+		cancelSibling context.CancelFunc,
+		request coretss.DKGSessionRequest,
+		handle preparams.Handle,
+	) {
+		ready.Done()
+		<-start
+		run(runCtx, cancelSibling, request, handle)
+	}
+	go startRun(primaryCtx, cancelRecovery, primaryRequest, primaryHandle)
+	go startRun(recoveryCtx, cancelPrimary, recoveryRequest, recoveryHandle)
+	ready.Wait()
+	close(start)
 
 	var failures []error
 	var routerErr error
