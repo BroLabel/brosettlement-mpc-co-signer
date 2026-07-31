@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
@@ -55,42 +57,63 @@ func claimResultForIntent(intent monolith.Intent) monolith.ClaimResult {
 
 type stubRunner struct{}
 
-func (s *stubRunner) RunDKGSession(context.Context, coretss.DKGSessionRequest) (coretss.DKGOutput, error) {
-	return coretss.DKGOutput{
-		KeyID:            "key-1",
-		PublicKey:        "account-public-key",
-		ChainCode:        strings.Repeat("11", 32),
-		PublicKeyFormat:  coretss.PublicKeyFormatUncompressedHex,
-		DerivationScheme: coretss.DerivationSchemeBIP32Secp256k1,
-	}, nil
-}
-
 func (s *stubRunner) RunSignSession(context.Context, coretss.SignSessionRequest) error {
 	return nil
 }
 
-type capturingRunner struct {
-	dkgReq coretss.DKGSessionRequest
-	dkgOut coretss.DKGOutput
-	dkgErr error
-}
-
-func (s *capturingRunner) RunDKGSession(_ context.Context, req coretss.DKGSessionRequest) (coretss.DKGOutput, error) {
-	s.dkgReq = req
-	if s.dkgOut == (coretss.DKGOutput{}) {
-		s.dkgOut = coretss.DKGOutput{
-			KeyID:            "key-1",
-			PublicKey:        "account-public-key",
-			ChainCode:        strings.Repeat("11", 32),
-			PublicKeyFormat:  coretss.PublicKeyFormatUncompressedHex,
-			DerivationScheme: coretss.DerivationSchemeBIP32Secp256k1,
-		}
-	}
-	return s.dkgOut, s.dkgErr
-}
+type capturingRunner struct{}
 
 func (s *capturingRunner) RunSignSession(context.Context, coretss.SignSessionRequest) error {
 	return nil
+}
+
+type capturingDKGExecutor struct {
+	intent monolith.Intent
+	calls  int
+	result DKGResult
+	err    error
+}
+
+func (e *capturingDKGExecutor) Run(_ context.Context, intent monolith.Intent, _ coretss.Transport) (DKGResult, error) {
+	e.calls++
+	e.intent = intent
+	return e.result, e.err
+}
+
+func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
+	intent := validDKGIntent()
+	client := &stubClient{claimResult: claimResultForIntent(intent)}
+	signRunner := &capturingRunner{}
+	dkgExecutor := &capturingDKGExecutor{result: DKGResult{
+		Primary: sharestore.ArtifactEvidence{
+			PartyID:          coordinatorPrimaryParty,
+			KeyID:            intent.Payload.KeyID,
+			AccountPublicKey: []byte{0x02, 0x01},
+			ChainCodeHash:    mpc2of3.ChainCodeHashFor(tMustDecodeHex(intent.Payload.ChainCode)),
+		},
+	}}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+
+	RunSessionWithExecutors(
+		context.Background(),
+		intent,
+		client,
+		signRunner,
+		dkgExecutor,
+		"co-signer",
+		time.Millisecond,
+		sem,
+		nil,
+		slog.Default(),
+	)
+
+	if dkgExecutor.calls != 1 {
+		t.Fatalf("DKG coordinator calls = %d, want 1", dkgExecutor.calls)
+	}
+	if client.lastResult.Status != intentStatusCompleted || client.lastResult.DkgMaterial == nil {
+		t.Fatalf("unexpected DKG result = %+v", client.lastResult)
+	}
 }
 
 func TestRunSessionRejectsInvalidIntent(t *testing.T) {
@@ -109,11 +132,12 @@ func TestRunSessionRejectsInvalidIntent(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSession(
+	RunSessionWithExecutors(
 		context.Background(),
 		intent,
 		client,
 		runner,
+		&capturingDKGExecutor{},
 		"party-1",
 		time.Millisecond,
 		sem,
@@ -291,27 +315,6 @@ func TestValidateIntentSignAcceptsEmptyDKGFieldsAndNormalizedPayloadType(t *test
 	}
 }
 
-func TestBuildDKGRequestMapsHDPayload(t *testing.T) {
-	intent := validDKGIntent()
-	req := buildDKGRequest(intent, "co-signer", nil)
-
-	if req.Session.OrgID != "org-1" ||
-		req.Session.KeyID != "key-1" ||
-		!sameStrings(req.Session.Parties, []string{"party-1", "co-signer"}) ||
-		req.Session.Threshold != 2 ||
-		req.Session.Algorithm != "ECDSA" ||
-		req.Session.Curve != "secp256k1" {
-		t.Fatalf("unexpected DKG session = %+v", req.Session)
-	}
-	if req.DerivationMaterial == nil {
-		t.Fatal("DerivationMaterial is nil")
-	}
-	if req.DerivationMaterial.ChainCode != intent.Payload.ChainCode ||
-		req.DerivationMaterial.DerivationScheme != coretss.DerivationSchemeBIP32Secp256k1 {
-		t.Fatalf("unexpected derivation material = %+v", req.DerivationMaterial)
-	}
-}
-
 func TestBuildSignRequestMapsHDPayload(t *testing.T) {
 	intent := validSignIntent(t)
 	req := buildSignRequest(intent, "co-signer", nil)
@@ -346,10 +349,11 @@ func TestRunSessionPostsDkgMaterial(t *testing.T) {
 	intent := validDKGIntent()
 	client := &stubClient{claimResult: claimResultForIntent(intent)}
 	runner := &capturingRunner{}
+	dkgExecutor := &capturingDKGExecutor{result: successfulDKGResult(intent)}
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSession(context.Background(), intent, client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(context.Background(), intent, client, runner, dkgExecutor, "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	result := client.lastResult
 	if result.Status != intentStatusCompleted {
@@ -359,12 +363,12 @@ func TestRunSessionPostsDkgMaterial(t *testing.T) {
 		t.Fatal("DkgMaterial is nil")
 	}
 	material := result.DkgMaterial
-	if material.PartyID != "co-signer" ||
+	if material.PartyID != coordinatorPrimaryParty ||
 		material.KeyID != "key-1" ||
-		material.AccountPublicKey != "account-public-key" ||
+		material.AccountPublicKey != "0201" ||
 		material.ChainCodeHash != "AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw" ||
 		!material.ChainCodePresent ||
-		material.PublicKeyFormat != coretss.PublicKeyFormatUncompressedHex ||
+		material.PublicKeyFormat != "compressed_sec1" ||
 		material.DerivationScheme != coretss.DerivationSchemeBIP32Secp256k1 {
 		t.Fatalf("unexpected DKG material = %+v", material)
 	}
@@ -386,16 +390,17 @@ func TestRunSessionUsesClaimedPayloadForDkgExecution(t *testing.T) {
 		},
 	}
 	runner := &capturingRunner{}
+	dkgExecutor := &capturingDKGExecutor{result: successfulDKGResult(claimedIntent)}
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSession(context.Background(), pendingIntent, client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(context.Background(), pendingIntent, client, runner, dkgExecutor, "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	if client.lastResult.Status != intentStatusCompleted {
 		t.Fatalf("status = %q, want %q result=%+v", client.lastResult.Status, intentStatusCompleted, client.lastResult)
 	}
-	if runner.dkgReq.DerivationMaterial == nil || runner.dkgReq.DerivationMaterial.ChainCode != claimedIntent.Payload.ChainCode {
-		t.Fatalf("unexpected DKG derivation material = %+v", runner.dkgReq.DerivationMaterial)
+	if dkgExecutor.intent.Payload.ChainCode != claimedIntent.Payload.ChainCode {
+		t.Fatalf("unexpected DKG derivation material = %q", dkgExecutor.intent.Payload.ChainCode)
 	}
 }
 
@@ -410,29 +415,31 @@ func TestRunSessionRejectsIncompleteClaimResponse(t *testing.T) {
 		},
 	}
 	runner := &capturingRunner{}
+	dkgExecutor := &capturingDKGExecutor{}
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSession(context.Background(), pendingIntent, client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(context.Background(), pendingIntent, client, runner, dkgExecutor, "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	if client.lastResult.Status != intentStatusFailed ||
 		client.lastResult.ErrorCode != ErrorCodeInvalidIntent ||
 		client.lastResult.ErrorMessage == "" {
 		t.Fatalf("unexpected result = %+v", client.lastResult)
 	}
-	if runner.dkgReq.Session.SessionID != "" {
-		t.Fatalf("DKG should not run for incomplete claim response, got request = %+v", runner.dkgReq)
+	if dkgExecutor.calls != 0 {
+		t.Fatalf("DKG should not run for incomplete claim response, calls = %d", dkgExecutor.calls)
 	}
 }
 
 func TestRunSessionPostsFailedDkgWithoutMaterial(t *testing.T) {
 	intent := validDKGIntent()
 	client := &stubClient{claimResult: claimResultForIntent(intent)}
-	runner := &capturingRunner{dkgErr: coretss.ErrChainCodeMissing}
+	runner := &capturingRunner{}
+	dkgExecutor := &capturingDKGExecutor{err: coretss.ErrChainCodeMissing}
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSession(context.Background(), intent, client, runner, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(context.Background(), intent, client, runner, dkgExecutor, "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	result := client.lastResult
 	if result.Status != intentStatusFailed ||
@@ -442,6 +449,17 @@ func TestRunSessionPostsFailedDkgWithoutMaterial(t *testing.T) {
 	}
 	if result.DkgMaterial != nil {
 		t.Fatalf("DkgMaterial = %+v, want nil", result.DkgMaterial)
+	}
+}
+
+func successfulDKGResult(intent monolith.Intent) DKGResult {
+	return DKGResult{
+		Primary: sharestore.ArtifactEvidence{
+			PartyID:          coordinatorPrimaryParty,
+			KeyID:            intent.Payload.KeyID,
+			AccountPublicKey: []byte{0x02, 0x01},
+			ChainCodeHash:    mpc2of3.ChainCodeHashFor(tMustDecodeHex(intent.Payload.ChainCode)),
+		},
 	}
 }
 

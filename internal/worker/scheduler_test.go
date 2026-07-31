@@ -63,6 +63,7 @@ func TestSchedulerDispatchesOnlyAvailableSlots(t *testing.T) {
 	s := NewScheduler(
 		client,
 		&stubRunner{},
+		&capturingDKGExecutor{},
 		"party-1",
 		time.Millisecond,
 		SchedulerConfig{

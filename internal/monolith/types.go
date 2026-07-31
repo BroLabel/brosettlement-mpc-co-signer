@@ -1,6 +1,11 @@
 package monolith
 
-import "time"
+import (
+	"encoding/hex"
+	"time"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+)
 
 type Intent struct {
 	IntentID  string        `json:"intentId"`
@@ -30,6 +35,8 @@ type IntentPayload struct {
 	ChainCode             string             `json:"chainCode,omitempty"`
 	ChainCodeHash         string             `json:"chainCodeHash,omitempty"`
 	DerivationScheme      string             `json:"derivationScheme,omitempty"`
+	DescriptorBytes       []byte             `json:"descriptorBytesBase64,omitempty"`
+	DescriptorFingerprint string             `json:"descriptorFingerprint,omitempty"`
 	DerivationContextHash string             `json:"derivationContextHash,omitempty"`
 	PartyID               string             `json:"partyId,omitempty"`
 	DerivationContext     *DerivationContext `json:"derivationContext,omitempty"`
@@ -39,6 +46,7 @@ type OutboundFrame struct {
 	MessageID             string `json:"messageId"`
 	ProtocolSeq           uint64 `json:"protocolSeq"`
 	Round                 uint32 `json:"round"`
+	FromPartyID           string `json:"fromPartyId"`
 	ToPartyID             string `json:"toPartyId,omitempty"`
 	Broadcast             bool   `json:"broadcast,omitempty"`
 	Payload               []byte `json:"payload"`
@@ -58,23 +66,61 @@ type InboundMessage struct {
 }
 
 type ClaimResult struct {
-	IntentID  string        `json:"intentId,omitempty"`
-	SessionID string        `json:"sessionId,omitempty"`
-	Type      string        `json:"type,omitempty"`
-	Payload   IntentPayload `json:"payload,omitempty"`
-	Status    string        `json:"status,omitempty"`
-	ClaimedBy string        `json:"claimedBy,omitempty"`
-	ClaimedAt *time.Time    `json:"claimedAt,omitempty"`
-	ExpiresAt time.Time     `json:"expiresAt"`
+	IntentID              string        `json:"intentId,omitempty"`
+	SessionID             string        `json:"sessionId,omitempty"`
+	Type                  string        `json:"type,omitempty"`
+	Payload               IntentPayload `json:"payload,omitempty"`
+	Status                string        `json:"status,omitempty"`
+	ClaimedBy             string        `json:"claimedBy,omitempty"`
+	ClaimedAt             *time.Time    `json:"claimedAt,omitempty"`
+	ExpiresAt             time.Time     `json:"expiresAt"`
+	Deadline              time.Time     `json:"deadline"`
+	OrgID                 string        `json:"orgId,omitempty"`
+	KeyID                 string        `json:"keyId,omitempty"`
+	CoSignerDeploymentID  string        `json:"coSignerDeploymentId,omitempty"`
+	DescriptorBytes       []byte        `json:"descriptorBytesBase64,omitempty"`
+	DescriptorFingerprint string        `json:"descriptorFingerprint,omitempty"`
+	ChainCode             []byte        `json:"chainCodeBase64,omitempty"`
+}
+
+func (r ClaimResult) DeadlineTime() time.Time {
+	if !r.Deadline.IsZero() {
+		return r.Deadline
+	}
+	return r.ExpiresAt
 }
 
 func (r ClaimResult) Intent() Intent {
+	payload := r.Payload
+	intentType := r.Type
+	if len(r.DescriptorBytes) > 0 {
+		if intentType == "" {
+			intentType = "DKG"
+		}
+		payload.Type = intentType
+		payload.OrgID = r.OrgID
+		payload.KeyID = r.KeyID
+		payload.DescriptorBytes = append([]byte(nil), r.DescriptorBytes...)
+		payload.DescriptorFingerprint = r.DescriptorFingerprint
+		payload.ChainCode = hex.EncodeToString(r.ChainCode)
+		if descriptor, _, err := mpc2of3.ParseCanonicalDescriptor(r.DescriptorBytes); err == nil {
+			payload.Threshold = uint32(descriptor.Threshold)
+			payload.Algorithm = descriptor.Algorithm
+			payload.Curve = descriptor.Curve
+			payload.ChainCodeHash = descriptor.ChainCodeHash
+			payload.DerivationScheme = descriptor.DerivationScheme
+			payload.Parties = make([]string, 0, len(descriptor.Parties))
+			for _, party := range descriptor.Parties {
+				payload.Parties = append(payload.Parties, party.PartyID)
+			}
+		}
+	}
 	return Intent{
 		IntentID:  r.IntentID,
 		SessionID: r.SessionID,
-		Type:      r.Type,
-		ExpiresAt: r.ExpiresAt,
-		Payload:   r.Payload,
+		Type:      intentType,
+		ExpiresAt: r.DeadlineTime(),
+		Payload:   payload,
 	}
 }
 

@@ -12,9 +12,12 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 )
 
-var ErrTransportClosed = errors.New("transport closed")
+var (
+	ErrTransportClosed   = errors.New("transport closed")
+	ErrInvalidFrameRoute = errors.New("http transport accepts only platform-bound frames")
+)
 
-const signerPartyID = "mpc-signer"
+const platformPartyID = "mpc-signer"
 
 type FrameContext struct {
 	SessionID string
@@ -65,6 +68,11 @@ func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) err
 		return ErrTransportClosed
 	default:
 	}
+	if frame.FromParty == "" ||
+		frame.IsBroadcast() && frame.ToParty != "" ||
+		!frame.IsBroadcast() && frame.ToParty != platformPartyID {
+		return ErrInvalidFrameRoute
+	}
 
 	t.log.Debug("http transport sending outbound frame",
 		"session_id", t.frameCtx.SessionID,
@@ -75,7 +83,8 @@ func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) err
 		"round", frame.Round,
 		"round_hint", frame.RoundHint,
 		"message_type", frame.MessageType,
-		"to_party", signerPartyID,
+		"from_party", frame.FromParty,
+		"to_party", frame.ToParty,
 		"broadcast", frame.IsBroadcast(),
 		"payload_bytes", len(frame.Payload),
 	)
@@ -83,13 +92,14 @@ func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) err
 	outbound := monolith.OutboundFrame{
 		MessageID:             frame.MessageID,
 		ProtocolSeq:           frame.Seq,
-		Round:                 frame.Round,
+		Round:                 logicalRound(frame),
+		FromPartyID:           frame.FromParty,
 		Broadcast:             frame.IsBroadcast(),
 		Payload:               frame.Payload,
 		DerivationContextHash: frame.DerivationContextHash,
 	}
 	if !frame.IsBroadcast() {
-		outbound.ToPartyID = signerPartyID
+		outbound.ToPartyID = frame.ToParty
 	}
 
 	return t.client.PostMessage(ctx, t.frameCtx.SessionID, outbound)
@@ -171,12 +181,13 @@ func (t *HTTPTransport) poll(ctx context.Context) {
 func (t *HTTPTransport) toFrame(msg monolith.InboundMessage) protocol.Frame {
 	return protocol.Frame{
 		SessionID:             t.frameCtx.SessionID,
-		Stage:                 t.frameCtx.Stage,
-		Protocol:              t.frameCtx.Protocol,
 		MessageID:             msg.MessageID,
 		Seq:                   msg.ProtocolSeq,
 		Round:                 msg.Round,
+		RoundHint:             msg.Round,
 		Broadcast:             msg.Broadcast,
+		Stage:                 t.frameCtx.Stage,
+		Protocol:              t.frameCtx.Protocol,
 		FromParty:             msg.FromPartyID,
 		ToParty:               msg.ToPartyID,
 		Payload:               msg.Payload,
@@ -218,4 +229,11 @@ func maxUint64(a, b uint64) uint64 {
 		return b
 	}
 	return a
+}
+
+func logicalRound(frame protocol.Frame) uint32 {
+	if frame.Round != 0 {
+		return frame.Round
+	}
+	return frame.RoundHint
 }

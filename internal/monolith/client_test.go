@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -106,6 +107,35 @@ func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
 	}
 }
 
+func TestClaimIntentDecodesDualPartyContractFixture(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/claim-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	claim, err := client.ClaimIntent(context.Background(), "intent-123")
+	if err != nil {
+		t.Fatalf("ClaimIntent() error = %v", err)
+	}
+	intent := claim.Intent()
+	if intent.Type != "DKG" ||
+		intent.SessionID != "dkg-123" ||
+		intent.Payload.OrgID != "org-123" ||
+		intent.Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174002" ||
+		len(intent.Payload.DescriptorBytes) == 0 ||
+		intent.Payload.DescriptorFingerprint != "owXeRUkKctags_JkTP2Xq7uiGEFz6riO1ZhW5jsg9tQ" ||
+		intent.Payload.ChainCode != strings.Repeat("00", 32) ||
+		intent.Payload.Threshold != 2 ||
+		len(intent.Payload.Parties) != 3 {
+		t.Fatalf("unexpected dual-party claimed intent = %+v", intent)
+	}
+}
+
 func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	var gotSignature, gotBodyHash, gotIdempotency, gotNonce, gotAPIKeyID string
 	var signatureIsValid bool
@@ -150,6 +180,7 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 		MessageID:   "msg-1",
 		ProtocolSeq: 9,
 		Round:       2,
+		FromPartyID: "co-signer-primary",
 		ToPartyID:   "mpc-signer",
 		Payload:     []byte("abc"),
 	})
@@ -179,6 +210,9 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	}
 	if gotPayload["round"] != float64(2) {
 		t.Fatalf("round = %v, want %d", gotPayload["round"], 2)
+	}
+	if gotPayload["fromPartyId"] != "co-signer-primary" {
+		t.Fatalf("fromPartyId = %v, want %q", gotPayload["fromPartyId"], "co-signer-primary")
 	}
 	if gotPayload["toPartyId"] != "mpc-signer" {
 		t.Fatalf("toPartyId = %v, want %q", gotPayload["toPartyId"], "mpc-signer")

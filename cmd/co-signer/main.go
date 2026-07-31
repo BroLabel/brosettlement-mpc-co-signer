@@ -57,7 +57,8 @@ func main() {
 		log.Error("failed to initialize primary share reader", "err", err)
 		os.Exit(1)
 	}
-	routingWriter, err := sharestore.NewRoutingWriter(sharestore.NewActivePair(), primaryStore, recoveryStore)
+	activePair := sharestore.NewActivePair()
+	routingWriter, err := sharestore.NewRoutingWriter(activePair, primaryStore, recoveryStore)
 	if err != nil {
 		log.Error("failed to initialize routing share writer", "err", err)
 		os.Exit(1)
@@ -68,6 +69,21 @@ func main() {
 		coretss.WithShareReader(primaryReader),
 		coretss.WithShareWriter(routingWriter),
 	)
+	dkgCoordinator, err := worker.NewDKGCoordinator(
+		tssSvc,
+		activePair,
+		primaryStore,
+		recoveryStore,
+		worker.DKGCoordinatorConfig{
+			PlatformPartyID: "mpc-signer",
+			PrimaryPartyID:  cfg.PrimaryStore.PartyID(),
+			RecoveryPartyID: cfg.RecoveryStore.PartyID(),
+		},
+	)
+	if err != nil {
+		log.Error("failed to initialize dual-party dkg coordinator", "err", err)
+		os.Exit(1)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -86,6 +102,7 @@ func main() {
 	scheduler := worker.NewScheduler(
 		client,
 		tssSvc,
+		dkgCoordinator,
 		cfg.PrimaryStore.PartyID(),
 		cfg.FramePollInterval,
 		worker.SchedulerConfig{

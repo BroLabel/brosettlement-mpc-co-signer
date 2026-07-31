@@ -36,16 +36,35 @@ type sessionClient interface {
 	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)
 }
 
-type sessionRunner interface {
-	RunDKGSession(ctx context.Context, req coretss.DKGSessionRequest) (coretss.DKGOutput, error)
+type signSessionRunner interface {
 	RunSignSession(ctx context.Context, req coretss.SignSessionRequest) error
 }
 
-func RunSession(
+type dkgExecutor interface {
+	Run(ctx context.Context, intent monolith.Intent, network coretss.Transport) (DKGResult, error)
+}
+
+func RunSessionWithExecutors(
 	ctx context.Context,
 	intent monolith.Intent,
 	client sessionClient,
-	runner sessionRunner,
+	signRunner signSessionRunner,
+	dkgRunner dkgExecutor,
+	localPartyID string,
+	framePollInterval time.Duration,
+	sem chan struct{},
+	repollCh chan struct{},
+	log *slog.Logger,
+) {
+	runSession(ctx, intent, client, signRunner, dkgRunner, localPartyID, framePollInterval, sem, repollCh, log)
+}
+
+func runSession(
+	ctx context.Context,
+	intent monolith.Intent,
+	client sessionClient,
+	signRunner signSessionRunner,
+	dkgRunner dkgExecutor,
 	localPartyID string,
 	framePollInterval time.Duration,
 	sem chan struct{},
@@ -82,7 +101,8 @@ func RunSession(
 		return
 	}
 
-	if !claim.ExpiresAt.After(time.Now()) {
+	deadline := claim.DeadlineTime()
+	if !deadline.After(time.Now()) {
 		postResult(ctx, client, intent.IntentID, monolith.IntentResult{
 			Status:    intentStatusFailed,
 			ErrorCode: ErrorCodeAlreadyExpired,
@@ -90,7 +110,7 @@ func RunSession(
 		return
 	}
 
-	sessionCtx, cancel := context.WithDeadline(ctx, claim.ExpiresAt)
+	sessionCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
 	frameCtx := transport.FrameContext{
@@ -104,19 +124,23 @@ func RunSession(
 	tr.Start(sessionCtx)
 
 	var runErr error
-	var dkgOutput coretss.DKGOutput
+	var dkgResult DKGResult
 	switch strings.ToUpper(strings.TrimSpace(intent.Type)) {
 	case "DKG":
-		dkgOutput, runErr = runner.RunDKGSession(sessionCtx, buildDKGRequest(intent, localPartyID, tr))
+		if dkgRunner == nil {
+			runErr = errors.New("dkg coordinator is required")
+			break
+		}
+		dkgResult, runErr = dkgRunner.Run(sessionCtx, intent, tr)
 	case "SIGN":
-		runErr = runner.RunSignSession(sessionCtx, buildSignRequest(intent, localPartyID, tr))
+		runErr = signRunner.RunSignSession(sessionCtx, buildSignRequest(intent, localPartyID, tr))
 	default:
 		runErr = fmt.Errorf("%w: unknown intent type: %s", errInvalidIntent, intent.Type)
 	}
 
 	result := BuildResult(runErr, sessionCtx, intent)
 	if runErr == nil && strings.EqualFold(strings.TrimSpace(intent.Type), "DKG") {
-		result = buildDKGSuccessResult(intent, localPartyID, dkgOutput)
+		result = buildDualDKGSuccessResult(intent, dkgResult)
 	}
 	postResult(ctx, client, intent.IntentID, result, log)
 }
@@ -145,7 +169,8 @@ func BuildResult(runErr error, sessionCtx context.Context, _ monolith.Intent) mo
 		errors.Is(runErr, coretss.ErrDerivedSigningUnsupported),
 		errors.Is(runErr, coretss.ErrDerivationPathInvalid),
 		errors.Is(runErr, coretss.ErrDerivationContextMismatch),
-		errors.Is(runErr, coretss.ErrUnsupportedAlgorithmCurve):
+		errors.Is(runErr, coretss.ErrUnsupportedAlgorithmCurve),
+		errors.Is(runErr, ErrInvalidDKGContext):
 		return failedResult(ErrorCodeInvalidIntent, runErr)
 	case errors.Is(runErr, errAlreadyExpired):
 		return failedResult(ErrorCodeAlreadyExpired, runErr)
@@ -406,26 +431,6 @@ func derivationContextPtr(ctx monolith.DerivationContext) *coretss.DerivationCon
 	return &coreCtx
 }
 
-func buildDKGRequest(intent monolith.Intent, localPartyID string, tr coretss.Transport) coretss.DKGSessionRequest {
-	return coretss.DKGSessionRequest{
-		Session: coretss.SessionDescriptor{
-			SessionID: intent.SessionID,
-			OrgID:     intent.Payload.OrgID,
-			KeyID:     intent.Payload.KeyID,
-			Parties:   intent.Payload.Parties,
-			Threshold: intent.Payload.Threshold,
-			Algorithm: intent.Payload.Algorithm,
-			Curve:     intent.Payload.Curve,
-		},
-		LocalPartyID: localPartyID,
-		DerivationMaterial: &coretss.DKGDerivationMaterial{
-			ChainCode:        intent.Payload.ChainCode,
-			DerivationScheme: intent.Payload.DerivationScheme,
-		},
-		Transport: tr,
-	}
-}
-
 func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Transport) coretss.SignSessionRequest {
 	return coretss.SignSessionRequest{
 		Session: coretss.SignSessionDescriptor{
@@ -445,17 +450,17 @@ func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Tr
 	}
 }
 
-func buildDKGSuccessResult(intent monolith.Intent, localPartyID string, output coretss.DKGOutput) monolith.IntentResult {
+func buildDualDKGSuccessResult(_ monolith.Intent, output DKGResult) monolith.IntentResult {
 	return monolith.IntentResult{
 		Status: intentStatusCompleted,
 		DkgMaterial: &monolith.DkgParticipantResult{
-			PartyID:          localPartyID,
-			KeyID:            output.KeyID,
-			AccountPublicKey: output.PublicKey,
-			ChainCodeHash:    intent.Payload.ChainCodeHash,
+			PartyID:          output.Primary.PartyID,
+			KeyID:            output.Primary.KeyID,
+			AccountPublicKey: hex.EncodeToString(output.Primary.AccountPublicKey),
+			ChainCodeHash:    output.Primary.ChainCodeHash.String(),
 			ChainCodePresent: true,
-			PublicKeyFormat:  output.PublicKeyFormat,
-			DerivationScheme: output.DerivationScheme,
+			PublicKeyFormat:  "compressed_sec1",
+			DerivationScheme: coretss.DerivationSchemeBIP32Secp256k1,
 		},
 	}
 }

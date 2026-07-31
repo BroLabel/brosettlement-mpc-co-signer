@@ -24,7 +24,8 @@ type SchedulerConfig struct {
 
 type Scheduler struct {
 	client            pendingClient
-	runner            sessionRunner
+	signRunner        signSessionRunner
+	dkgRunner         dkgExecutor
 	localPartyID      string
 	framePollInterval time.Duration
 	sem               chan struct{}
@@ -35,7 +36,8 @@ type Scheduler struct {
 
 func NewScheduler(
 	client pendingClient,
-	runner sessionRunner,
+	signRunner signSessionRunner,
+	dkgRunner dkgExecutor,
 	localPartyID string,
 	framePollInterval time.Duration,
 	cfg SchedulerConfig,
@@ -50,7 +52,8 @@ func NewScheduler(
 	}
 	return &Scheduler{
 		client:            client,
-		runner:            runner,
+		signRunner:        signRunner,
+		dkgRunner:         dkgRunner,
 		localPartyID:      localPartyID,
 		framePollInterval: framePollInterval,
 		sem:               make(chan struct{}, maxConcurrent),
@@ -89,11 +92,12 @@ func (s *Scheduler) Run(ctx context.Context) {
 			select {
 			case s.sem <- struct{}{}:
 				intent := intent
-				go RunSession(
+				go RunSessionWithExecutors(
 					ctx,
 					intent,
 					s.client,
-					s.runner,
+					s.signRunner,
+					s.dkgRunner,
 					s.localPartyID,
 					s.framePollInterval,
 					s.sem,
