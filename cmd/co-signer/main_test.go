@@ -187,6 +187,35 @@ func TestDrainWorkersConsumesAllSemaphoreSlots(t *testing.T) {
 	}
 }
 
+func TestApplicationResourcesCloseJoinsStartedBackgroundLoop(t *testing.T) {
+	resources := &applicationResources{}
+	loopStarted := make(chan struct{})
+	loopCanceled := make(chan struct{})
+	releaseLoop := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	resources.startBackground(func() {
+		close(loopStarted)
+		<-ctx.Done()
+		close(loopCanceled)
+		<-releaseLoop
+	})
+	<-loopStarted
+	cancel()
+
+	closeReturned := make(chan error, 1)
+	go func() { closeReturned <- resources.Close() }()
+	<-loopCanceled
+	select {
+	case err := <-closeReturned:
+		t.Fatalf("Close() returned before background loop exit: %v", err)
+	default:
+	}
+	close(releaseLoop)
+	if err := <-closeReturned; err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
 func TestDecodePrivateKeyHex(t *testing.T) {
 	key, err := decodePrivateKey(hex.EncodeToString(make([]byte, 64)))
 	if err != nil {

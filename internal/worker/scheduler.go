@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -40,6 +41,7 @@ type Scheduler struct {
 	log               *slog.Logger
 	dkgAdmissionOpen  atomic.Bool
 	launch            sessionLauncher
+	forwardWakeups    func(context.Context)
 }
 
 func NewScheduler(
@@ -70,13 +72,21 @@ func NewScheduler(
 		cfg:               cfg,
 		log:               log,
 	}
-	scheduler.dkgAdmissionOpen.Store(cfg.TerminalPublisher != nil)
 	scheduler.launch = scheduler.launchSession
+	scheduler.forwardWakeups = scheduler.forwardProvisioningWakeups
 	return scheduler
 }
 
 func (s *Scheduler) Run(ctx context.Context) {
-	go s.forwardProvisioningWakeups(ctx)
+	var children sync.WaitGroup
+	if s.forwardWakeups != nil {
+		children.Add(1)
+		go func() {
+			defer children.Done()
+			s.forwardWakeups(ctx)
+		}()
+	}
+	defer children.Wait()
 	backoff := s.cfg.MinInterval
 
 	for {

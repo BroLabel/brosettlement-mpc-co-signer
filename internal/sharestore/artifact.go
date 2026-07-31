@@ -102,14 +102,39 @@ func NewStore(config StoreConfig) (*Store, error) {
 	return newStore(config)
 }
 
+// OpenStore retains the immutable purpose/key binding when only the
+// provisioning filesystem capability is unavailable. Callers must keep DKG
+// admission closed for the process lifetime when the returned error is non-nil.
+func OpenStore(config StoreConfig) (*Store, error) {
+	store, err := configuredStore(config)
+	if err != nil {
+		return nil, err
+	}
+	if !publishPlatformSupported() {
+		return store, ErrUnsupportedPublishPlatform
+	}
+	if err := ensurePrivateStoreDirectory(config.Directory()); err != nil {
+		return store, err
+	}
+	return store, nil
+}
+
 func newStore(config StoreConfig) (*Store, error) {
+	store, err := configuredStore(config)
+	if err != nil {
+		return nil, err
+	}
+	if err := ensurePrivateStoreDirectory(config.Directory()); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func configuredStore(config StoreConfig) (*Store, error) {
 	if config.keyProvider == nil {
 		return nil, errors.New("artifact key provider is required")
 	}
 	if err := validatePurposeParty(config.Purpose(), config.PartyID()); err != nil {
-		return nil, err
-	}
-	if err := ensurePrivateStoreDirectory(config.Directory()); err != nil {
 		return nil, err
 	}
 	return &Store{

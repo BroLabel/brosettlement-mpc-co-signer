@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 )
@@ -104,6 +105,24 @@ func serveHealth(log *slog.Logger, srv *http.Server) {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("health server stopped", "err", err)
 	}
+}
+
+func serveHealthListener(log *slog.Logger, srv *http.Server, listener net.Listener) {
+	log.Info("health server listening", "addr", listener.Addr().String())
+	if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Error("health server stopped", "err", err)
+	}
+}
+
+type staticInspectionPreflight struct {
+	err error
+}
+
+func (p staticInspectionPreflight) Check(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return p.err
 }
 
 func drainWorkers(ctx context.Context, sem chan struct{}) error {

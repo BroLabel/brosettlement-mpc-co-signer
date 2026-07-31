@@ -187,6 +187,7 @@ func TestSchedulerClaimConflictContinuesSIGNFromSameBatchAtCapacityOne(t *testin
 		slog.Default(),
 		1,
 	)
+	s.SetDKGAdmissionOpen(true)
 
 	s.dispatchBatch(context.Background(), []monolith.Intent{
 		{IntentID: "dkg-1", Type: "DKG"},
@@ -251,6 +252,36 @@ func TestSchedulerSkipsDKGWhenAdmissionOrProvisioningIsClosed(t *testing.T) {
 				t.Fatalf("launched = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestSchedulerStartsWithDKGAdmissionClosedUntilLifecycleReconciliation(t *testing.T) {
+	s := NewScheduler(
+		&stubPendingClient{},
+		&stubRunner{},
+		&capturingDKGExecutor{},
+		"party-1",
+		time.Millisecond,
+		SchedulerConfig{
+			ProvisioningHint:  func() bool { return true },
+			TerminalPublisher: acceptingTerminalPublisher(nil),
+		},
+		slog.Default(),
+		2,
+	)
+	if s.DKGAdmissionOpen() {
+		t.Fatal("new scheduler opened DKG before lifecycle reconciliation")
+	}
+
+	var launched []launchedSession
+	s.launch = captureLaunches(&launched)
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "dkg-1", Type: "DKG"},
+		{IntentID: "sign-1", Type: "SIGN"},
+	})
+	defer releaseLaunches(launched)
+	if got, want := launchedIntentIDs(launched), []string{"sign-1"}; !equalStrings(got, want) {
+		t.Fatalf("launched = %v, want %v", got, want)
 	}
 }
 
@@ -361,6 +392,37 @@ func TestSchedulerForwardsProvisioningWakeupsIntoExistingPollLoop(t *testing.T) 
 	}
 }
 
+func TestSchedulerRunJoinsProvisioningForwarderAfterCancellation(t *testing.T) {
+	s := newDeterministicScheduler(t, 1, func() bool { return true })
+	forwarderStarted := make(chan struct{})
+	forwarderCanceled := make(chan struct{})
+	releaseForwarder := make(chan struct{})
+	s.forwardWakeups = func(ctx context.Context) {
+		close(forwarderStarted)
+		<-ctx.Done()
+		close(forwarderCanceled)
+		<-releaseForwarder
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runReturned := make(chan struct{})
+	go func() {
+		defer close(runReturned)
+		s.Run(ctx)
+	}()
+	<-forwarderStarted
+	cancel()
+	<-forwarderCanceled
+
+	select {
+	case <-runReturned:
+		t.Fatal("Scheduler.Run returned before its provisioning forwarder exited")
+	default:
+	}
+	close(releaseForwarder)
+	<-runReturned
+}
+
 type launchedSession struct {
 	intent  monolith.Intent
 	permits *jobPermitLease
@@ -368,7 +430,7 @@ type launchedSession struct {
 
 func newDeterministicScheduler(t *testing.T, maxConcurrent int, hint func() bool) *Scheduler {
 	t.Helper()
-	return NewScheduler(
+	scheduler := NewScheduler(
 		&stubPendingClient{},
 		&stubRunner{},
 		&capturingDKGExecutor{},
@@ -384,6 +446,8 @@ func newDeterministicScheduler(t *testing.T, maxConcurrent int, hint func() bool
 		slog.Default(),
 		maxConcurrent,
 	)
+	scheduler.SetDKGAdmissionOpen(true)
+	return scheduler
 }
 
 func captureLaunches(target *[]launchedSession) sessionLauncher {

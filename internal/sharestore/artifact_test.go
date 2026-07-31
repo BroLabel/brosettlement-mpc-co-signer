@@ -420,3 +420,53 @@ func TestArtifactFingerprintUsesExactFinalBytes(t *testing.T) {
 		t.Fatalf("artifact fingerprint = %q", got)
 	}
 }
+
+func TestStoreExistsAddressesOnlyTheCanonicalFinalPath(t *testing.T) {
+	store := testStore(t, StorePurposePrimary)
+	exists, err := store.Exists(context.Background(), testKeyID)
+	if err != nil {
+		t.Fatalf("Exists(absent) error = %v", err)
+	}
+	if exists {
+		t.Fatal("Exists(absent) = true")
+	}
+	finalPath, err := store.finalPath(testKeyID)
+	if err != nil {
+		t.Fatalf("finalPath() error = %v", err)
+	}
+	if err := os.WriteFile(finalPath, []byte("addressed"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if exists, err = store.Exists(context.Background(), testKeyID); err != nil || !exists {
+		t.Fatalf("Exists(present) = %v, %v, want true, nil", exists, err)
+	}
+	if _, err := store.Exists(context.Background(), "../other"); err == nil {
+		t.Fatal("Exists(noncanonical key) error = nil")
+	}
+}
+
+func TestOpenStoreRetainsPurposeBoundCapabilityWhenProvisioningProbeFails(t *testing.T) {
+	provider := testKeyProvider(t, testKeyRef)
+	blockedPath := filepath.Join(t.TempDir(), "recovery")
+	if err := os.WriteFile(blockedPath, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	config, err := NewStoreConfig(
+		"deployment-1",
+		StorePurposeRecovery,
+		recoveryPartyID,
+		blockedPath,
+		provider,
+	)
+	if err != nil {
+		t.Fatalf("NewStoreConfig() error = %v", err)
+	}
+
+	store, capabilityErr := OpenStore(config)
+	if capabilityErr == nil {
+		t.Fatal("OpenStore() capability error = nil")
+	}
+	if store == nil || store.config.Purpose() != StorePurposeRecovery {
+		t.Fatalf("OpenStore() store = %#v, want retained recovery capability", store)
+	}
+}
