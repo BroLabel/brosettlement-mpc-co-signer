@@ -111,6 +111,29 @@ func TestVerifyMPC2of3PropagatesMandatoryChildFailure(t *testing.T) {
 	}
 }
 
+func TestVerifyMPC2of3RejectsPreviousMPCorePin(t *testing.T) {
+	bin := t.TempDir()
+	writeCommand := func(name, body string) {
+		t.Helper()
+		path := filepath.Join(bin, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCommand("uname", "echo Linux")
+	writeCommand("grep", "exit 1")
+	writeCommand("go", "echo v0.3.0")
+	command := exec.Command("/bin/sh", filepath.Join("..", "..", "scripts", "verify-mpc-2of3.sh"))
+	command.Env = append(os.Environ(), "PATH="+bin, "GOWORK=on")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("verify script accepted the previous mpc-core pin")
+	}
+	if !strings.Contains(string(output), "mpc-core must resolve exactly v0.3.1") {
+		t.Fatalf("output = %s, want rejection of v0.3.0", output)
+	}
+}
+
 func TestRecoveryDocumentationStatesTopologyAndSupportBoundary(t *testing.T) {
 	paths := []string{
 		filepath.Join("..", "..", "README.md"),
