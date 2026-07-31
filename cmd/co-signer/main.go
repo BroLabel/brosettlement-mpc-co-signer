@@ -116,6 +116,15 @@ func main() {
 			MinInterval:   cfg.PollMinInterval,
 			MaxInterval:   cfg.PollMaxInterval,
 			BackoffFactor: cfg.PollBackoffFactor,
+			ProvisioningHint: func() bool {
+				return dkgProvisioningAdmissionHint(
+					preParamsController,
+					[]string{cfg.PrimaryStore.Directory(), cfg.RecoveryStore.Directory()},
+					cfg.FreeSpaceThresholdBytes,
+					filesystemFreeBytes,
+				)
+			},
+			ProvisioningWakeup: preParamsController.Wakeups(),
 		},
 		log,
 		cfg.MaxConcurrent,

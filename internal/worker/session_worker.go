@@ -56,10 +56,21 @@ func RunSessionWithExecutors(
 	repollCh chan struct{},
 	log *slog.Logger,
 ) {
-	runSession(ctx, intent, client, signRunner, dkgRunner, localPartyID, framePollInterval, sem, repollCh, log)
+	runSessionWithPermits(
+		ctx,
+		intent,
+		client,
+		signRunner,
+		dkgRunner,
+		localPartyID,
+		framePollInterval,
+		newLegacyGeneralLease(sem, repollCh),
+		log,
+		nil,
+	)
 }
 
-func runSession(
+func runSessionWithPermits(
 	ctx context.Context,
 	intent monolith.Intent,
 	client sessionClient,
@@ -67,17 +78,21 @@ func runSession(
 	dkgRunner dkgExecutor,
 	localPartyID string,
 	framePollInterval time.Duration,
-	sem chan struct{},
-	repollCh chan struct{},
+	permits *jobPermitLease,
 	log *slog.Logger,
+	claimDispatched func(),
 ) {
 	if log == nil {
 		log = slog.Default()
 	}
-	defer releaseSem(sem, repollCh)
+	defer permits.Release()
 
 	claim, err := client.ClaimIntent(ctx, intent.IntentID)
 	if err != nil {
+		permits.Release()
+		if claimDispatched != nil {
+			claimDispatched()
+		}
 		switch {
 		case errors.Is(err, monolith.ErrAlreadyClaimed):
 			log.Debug("intent already claimed", "intent_id", intent.IntentID)
@@ -89,6 +104,9 @@ func runSession(
 			log.Warn("intent claim failed", "intent_id", intent.IntentID, "err", err)
 		}
 		return
+	}
+	if claimDispatched != nil {
+		claimDispatched()
 	}
 	intent = claim.Intent()
 
@@ -481,18 +499,6 @@ func postResult(
 
 	if err := client.PostResult(postCtx, intentID, result); err != nil {
 		log.Warn("post result failed", "intent_id", intentID, "status", result.Status, "error_code", result.ErrorCode, "err", err)
-	}
-}
-
-func releaseSem(sem chan struct{}, repollCh chan struct{}) {
-	if sem != nil {
-		<-sem
-	}
-	if repollCh != nil {
-		select {
-		case repollCh <- struct{}{}:
-		default:
-		}
 	}
 }
 

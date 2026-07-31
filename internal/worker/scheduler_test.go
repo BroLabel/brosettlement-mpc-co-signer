@@ -11,10 +11,13 @@ import (
 )
 
 type stubPendingClient struct {
-	mu         sync.Mutex
-	intents    []monolith.Intent
-	claimCalls int
-	pollCalls  int
+	mu          sync.Mutex
+	intents     []monolith.Intent
+	claimCalls  []string
+	claimResult monolith.ClaimResult
+	claimErr    error
+	claimErrors map[string]error
+	pollCalls   int
 }
 
 func (s *stubPendingClient) GetPendingIntents(context.Context) ([]monolith.Intent, error) {
@@ -27,11 +30,17 @@ func (s *stubPendingClient) GetPendingIntents(context.Context) ([]monolith.Inten
 	return append([]monolith.Intent(nil), s.intents...), nil
 }
 
-func (s *stubPendingClient) ClaimIntent(_ context.Context, _ string) (monolith.ClaimResult, error) {
+func (s *stubPendingClient) ClaimIntent(_ context.Context, intentID string) (monolith.ClaimResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.claimCalls++
-	return monolith.ClaimResult{ExpiresAt: time.Now().Add(time.Minute)}, nil
+	s.claimCalls = append(s.claimCalls, intentID)
+	if s.claimResult.ExpiresAt.IsZero() {
+		s.claimResult.ExpiresAt = time.Now().Add(time.Minute)
+	}
+	if err := s.claimErrors[intentID]; err != nil {
+		return monolith.ClaimResult{}, err
+	}
+	return s.claimResult, s.claimErr
 }
 
 func (s *stubPendingClient) PostResult(context.Context, string, monolith.IntentResult) error {
@@ -46,52 +55,334 @@ func (s *stubPendingClient) GetMessages(context.Context, string, uint64) ([]mono
 	return nil, nil
 }
 
-func (s *stubPendingClient) getClaimCalls() int {
+func (s *stubPendingClient) claims() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.claimCalls
+	return append([]string(nil), s.claimCalls...)
 }
 
-func TestSchedulerDispatchesOnlyAvailableSlots(t *testing.T) {
-	client := &stubPendingClient{
-		intents: []monolith.Intent{
-			{IntentID: "1", SessionID: "s1", Type: "DKG"},
-			{IntentID: "2", SessionID: "s2", Type: "DKG"},
-		},
-	}
+func TestSchedulerAcquiresDKGGuardBeforeGeneralSlot(t *testing.T) {
+	permits := newSchedulerPermits(1, nil)
 
+	heldGuard := permits.dkg.tryAcquire()
+	if heldGuard == nil {
+		t.Fatal("failed to occupy DKG guard")
+	}
+	if lease := permits.tryAcquireDKG(); lease != nil {
+		t.Fatal("DKG lease acquired while guard was occupied")
+	}
+	if got := len(permits.general.slots); got != 0 {
+		t.Fatalf("general permits in use = %d, want 0 when guard acquisition fails", got)
+	}
+	heldGuard.release()
+
+	heldGeneral := permits.general.tryAcquire()
+	if heldGeneral == nil {
+		t.Fatal("failed to occupy general slot")
+	}
+	if lease := permits.tryAcquireDKG(); lease != nil {
+		t.Fatal("DKG lease acquired while general slot was occupied")
+	}
+	if got := len(permits.dkg.slots); got != 0 {
+		t.Fatalf("DKG guard in use = %d, want rollback after general acquisition fails", got)
+	}
+	heldGeneral.release()
+}
+
+func TestSchedulerSkipsBlockedDKGAndContinuesSIGN(t *testing.T) {
+	s := newDeterministicScheduler(t, 2, func() bool { return true })
+	heldGuard := s.permits.dkg.tryAcquire()
+	if heldGuard == nil {
+		t.Fatal("failed to occupy DKG guard")
+	}
+	defer heldGuard.release()
+
+	var launched []launchedSession
+	s.launch = captureLaunches(&launched)
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "dkg-1", Type: "DKG"},
+		{IntentID: "sign-1", Type: "SIGN"},
+	})
+	defer releaseLaunches(launched)
+
+	if len(launched) != 1 || launched[0].intent.IntentID != "sign-1" {
+		t.Fatalf("launched = %v, want only visible SIGN", launchedIntentIDs(launched))
+	}
+	if launched[0].permits.dkg != nil {
+		t.Fatal("SIGN received a DKG guard")
+	}
+}
+
+func TestSchedulerDoesNotLaunchDKGWithoutGeneralSlot(t *testing.T) {
+	s := newDeterministicScheduler(t, 1, func() bool { return true })
+	heldGeneral := s.permits.general.tryAcquire()
+	if heldGeneral == nil {
+		t.Fatal("failed to occupy general slot")
+	}
+	defer heldGeneral.release()
+
+	var launched []launchedSession
+	s.launch = captureLaunches(&launched)
+	s.dispatchBatch(context.Background(), []monolith.Intent{{IntentID: "dkg-1", Type: "DKG"}})
+
+	if len(launched) != 0 {
+		t.Fatalf("launched = %v, want none", launchedIntentIDs(launched))
+	}
+	if got := len(s.permits.dkg.slots); got != 0 {
+		t.Fatalf("DKG guard in use = %d, want rollback", got)
+	}
+}
+
+func TestSchedulerClaimConflictReleasesTypedDKGLease(t *testing.T) {
+	wakeups := make(chan struct{}, 1)
+	permits := newSchedulerPermits(2, wakeups)
+	lease := permits.tryAcquireDKG()
+	if lease == nil {
+		t.Fatal("failed to acquire DKG lease")
+	}
+	client := &stubPendingClient{claimErr: monolith.ErrAlreadyClaimed}
+
+	runSessionWithPermits(
+		context.Background(),
+		monolith.Intent{IntentID: "dkg-1", Type: "DKG"},
+		client,
+		&stubRunner{},
+		&capturingDKGExecutor{},
+		"party-1",
+		time.Millisecond,
+		lease,
+		slog.Default(),
+		nil,
+	)
+	lease.Release()
+
+	if got := len(permits.general.slots); got != 0 {
+		t.Fatalf("general permits in use = %d, want 0", got)
+	}
+	if got := len(permits.dkg.slots); got != 0 {
+		t.Fatalf("DKG permits in use = %d, want 0", got)
+	}
+	select {
+	case <-wakeups:
+	default:
+		t.Fatal("claim conflict release did not wake scheduler")
+	}
+}
+
+func TestSchedulerClaimConflictContinuesSIGNFromSameBatchAtCapacityOne(t *testing.T) {
+	client := &stubPendingClient{
+		claimErrors: map[string]error{"dkg-1": monolith.ErrAlreadyClaimed},
+	}
 	s := NewScheduler(
 		client,
 		&stubRunner{},
 		&capturingDKGExecutor{},
 		"party-1",
 		time.Millisecond,
-		SchedulerConfig{
-			MinInterval:   time.Millisecond,
-			MaxInterval:   5 * time.Millisecond,
-			BackoffFactor: 2,
-		},
+		SchedulerConfig{ProvisioningHint: func() bool { return true }},
 		slog.Default(),
 		1,
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go s.Run(ctx)
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "dkg-1", Type: "DKG"},
+		{IntentID: "sign-1", Type: "SIGN"},
+	})
 
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if client.getClaimCalls() >= 1 {
-			break
-		}
+	deadline := time.Now().Add(time.Second)
+	for len(client.claims()) < 2 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-
-	if client.getClaimCalls() < 1 {
-		t.Fatalf("claim calls = %d, want >= 1", client.getClaimCalls())
+	if got, want := client.claims(), []string{"dkg-1", "sign-1"}; !equalStrings(got, want) {
+		t.Fatalf("claim calls = %v, want same-batch continuation %v", got, want)
 	}
+}
 
-	if client.getClaimCalls() > 1 {
-		t.Fatalf("claim calls = %d, want <= 1", client.getClaimCalls())
+func TestSchedulerAttemptsAtMostOneDKGPerBatchAndContinuesSIGN(t *testing.T) {
+	s := newDeterministicScheduler(t, 3, func() bool { return true })
+	var launched []launchedSession
+	s.launch = captureLaunches(&launched)
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "dkg-1", Type: "DKG"},
+		{IntentID: "dkg-2", Type: "DKG"},
+		{IntentID: "sign-1", Type: "SIGN"},
+	})
+	defer releaseLaunches(launched)
+
+	if got, want := launchedIntentIDs(launched), []string{"dkg-1", "sign-1"}; !equalStrings(got, want) {
+		t.Fatalf("launched = %v, want %v", got, want)
 	}
+	if launched[0].permits.dkg == nil {
+		t.Fatal("DKG job did not own the DKG guard")
+	}
+	if launched[1].permits.dkg != nil {
+		t.Fatal("SIGN job unexpectedly owned the DKG guard")
+	}
+}
+
+func TestSchedulerSkipsDKGWhenAdmissionOrProvisioningIsClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		closeGate bool
+		hint      func() bool
+	}{
+		{name: "dkg admission closed", closeGate: true, hint: func() bool { return true }},
+		{name: "preparams or disk unavailable", hint: func() bool { return false }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := newDeterministicScheduler(t, 2, tt.hint)
+			if tt.closeGate {
+				s.SetDKGAdmissionOpen(false)
+			}
+			var launched []launchedSession
+			s.launch = captureLaunches(&launched)
+			s.dispatchBatch(context.Background(), []monolith.Intent{
+				{IntentID: "dkg-1", Type: "DKG"},
+				{IntentID: "sign-1", Type: "SIGN"},
+			})
+			defer releaseLaunches(launched)
+
+			if got, want := launchedIntentIDs(launched), []string{"sign-1"}; !equalStrings(got, want) {
+				t.Fatalf("launched = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestSchedulerAllowsDKGAndSIGNWhenGeneralCapacityExceedsOne(t *testing.T) {
+	s := newDeterministicScheduler(t, 2, func() bool { return true })
+	var launched []launchedSession
+	s.launch = captureLaunches(&launched)
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "dkg-1", Type: "DKG"},
+		{IntentID: "sign-1", Type: "SIGN"},
+	})
+	defer releaseLaunches(launched)
+
+	if got, want := launchedIntentIDs(launched), []string{"dkg-1", "sign-1"}; !equalStrings(got, want) {
+		t.Fatalf("launched = %v, want %v", got, want)
+	}
+}
+
+func TestSchedulerAcceptsBackendOrderedHeadOfLineAtCapacityOne(t *testing.T) {
+	s := newDeterministicScheduler(t, 1, func() bool { return true })
+	var launched []launchedSession
+	s.launch = captureLaunches(&launched)
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "dkg-1", Type: "DKG"},
+		{IntentID: "sign-1", Type: "SIGN"},
+	})
+	defer releaseLaunches(launched)
+
+	if got, want := launchedIntentIDs(launched), []string{"dkg-1"}; !equalStrings(got, want) {
+		t.Fatalf("launched = %v, want backend-ordered head item %v", got, want)
+	}
+}
+
+func TestSchedulerWakeIsBoundedAndSafeForConcurrentSources(t *testing.T) {
+	s := newDeterministicScheduler(t, 1, func() bool { return true })
+	const callers = 64
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			s.Wake()
+		}()
+	}
+	wg.Wait()
+
+	if got := len(s.repollCh); got != 1 {
+		t.Fatalf("bounded wakeups = %d, want 1", got)
+	}
+}
+
+func TestSchedulerForwardsProvisioningWakeupsIntoExistingPollLoop(t *testing.T) {
+	provisioningWakeups := make(chan struct{}, 1)
+	s := NewScheduler(
+		&stubPendingClient{},
+		&stubRunner{},
+		&capturingDKGExecutor{},
+		"party-1",
+		time.Millisecond,
+		SchedulerConfig{
+			MinInterval:        time.Hour,
+			MaxInterval:        time.Hour,
+			BackoffFactor:      1,
+			ProvisioningHint:   func() bool { return true },
+			ProvisioningWakeup: provisioningWakeups,
+		},
+		slog.Default(),
+		1,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go s.forwardProvisioningWakeups(ctx)
+
+	provisioningWakeups <- struct{}{}
+	select {
+	case <-s.repollCh:
+	case <-time.After(time.Second):
+		t.Fatal("provisioning wakeup was not forwarded")
+	}
+}
+
+type launchedSession struct {
+	intent  monolith.Intent
+	permits *jobPermitLease
+}
+
+func newDeterministicScheduler(t *testing.T, maxConcurrent int, hint func() bool) *Scheduler {
+	t.Helper()
+	return NewScheduler(
+		&stubPendingClient{},
+		&stubRunner{},
+		&capturingDKGExecutor{},
+		"party-1",
+		time.Millisecond,
+		SchedulerConfig{
+			MinInterval:      time.Millisecond,
+			MaxInterval:      5 * time.Millisecond,
+			BackoffFactor:    2,
+			ProvisioningHint: hint,
+		},
+		slog.Default(),
+		maxConcurrent,
+	)
+}
+
+func captureLaunches(target *[]launchedSession) sessionLauncher {
+	return func(_ context.Context, intent monolith.Intent, permits *jobPermitLease) <-chan struct{} {
+		*target = append(*target, launchedSession{intent: intent, permits: permits})
+		dispatched := make(chan struct{})
+		close(dispatched)
+		return dispatched
+	}
+}
+
+func releaseLaunches(launched []launchedSession) {
+	for _, session := range launched {
+		session.permits.Release()
+	}
+}
+
+func launchedIntentIDs(launched []launchedSession) []string {
+	ids := make([]string, 0, len(launched))
+	for _, session := range launched {
+		ids = append(ids, session.intent.IntentID)
+	}
+	return ids
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }

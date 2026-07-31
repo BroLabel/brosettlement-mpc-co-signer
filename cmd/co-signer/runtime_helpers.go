@@ -18,6 +18,12 @@ type artifactCapabilityProber interface {
 	ProbePublishCapability(context.Context) error
 }
 
+type admissionHinter interface {
+	AdmissionHint() bool
+}
+
+type freeSpaceReader func(path string) (uint64, error)
+
 func probeArtifactStores(ctx context.Context, primary, recovery artifactCapabilityProber) error {
 	if primary == nil || recovery == nil {
 		return errors.New("both artifact store capabilities are required")
@@ -29,6 +35,24 @@ func probeArtifactStores(ctx context.Context, primary, recovery artifactCapabili
 		return fmt.Errorf("recovery artifact store capability: %w", err)
 	}
 	return nil
+}
+
+func dkgProvisioningAdmissionHint(
+	preparams admissionHinter,
+	artifactDirectories []string,
+	freeSpaceThreshold uint64,
+	freeSpace freeSpaceReader,
+) bool {
+	if preparams == nil || !preparams.AdmissionHint() || freeSpaceThreshold == 0 || freeSpace == nil {
+		return false
+	}
+	for _, directory := range artifactDirectories {
+		available, err := freeSpace(directory)
+		if err != nil || available < freeSpaceThreshold {
+			return false
+		}
+	}
+	return true
 }
 
 func decodePrivateKey(raw string) (ed25519.PrivateKey, error) {
