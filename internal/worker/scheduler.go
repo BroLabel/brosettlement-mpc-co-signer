@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"log/slog"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +23,7 @@ type SchedulerConfig struct {
 	BackoffFactor      float64
 	ProvisioningHint   func() bool
 	ProvisioningWakeup <-chan struct{}
+	TerminalPublisher  DKGTerminalPublisher
 }
 
 type sessionLauncher func(context.Context, monolith.Intent, *jobPermitLease) <-chan struct{}
@@ -70,7 +70,7 @@ func NewScheduler(
 		cfg:               cfg,
 		log:               log,
 	}
-	scheduler.dkgAdmissionOpen.Store(true)
+	scheduler.dkgAdmissionOpen.Store(cfg.TerminalPublisher != nil)
 	scheduler.launch = scheduler.launchSession
 	return scheduler
 }
@@ -155,8 +155,13 @@ func (s *Scheduler) forwardProvisioningWakeups(ctx context.Context) {
 func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent) {
 	dkgConsidered := false
 	for _, intent := range intents {
-		switch strings.ToUpper(strings.TrimSpace(intent.Type)) {
-		case "DKG":
+		kind, ok := classifyIntentKind(intent.Type)
+		if !ok {
+			s.log.Error("unsupported pending intent type")
+			continue
+		}
+		switch kind {
+		case intentKindDKG:
 			if dkgConsidered {
 				continue
 			}
@@ -171,7 +176,7 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits)) {
 				return
 			}
-		default:
+		case intentKindSIGN:
 			permits := s.permits.tryAcquireSIGN()
 			if permits == nil {
 				continue
@@ -207,6 +212,7 @@ func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, p
 		s.client,
 		s.signRunner,
 		s.dkgRunner,
+		s.cfg.TerminalPublisher,
 		s.localPartyID,
 		s.framePollInterval,
 		permits,

@@ -131,6 +131,14 @@ type IntentResult struct {
 	DkgMaterial  *DkgParticipantResult `json:"material,omitempty"`
 }
 
+// TerminalHTTPResponse is the raw result of exactly one DKG terminal HTTP
+// attempt. The terminal publisher owns strict response decoding and retries.
+type TerminalHTTPResponse struct {
+	StatusCode        int
+	Body              []byte
+	ProtocolViolation string
+}
+
 type DkgParticipantResult struct {
 	PartyID          string `json:"partyId"`
 	KeyID            string `json:"keyId"`

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/transport"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
@@ -44,12 +45,35 @@ type dkgExecutor interface {
 	Run(ctx context.Context, intent monolith.Intent, network coretss.Transport) (DKGResult, error)
 }
 
+type DKGTerminalPublisher interface {
+	Publish(context.Context, terminal.Job) (terminal.Outcome, error)
+}
+
+type intentKind uint8
+
+const (
+	intentKindDKG intentKind = iota + 1
+	intentKindSIGN
+)
+
+func classifyIntentKind(raw string) (intentKind, bool) {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "DKG":
+		return intentKindDKG, true
+	case "SIGN":
+		return intentKindSIGN, true
+	default:
+		return 0, false
+	}
+}
+
 func RunSessionWithExecutors(
 	ctx context.Context,
 	intent monolith.Intent,
 	client sessionClient,
 	signRunner signSessionRunner,
 	dkgRunner dkgExecutor,
+	terminalPublisher DKGTerminalPublisher,
 	localPartyID string,
 	framePollInterval time.Duration,
 	sem chan struct{},
@@ -62,6 +86,7 @@ func RunSessionWithExecutors(
 		client,
 		signRunner,
 		dkgRunner,
+		terminalPublisher,
 		localPartyID,
 		framePollInterval,
 		newLegacyGeneralLease(sem, repollCh),
@@ -76,16 +101,26 @@ func runSessionWithPermits(
 	client sessionClient,
 	signRunner signSessionRunner,
 	dkgRunner dkgExecutor,
+	terminalPublisher DKGTerminalPublisher,
 	localPartyID string,
 	framePollInterval time.Duration,
 	permits *jobPermitLease,
 	log *slog.Logger,
 	claimDispatched func(),
 ) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if log == nil {
 		log = slog.Default()
 	}
 	defer permits.Release()
+
+	admittedKind, ok := classifyIntentKind(intent.Type)
+	if !ok {
+		log.Error("unsupported admitted intent type")
+		return
+	}
 
 	claim, err := client.ClaimIntent(ctx, intent.IntentID)
 	if err != nil {
@@ -108,9 +143,28 @@ func runSessionWithPermits(
 	if claimDispatched != nil {
 		claimDispatched()
 	}
-	intent = claim.Intent()
+	claimedIntent := claim.Intent()
+	claimedKind, claimedKindOK := classifyIntentKind(claimedIntent.Type)
+	if !claimedKindOK || claimedKind != admittedKind {
+		log.Error("claimed intent kind mismatch")
+		if admittedKind == intentKindDKG {
+			if !publishClaimedDKGFailure(ctx, terminalPublisher, claimedIntent, log) && ctx.Err() == nil {
+				<-ctx.Done()
+			}
+		} else if ctx.Err() == nil {
+			<-ctx.Done()
+		}
+		return
+	}
+	intent = claimedIntent
 
 	if err := validateIntent(intent, localPartyID); err != nil {
+		if admittedKind == intentKindDKG {
+			if !publishClaimedDKGFailure(ctx, terminalPublisher, intent, log) && ctx.Err() == nil {
+				<-ctx.Done()
+			}
+			return
+		}
 		postResult(ctx, client, intent.IntentID, monolith.IntentResult{
 			Status:       intentStatusFailed,
 			ErrorCode:    ErrorCodeInvalidIntent,
@@ -121,6 +175,12 @@ func runSessionWithPermits(
 
 	deadline := claim.DeadlineTime()
 	if !deadline.After(time.Now()) {
+		if admittedKind == intentKindDKG {
+			if !publishClaimedDKGFailure(ctx, terminalPublisher, intent, log) && ctx.Err() == nil {
+				<-ctx.Done()
+			}
+			return
+		}
 		postResult(ctx, client, intent.IntentID, monolith.IntentResult{
 			Status:    intentStatusFailed,
 			ErrorCode: ErrorCodeAlreadyExpired,
@@ -156,11 +216,97 @@ func runSessionWithPermits(
 		runErr = fmt.Errorf("%w: unknown intent type: %s", errInvalidIntent, intent.Type)
 	}
 
-	result := BuildResult(runErr, sessionCtx, intent)
-	if runErr == nil && strings.EqualFold(strings.TrimSpace(intent.Type), "DKG") {
-		result = buildDualDKGSuccessResult(intent, dkgResult)
+	if strings.EqualFold(strings.TrimSpace(intent.Type), "DKG") {
+		if terminalPublisher == nil {
+			log.Error("dkg terminal publisher is unavailable", "intent_id", intent.IntentID)
+			<-ctx.Done()
+			return
+		}
+		job, err := buildDKGTerminalJob(intent, dkgResult, runErr)
+		if err != nil {
+			log.Error("construct canonical dkg terminal result failed", "intent_id", intent.IntentID, "err", err)
+			<-ctx.Done()
+			return
+		}
+		outcome, err := terminalPublisher.Publish(ctx, job)
+		if err != nil {
+			log.Warn("publish dkg terminal result stopped", "intent_id", intent.IntentID, "err", err)
+			if ctx.Err() == nil {
+				<-ctx.Done()
+			}
+			return
+		}
+		if outcome.Kind == terminal.OutcomeTerminalConflict {
+			log.Error(
+				"dkg terminal result conflict",
+				"intent_id", intent.IntentID,
+				"authoritative_status", outcome.AuthoritativeStatus,
+			)
+		}
+		return
 	}
+
+	result := BuildResult(runErr, sessionCtx, intent)
 	postResult(ctx, client, intent.IntentID, result, log)
+}
+
+func publishClaimedDKGFailure(
+	ctx context.Context,
+	publisher DKGTerminalPublisher,
+	intent monolith.Intent,
+	log *slog.Logger,
+) bool {
+	if publisher == nil {
+		return false
+	}
+	job, err := terminal.NewFailedJob(intent.IntentID, intent.SessionID, intent.Payload.KeyID)
+	if err != nil {
+		log.Error("construct canonical failed dkg terminal result failed", "intent_id", intent.IntentID, "err", err)
+		if ctx != nil && ctx.Err() == nil {
+			<-ctx.Done()
+		}
+		return true
+	}
+	outcome, err := publisher.Publish(ctx, job)
+	if err != nil {
+		log.Warn("publish failed dkg terminal result stopped", "intent_id", intent.IntentID, "err", err)
+		if ctx != nil && ctx.Err() == nil {
+			<-ctx.Done()
+		}
+		return true
+	}
+	if outcome.Kind == terminal.OutcomeTerminalConflict {
+		log.Error(
+			"dkg terminal result conflict",
+			"intent_id", intent.IntentID,
+			"authoritative_status", outcome.AuthoritativeStatus,
+		)
+	}
+	return true
+}
+
+func buildDKGTerminalJob(intent monolith.Intent, output DKGResult, runErr error) (terminal.Job, error) {
+	if runErr != nil {
+		return terminal.NewFailedJob(intent.IntentID, intent.SessionID, intent.Payload.KeyID)
+	}
+	return terminal.NewCompletedJob(terminal.CompletedInput{
+		IntentID:              intent.IntentID,
+		SessionID:             intent.SessionID,
+		KeyID:                 intent.Payload.KeyID,
+		DescriptorFingerprint: output.Primary.DescriptorFingerprint,
+		AccountPublicKey:      output.Primary.AccountPublicKey,
+		ChainCodeHash:         output.Primary.ChainCodeHash,
+		Primary: terminal.ArtifactInput{
+			PartyID:     output.Primary.PartyID,
+			Purpose:     string(output.Primary.Purpose),
+			Fingerprint: output.Primary.ArtifactFingerprint,
+		},
+		Recovery: terminal.ArtifactInput{
+			PartyID:     output.Recovery.PartyID,
+			Purpose:     string(output.Recovery.Purpose),
+			Fingerprint: output.Recovery.ArtifactFingerprint,
+		},
+	})
 }
 
 func BuildResult(runErr error, sessionCtx context.Context, _ monolith.Intent) monolith.IntentResult {
@@ -465,21 +611,6 @@ func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Tr
 		Digest:            intent.Payload.Digest,
 		DerivationContext: derivationContextPtr(*intent.Payload.DerivationContext),
 		Transport:         tr,
-	}
-}
-
-func buildDualDKGSuccessResult(_ monolith.Intent, output DKGResult) monolith.IntentResult {
-	return monolith.IntentResult{
-		Status: intentStatusCompleted,
-		DkgMaterial: &monolith.DkgParticipantResult{
-			PartyID:          output.Primary.PartyID,
-			KeyID:            output.Primary.KeyID,
-			AccountPublicKey: hex.EncodeToString(output.Primary.AccountPublicKey),
-			ChainCodeHash:    output.Primary.ChainCodeHash.String(),
-			ChainCodePresent: true,
-			PublicKeyFormat:  "compressed_sec1",
-			DerivationScheme: coretss.DerivationSchemeBIP32Secp256k1,
-		},
 	}
 }
 

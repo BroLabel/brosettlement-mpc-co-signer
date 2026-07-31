@@ -1,6 +1,7 @@
 package monolith
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -242,6 +243,54 @@ func TestPostResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
 	}
 	if gotIdempotency != "intent-42" {
 		t.Fatalf("X-Idempotency-Key = %q, want %q", gotIdempotency, "intent-42")
+	}
+}
+
+func TestPostTerminalResultPerformsOneExactAttemptWithoutGenericRetry(t *testing.T) {
+	body := []byte(`{"terminalResult":{"status":"FAILED"},"terminalResultFingerprint":"fingerprint"}`)
+	var attempts int
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		gotBody, _ = io.ReadAll(r.Body)
+		if got := r.Header.Get("X-Idempotency-Key"); got != "intent-42" {
+			t.Errorf("X-Idempotency-Key = %q", got)
+		}
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	response, err := client.PostTerminalResult(context.Background(), "intent-42", body)
+	if err != nil {
+		t.Fatalf("PostTerminalResult() error = %v", err)
+	}
+	if attempts != 1 || response.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("attempts = %d, response = %+v", attempts, response)
+	}
+	if !bytes.Equal(gotBody, body) {
+		t.Fatalf("body = %q, want exact %q", gotBody, body)
+	}
+}
+
+func TestPostTerminalResultBoundsOversizedAuthoritativeResponse(t *testing.T) {
+	oversized := bytes.Repeat([]byte("x"), 16<<10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(oversized)
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	response, err := client.PostTerminalResult(context.Background(), "intent-42", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("PostTerminalResult() error = %v", err)
+	}
+	if len(response.Body) > 8<<10 {
+		t.Fatalf("response body bytes = %d, want bounded to at most 8192", len(response.Body))
+	}
+	if response.ProtocolViolation == "" {
+		t.Fatal("oversized response did not carry protocol classification")
 	}
 }
 

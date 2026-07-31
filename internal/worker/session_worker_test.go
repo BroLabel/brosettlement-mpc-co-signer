@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -15,6 +16,7 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
@@ -67,11 +69,39 @@ func (s *capturingRunner) RunSignSession(context.Context, coretss.SignSessionReq
 	return nil
 }
 
+type countingSignRunner struct {
+	calls int
+}
+
+func (r *countingSignRunner) RunSignSession(context.Context, coretss.SignSessionRequest) error {
+	r.calls++
+	return nil
+}
+
 type capturingDKGExecutor struct {
 	intent monolith.Intent
 	calls  int
 	result DKGResult
 	err    error
+}
+
+type terminalPublisherFunc func(context.Context, terminal.Job) (terminal.Outcome, error)
+
+func (f terminalPublisherFunc) Publish(ctx context.Context, job terminal.Job) (terminal.Outcome, error) {
+	return f(ctx, job)
+}
+
+func acceptingTerminalPublisher(target *terminal.Job) terminalPublisherFunc {
+	return func(_ context.Context, job terminal.Job) (terminal.Outcome, error) {
+		if target != nil {
+			*target = job
+		}
+		return terminal.Outcome{
+			Kind:                     terminal.OutcomeAccepted,
+			AuthoritativeStatus:      job.Status(),
+			AuthoritativeFingerprint: job.Fingerprint(),
+		}, nil
+	}
 }
 
 func (e *capturingDKGExecutor) Run(_ context.Context, intent monolith.Intent, _ coretss.Transport) (DKGResult, error) {
@@ -81,17 +111,12 @@ func (e *capturingDKGExecutor) Run(_ context.Context, intent monolith.Intent, _ 
 }
 
 func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
-	intent := validDKGIntent()
+	intent := authoritativeDKGIntent()
 	client := &stubClient{claimResult: claimResultForIntent(intent)}
 	signRunner := &capturingRunner{}
-	dkgExecutor := &capturingDKGExecutor{result: DKGResult{
-		Primary: sharestore.ArtifactEvidence{
-			PartyID:          coordinatorPrimaryParty,
-			KeyID:            intent.Payload.KeyID,
-			AccountPublicKey: []byte{0x02, 0x01},
-			ChainCodeHash:    mpc2of3.ChainCodeHashFor(tMustDecodeHex(intent.Payload.ChainCode)),
-		},
-	}}
+	dkgExecutor := &capturingDKGExecutor{result: completeDKGResultForIntent(t, intent)}
+	var published terminal.Job
+	publisher := acceptingTerminalPublisher(&published)
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
@@ -101,6 +126,7 @@ func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 		client,
 		signRunner,
 		dkgExecutor,
+		publisher,
 		"co-signer",
 		time.Millisecond,
 		sem,
@@ -111,8 +137,307 @@ func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 	if dkgExecutor.calls != 1 {
 		t.Fatalf("DKG coordinator calls = %d, want 1", dkgExecutor.calls)
 	}
-	if client.lastResult.Status != intentStatusCompleted || client.lastResult.DkgMaterial == nil {
-		t.Fatalf("unexpected DKG result = %+v", client.lastResult)
+	if published.Status() != mpc2of3.TerminalStatusCompleted {
+		t.Fatalf("published terminal status = %q", published.Status())
+	}
+	if client.lastResult.Status != "" {
+		t.Fatalf("DKG used legacy result endpoint: %+v", client.lastResult)
+	}
+}
+
+func TestNormalDKGHoldsPermitLeaseUntilAuthoritativeTerminalOutcome(t *testing.T) {
+	intent := authoritativeDKGIntent()
+	client := &stubClient{claimResult: claimResultForIntent(intent)}
+	dkgExecutor := &capturingDKGExecutor{result: completeDKGResultForIntent(t, intent)}
+	started := make(chan terminal.Job, 1)
+	confirm := make(chan struct{})
+	publisher := terminalPublisherFunc(func(_ context.Context, job terminal.Job) (terminal.Outcome, error) {
+		started <- job
+		<-confirm
+		return terminal.Outcome{
+			Kind:                     terminal.OutcomeAccepted,
+			AuthoritativeStatus:      job.Status(),
+			AuthoritativeFingerprint: job.Fingerprint(),
+		}, nil
+	})
+	permits := newSchedulerPermits(2, nil)
+	lease := permits.tryAcquireDKG()
+	if lease == nil {
+		t.Fatal("failed to acquire DKG permit lease")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		runSessionWithPermits(
+			context.Background(),
+			intent,
+			client,
+			&stubRunner{},
+			dkgExecutor,
+			publisher,
+			"co-signer",
+			time.Millisecond,
+			lease,
+			slog.Default(),
+			nil,
+		)
+		close(done)
+	}()
+
+	var job terminal.Job
+	select {
+	case job = <-started:
+	case <-time.After(time.Second):
+		t.Fatal("terminal publication did not start")
+	}
+	if job.Status() != mpc2of3.TerminalStatusCompleted {
+		t.Fatalf("terminal status = %q", job.Status())
+	}
+	if len(permits.general.slots) != 1 || len(permits.dkg.slots) != 1 {
+		t.Fatal("DKG permit lease released before authoritative outcome")
+	}
+	close(confirm)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("normal DKG did not finish after confirmation")
+	}
+	if len(permits.general.slots) != 0 || len(permits.dkg.slots) != 0 {
+		t.Fatal("DKG permit lease not released after authoritative outcome")
+	}
+}
+
+func TestUnconfirmedDKGPublicationDoesNotBlockConcurrentSIGN(t *testing.T) {
+	dkgIntent := authoritativeDKGIntent()
+	dkgClient := &stubClient{claimResult: claimResultForIntent(dkgIntent)}
+	dkgStarted := make(chan struct{})
+	cancelPublication := make(chan struct{})
+	publisher := terminalPublisherFunc(func(_ context.Context, _ terminal.Job) (terminal.Outcome, error) {
+		close(dkgStarted)
+		<-cancelPublication
+		return terminal.Outcome{}, context.Canceled
+	})
+	permits := newSchedulerPermits(2, nil)
+	dkgLease := permits.tryAcquireDKG()
+	if dkgLease == nil {
+		t.Fatal("failed to acquire DKG lease")
+	}
+	dkgDone := make(chan struct{})
+	lifecycleCtx, cancelLifecycle := context.WithCancel(context.Background())
+	go func() {
+		runSessionWithPermits(
+			lifecycleCtx, dkgIntent, dkgClient, &stubRunner{},
+			&capturingDKGExecutor{result: completeDKGResultForIntent(t, dkgIntent)},
+			publisher, "co-signer", time.Millisecond, dkgLease, slog.Default(), nil,
+		)
+		close(dkgDone)
+	}()
+	select {
+	case <-dkgStarted:
+	case <-time.After(time.Second):
+		t.Fatal("DKG publication did not start")
+	}
+
+	signLease := permits.tryAcquireSIGN()
+	if signLease == nil {
+		t.Fatal("remaining general capacity did not admit SIGN")
+	}
+	signLease.Release()
+	if len(permits.dkg.slots) != 1 {
+		t.Fatal("concurrent SIGN released DKG guard")
+	}
+	close(cancelPublication)
+	cancelLifecycle()
+	<-dkgDone
+}
+
+func TestAdmittedSIGNRejectsClaimedDKGWithoutRuntimeOrPublicationAndRetainsLease(t *testing.T) {
+	pending := validSignIntent(t)
+	pending.IntentID = "intent-mismatch"
+	claimed := authoritativeDKGIntent()
+	claimed.IntentID = pending.IntentID
+	client := &stubClient{
+		claimResult: claimResultForIntent(claimed),
+	}
+	signRunner := &countingSignRunner{}
+	dkgRunner := &capturingDKGExecutor{}
+	var publishCalls int
+	publisher := terminalPublisherFunc(func(context.Context, terminal.Job) (terminal.Outcome, error) {
+		publishCalls++
+		return terminal.Outcome{}, nil
+	})
+	permits := newSchedulerPermits(1, nil)
+	lease := permits.tryAcquireSIGN()
+	if lease == nil {
+		t.Fatal("failed to acquire SIGN lease")
+	}
+	logs := make(chan string, 4)
+	log := slog.New(&messageHandler{messages: logs})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runSessionWithPermits(
+			ctx, pending, client, signRunner, dkgRunner, publisher,
+			"co-signer", time.Millisecond, lease, log, nil,
+		)
+		close(done)
+	}()
+
+	waitForLogMessage(t, logs, "claimed intent kind mismatch")
+	if signRunner.calls != 0 || dkgRunner.calls != 0 || publishCalls != 0 || client.lastResult.Status != "" {
+		t.Fatalf(
+			"mismatch side effects: sign=%d dkg=%d terminal=%d legacy=%+v",
+			signRunner.calls, dkgRunner.calls, publishCalls, client.lastResult,
+		)
+	}
+	if len(permits.general.slots) != 1 {
+		t.Fatal("SIGN lease released while mismatched claim remained unconfirmed")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("mismatched SIGN worker did not stop at lifecycle shutdown")
+	}
+	if len(permits.general.slots) != 0 {
+		t.Fatal("SIGN lease not released after lifecycle shutdown")
+	}
+}
+
+func TestAdmittedDKGClaimedAsSIGNPublishesFailedBeforeReleasingGuard(t *testing.T) {
+	pending := authoritativeDKGIntent()
+	claimed := validSignIntent(t)
+	claimed.IntentID = pending.IntentID
+	claimed.SessionID = pending.SessionID
+	claimed.Payload.KeyID = pending.Payload.KeyID
+	client := &stubClient{claimResult: claimResultForIntent(claimed)}
+	signRunner := &countingSignRunner{}
+	dkgRunner := &capturingDKGExecutor{}
+	started := make(chan terminal.Job, 1)
+	confirm := make(chan struct{})
+	publisher := terminalPublisherFunc(func(_ context.Context, job terminal.Job) (terminal.Outcome, error) {
+		started <- job
+		<-confirm
+		return terminal.Outcome{
+			Kind:                     terminal.OutcomeAccepted,
+			AuthoritativeStatus:      job.Status(),
+			AuthoritativeFingerprint: job.Fingerprint(),
+		}, nil
+	})
+	permits := newSchedulerPermits(2, nil)
+	lease := permits.tryAcquireDKG()
+	if lease == nil {
+		t.Fatal("failed to acquire DKG lease")
+	}
+	done := make(chan struct{})
+	go func() {
+		runSessionWithPermits(
+			context.Background(), pending, client, signRunner, dkgRunner, publisher,
+			"co-signer", time.Millisecond, lease, slog.Default(), nil,
+		)
+		close(done)
+	}()
+
+	var job terminal.Job
+	select {
+	case job = <-started:
+	case <-time.After(time.Second):
+		t.Fatal("mismatched admitted DKG did not publish FAILED")
+	}
+	if job.Status() != mpc2of3.TerminalStatusFailed {
+		t.Fatalf("terminal status = %q, want FAILED", job.Status())
+	}
+	if signRunner.calls != 0 || dkgRunner.calls != 0 || client.lastResult.Status != "" {
+		t.Fatalf("wrong-protocol side effects: sign=%d dkg=%d legacy=%+v", signRunner.calls, dkgRunner.calls, client.lastResult)
+	}
+	if len(permits.general.slots) != 1 || len(permits.dkg.slots) != 1 {
+		t.Fatal("DKG lease released before authoritative FAILED outcome")
+	}
+	close(confirm)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("mismatched DKG worker did not finish after confirmation")
+	}
+	if len(permits.general.slots) != 0 || len(permits.dkg.slots) != 0 {
+		t.Fatal("DKG lease not released after authoritative FAILED outcome")
+	}
+}
+
+func TestAdmittedDKGMismatchWithoutStableIdentityRetainsLeaseUntilShutdown(t *testing.T) {
+	pending := authoritativeDKGIntent()
+	claimed := validSignIntent(t)
+	claimed.IntentID = pending.IntentID
+	claimed.SessionID = pending.SessionID
+	claimed.Payload.KeyID = ""
+	client := &stubClient{claimResult: claimResultForIntent(claimed)}
+	signRunner := &countingSignRunner{}
+	dkgRunner := &capturingDKGExecutor{}
+	var publishCalls int
+	publisher := terminalPublisherFunc(func(context.Context, terminal.Job) (terminal.Outcome, error) {
+		publishCalls++
+		return terminal.Outcome{}, nil
+	})
+	permits := newSchedulerPermits(2, nil)
+	lease := permits.tryAcquireDKG()
+	if lease == nil {
+		t.Fatal("failed to acquire DKG lease")
+	}
+	logs := make(chan string, 4)
+	log := slog.New(&messageHandler{messages: logs})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runSessionWithPermits(
+			ctx, pending, client, signRunner, dkgRunner, publisher,
+			"co-signer", time.Millisecond, lease, log, nil,
+		)
+		close(done)
+	}()
+
+	waitForLogMessage(t, logs, "construct canonical failed dkg terminal result failed")
+	if publishCalls != 0 || signRunner.calls != 0 || dkgRunner.calls != 0 {
+		t.Fatalf("unstable mismatch side effects: publish=%d sign=%d dkg=%d", publishCalls, signRunner.calls, dkgRunner.calls)
+	}
+	if len(permits.general.slots) != 1 || len(permits.dkg.slots) != 1 {
+		t.Fatal("DKG lease released without stable terminal identity")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("unstable mismatched DKG did not stop at lifecycle shutdown")
+	}
+	if len(permits.general.slots) != 0 || len(permits.dkg.slots) != 0 {
+		t.Fatal("DKG lease not released after lifecycle shutdown")
+	}
+}
+
+type messageHandler struct {
+	messages chan<- string
+}
+
+func (h *messageHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *messageHandler) Handle(_ context.Context, record slog.Record) error {
+	h.messages <- record.Message
+	return nil
+}
+
+func (h *messageHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *messageHandler) WithGroup(string) slog.Handler      { return h }
+
+func waitForLogMessage(t *testing.T, messages <-chan string, want string) {
+	t.Helper()
+	for {
+		select {
+		case got := <-messages:
+			if got == want {
+				return
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("did not observe log message %q", want)
+		}
 	}
 }
 
@@ -138,6 +463,7 @@ func TestRunSessionRejectsInvalidIntent(t *testing.T) {
 		client,
 		runner,
 		&capturingDKGExecutor{},
+		nil,
 		"party-1",
 		time.Millisecond,
 		sem,
@@ -345,37 +671,27 @@ func TestBuildSignRequestMapsHDPayload(t *testing.T) {
 	}
 }
 
-func TestRunSessionPostsDkgMaterial(t *testing.T) {
-	intent := validDKGIntent()
+func TestRunSessionPublishesCanonicalCompletedDKG(t *testing.T) {
+	intent := authoritativeDKGIntent()
 	client := &stubClient{claimResult: claimResultForIntent(intent)}
 	runner := &capturingRunner{}
-	dkgExecutor := &capturingDKGExecutor{result: successfulDKGResult(intent)}
+	dkgExecutor := &capturingDKGExecutor{result: completeDKGResultForIntent(t, intent)}
+	var published terminal.Job
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), intent, client, runner, dkgExecutor, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(context.Background(), intent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
-	result := client.lastResult
-	if result.Status != intentStatusCompleted {
-		t.Fatalf("status = %q, want %q", result.Status, intentStatusCompleted)
+	if published.Status() != mpc2of3.TerminalStatusCompleted {
+		t.Fatalf("terminal status = %q", published.Status())
 	}
-	if result.DkgMaterial == nil {
-		t.Fatal("DkgMaterial is nil")
-	}
-	material := result.DkgMaterial
-	if material.PartyID != coordinatorPrimaryParty ||
-		material.KeyID != "key-1" ||
-		material.AccountPublicKey != "0201" ||
-		material.ChainCodeHash != "AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw" ||
-		!material.ChainCodePresent ||
-		material.PublicKeyFormat != "compressed_sec1" ||
-		material.DerivationScheme != coretss.DerivationSchemeBIP32Secp256k1 {
-		t.Fatalf("unexpected DKG material = %+v", material)
+	if client.lastResult.Status != "" {
+		t.Fatalf("legacy DKG result was posted: %+v", client.lastResult)
 	}
 }
 
 func TestRunSessionUsesClaimedPayloadForDkgExecution(t *testing.T) {
-	claimedIntent := validDKGIntent()
+	claimedIntent := authoritativeDKGIntent()
 	pendingIntent := claimedIntent
 	pendingIntent.Payload.ChainCode = ""
 	pendingIntent.Payload.ChainCodeHash = claimedIntent.Payload.ChainCodeHash
@@ -390,14 +706,15 @@ func TestRunSessionUsesClaimedPayloadForDkgExecution(t *testing.T) {
 		},
 	}
 	runner := &capturingRunner{}
-	dkgExecutor := &capturingDKGExecutor{result: successfulDKGResult(claimedIntent)}
+	dkgExecutor := &capturingDKGExecutor{result: completeDKGResultForIntent(t, claimedIntent)}
+	var published terminal.Job
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), pendingIntent, client, runner, dkgExecutor, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(context.Background(), pendingIntent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
-	if client.lastResult.Status != intentStatusCompleted {
-		t.Fatalf("status = %q, want %q result=%+v", client.lastResult.Status, intentStatusCompleted, client.lastResult)
+	if published.Status() != mpc2of3.TerminalStatusCompleted {
+		t.Fatalf("terminal status = %q", published.Status())
 	}
 	if dkgExecutor.intent.Payload.ChainCode != claimedIntent.Payload.ChainCode {
 		t.Fatalf("unexpected DKG derivation material = %q", dkgExecutor.intent.Payload.ChainCode)
@@ -418,49 +735,72 @@ func TestRunSessionRejectsIncompleteClaimResponse(t *testing.T) {
 	dkgExecutor := &capturingDKGExecutor{}
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
-	RunSessionWithExecutors(context.Background(), pendingIntent, client, runner, dkgExecutor, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(ctx, pendingIntent, client, runner, dkgExecutor, acceptingTerminalPublisher(nil), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
-	if client.lastResult.Status != intentStatusFailed ||
-		client.lastResult.ErrorCode != ErrorCodeInvalidIntent ||
-		client.lastResult.ErrorMessage == "" {
-		t.Fatalf("unexpected result = %+v", client.lastResult)
+	if client.lastResult.Status != "" {
+		t.Fatalf("malformed DKG claim used legacy result endpoint: %+v", client.lastResult)
 	}
 	if dkgExecutor.calls != 0 {
 		t.Fatalf("DKG should not run for incomplete claim response, calls = %d", dkgExecutor.calls)
 	}
 }
 
-func TestRunSessionPostsFailedDkgWithoutMaterial(t *testing.T) {
-	intent := validDKGIntent()
+func TestRunSessionPublishesMinimalFailedDKG(t *testing.T) {
+	intent := authoritativeDKGIntent()
 	client := &stubClient{claimResult: claimResultForIntent(intent)}
 	runner := &capturingRunner{}
 	dkgExecutor := &capturingDKGExecutor{err: coretss.ErrChainCodeMissing}
+	var published terminal.Job
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), intent, client, runner, dkgExecutor, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(context.Background(), intent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
-	result := client.lastResult
-	if result.Status != intentStatusFailed ||
-		result.ErrorCode != ErrorCodeInvalidIntent ||
-		result.ErrorMessage == "" {
-		t.Fatalf("unexpected failed result = %+v", result)
+	if published.Status() != mpc2of3.TerminalStatusFailed {
+		t.Fatalf("terminal status = %q", published.Status())
 	}
-	if result.DkgMaterial != nil {
-		t.Fatalf("DkgMaterial = %+v, want nil", result.DkgMaterial)
+	if bytes.Contains(published.Body(), []byte("error")) || bytes.Contains(published.Body(), []byte("material")) {
+		t.Fatalf("FAILED terminal body contains diagnostics/material: %s", published.Body())
 	}
 }
 
-func successfulDKGResult(intent monolith.Intent) DKGResult {
-	return DKGResult{
-		Primary: sharestore.ArtifactEvidence{
-			PartyID:          coordinatorPrimaryParty,
-			KeyID:            intent.Payload.KeyID,
-			AccountPublicKey: []byte{0x02, 0x01},
-			ChainCodeHash:    mpc2of3.ChainCodeHashFor(tMustDecodeHex(intent.Payload.ChainCode)),
-		},
+func completeDKGResultForIntent(t *testing.T, intent monolith.Intent) DKGResult {
+	t.Helper()
+	descriptorFingerprint, err := mpc2of3.ParseDescriptorFingerprint("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
 	}
+	artifactFingerprint, err := mpc2of3.ParseArtifactFingerprint("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey := tMustDecodeHex("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+	common := sharestore.ArtifactEvidence{
+		SessionID:             intent.SessionID,
+		KeyID:                 intent.Payload.KeyID,
+		DescriptorFingerprint: descriptorFingerprint,
+		AccountPublicKey:      publicKey,
+		ChainCodeHash:         mpc2of3.ChainCodeHashFor(tMustDecodeHex(intent.Payload.ChainCode)),
+		ArtifactFingerprint:   artifactFingerprint,
+	}
+	primary := common
+	primary.PartyID = coordinatorPrimaryParty
+	primary.Purpose = sharestore.StorePurposePrimary
+	recovery := common
+	recovery.PartyID = coordinatorRecoveryParty
+	recovery.Purpose = sharestore.StorePurposeRecovery
+	return DKGResult{Primary: primary, Recovery: recovery}
+}
+
+func authoritativeDKGIntent() monolith.Intent {
+	intent := validDKGIntent()
+	intent.IntentID = "intent-123"
+	intent.SessionID = "dkg-123"
+	intent.Payload.KeyID = "mpc_key_123e4567-e89b-42d3-a456-426614174002"
+	return intent
 }
 
 func validDKGIntent() monolith.Intent {

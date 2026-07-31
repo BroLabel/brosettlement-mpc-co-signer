@@ -148,6 +148,7 @@ func TestSchedulerClaimConflictReleasesTypedDKGLease(t *testing.T) {
 		client,
 		&stubRunner{},
 		&capturingDKGExecutor{},
+		nil,
 		"party-1",
 		time.Millisecond,
 		lease,
@@ -179,7 +180,10 @@ func TestSchedulerClaimConflictContinuesSIGNFromSameBatchAtCapacityOne(t *testin
 		&capturingDKGExecutor{},
 		"party-1",
 		time.Millisecond,
-		SchedulerConfig{ProvisioningHint: func() bool { return true }},
+		SchedulerConfig{
+			ProvisioningHint:  func() bool { return true },
+			TerminalPublisher: acceptingTerminalPublisher(nil),
+		},
 		slog.Default(),
 		1,
 	)
@@ -298,6 +302,34 @@ func TestSchedulerWakeIsBoundedAndSafeForConcurrentSources(t *testing.T) {
 	}
 }
 
+func TestSchedulerDoesNotClaimUnknownPendingIntentType(t *testing.T) {
+	client := &stubPendingClient{}
+	s := NewScheduler(
+		client,
+		&stubRunner{},
+		&capturingDKGExecutor{},
+		"party-1",
+		time.Millisecond,
+		SchedulerConfig{
+			ProvisioningHint:  func() bool { return true },
+			TerminalPublisher: acceptingTerminalPublisher(nil),
+		},
+		slog.Default(),
+		1,
+	)
+
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "unknown-1", Type: "RECOVER"},
+	})
+
+	if got := client.claims(); len(got) != 0 {
+		t.Fatalf("claim calls = %v, want none for unknown pending type", got)
+	}
+	if got := len(s.permits.general.slots); got != 0 {
+		t.Fatalf("general permits in use = %d, want 0", got)
+	}
+}
+
 func TestSchedulerForwardsProvisioningWakeupsIntoExistingPollLoop(t *testing.T) {
 	provisioningWakeups := make(chan struct{}, 1)
 	s := NewScheduler(
@@ -312,6 +344,7 @@ func TestSchedulerForwardsProvisioningWakeupsIntoExistingPollLoop(t *testing.T) 
 			BackoffFactor:      1,
 			ProvisioningHint:   func() bool { return true },
 			ProvisioningWakeup: provisioningWakeups,
+			TerminalPublisher:  acceptingTerminalPublisher(nil),
 		},
 		slog.Default(),
 		1,
@@ -342,10 +375,11 @@ func newDeterministicScheduler(t *testing.T, maxConcurrent int, hint func() bool
 		"party-1",
 		time.Millisecond,
 		SchedulerConfig{
-			MinInterval:      time.Millisecond,
-			MaxInterval:      5 * time.Millisecond,
-			BackoffFactor:    2,
-			ProvisioningHint: hint,
+			MinInterval:       time.Millisecond,
+			MaxInterval:       5 * time.Millisecond,
+			BackoffFactor:     2,
+			ProvisioningHint:  hint,
+			TerminalPublisher: acceptingTerminalPublisher(nil),
 		},
 		slog.Default(),
 		maxConcurrent,

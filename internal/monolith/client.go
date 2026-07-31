@@ -19,7 +19,10 @@ import (
 	"time"
 )
 
-const maxAttempts = 3
+const (
+	maxAttempts              = 3
+	maxTerminalResponseBytes = 8 << 10
+)
 
 type Client struct {
 	baseURL    string
@@ -90,6 +93,35 @@ func (c *Client) GetMessages(ctx context.Context, sessionID string, afterSeq uin
 func (c *Client) PostResult(ctx context.Context, intentID string, result IntentResult) error {
 	path := "/api/v1/co-signer/intents/" + url.PathEscape(intentID) + "/result"
 	return c.doJSON(ctx, http.MethodPost, path, result, intentID, nil)
+}
+
+// PostTerminalResult performs exactly one HTTP attempt with the exact body
+// supplied by the lifecycle terminal publisher. Generic bounded retries remain
+// in doJSON for non-terminal operations.
+func (c *Client) PostTerminalResult(ctx context.Context, intentID string, body []byte) (TerminalHTTPResponse, error) {
+	path := "/api/v1/co-signer/intents/" + url.PathEscape(intentID) + "/result"
+	req, err := c.newRequest(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return TerminalHTTPResponse{}, err
+	}
+	req.Header.Set("X-Idempotency-Key", intentID)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return TerminalHTTPResponse{}, err
+	}
+	defer resp.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxTerminalResponseBytes+1))
+	if err != nil {
+		return TerminalHTTPResponse{StatusCode: resp.StatusCode, Body: responseBody}, err
+	}
+	if len(responseBody) > maxTerminalResponseBytes {
+		return TerminalHTTPResponse{
+			StatusCode:        resp.StatusCode,
+			ProtocolViolation: "authoritative_response_too_large",
+		}, nil
+	}
+	return TerminalHTTPResponse{StatusCode: resp.StatusCode, Body: responseBody}, nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, payload any, idempotencyKey string, out any) error {

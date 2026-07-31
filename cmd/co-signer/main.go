@@ -15,6 +15,7 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/preparams"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/worker"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
@@ -106,6 +107,18 @@ func main() {
 	}()
 
 	client := monolith.New(cfg.MonolithURL, cfg.APIKeyID, privateKey, cfg.HTTPTimeout)
+	terminalPublisher := terminal.NewPublisher(
+		client,
+		terminal.DefaultRetryPolicy(),
+		nil,
+		terminal.ProtocolAlertFunc(func(alert terminal.ProtocolAlert) {
+			log.Error(
+				"dkg terminal protocol alert",
+				"reason", alert.Reason,
+				"http_status", alert.HTTPStatus,
+			)
+		}),
+	)
 	scheduler := worker.NewScheduler(
 		client,
 		tssSvc,
@@ -125,6 +138,7 @@ func main() {
 				)
 			},
 			ProvisioningWakeup: preParamsController.Wakeups(),
+			TerminalPublisher:  terminalPublisher,
 		},
 		log,
 		cfg.MaxConcurrent,
