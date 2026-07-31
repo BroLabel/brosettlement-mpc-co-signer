@@ -2,6 +2,7 @@ package monolith
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
@@ -13,6 +14,31 @@ type Intent struct {
 	Type      string        `json:"type"`
 	ExpiresAt time.Time     `json:"expiresAt"`
 	Payload   IntentPayload `json:"payload"`
+}
+
+// ActionableIntent is one exact backend-addressed listing item. DeadlineRaw is
+// retained so reconciliation can prove that claim and restart do not replace
+// the backend-created absolute deadline with a fresh TTL.
+type ActionableIntent struct {
+	CoSignerDeploymentID  string
+	CreatedAt             time.Time
+	CreatedAtRaw          string
+	Deadline              time.Time
+	DeadlineRaw           string
+	DescriptorBytes       []byte
+	DescriptorFingerprint string
+	IntentID              string
+	KeyID                 string
+	OrgID                 string
+	SessionID             string
+	Status                string
+	Type                  string
+}
+
+type ActionableListing struct {
+	HTTPStatus    int
+	OwnClaimedDKG []ActionableIntent
+	Pending       []ActionableIntent
 }
 
 type IntentPayload struct {
@@ -66,6 +92,7 @@ type InboundMessage struct {
 }
 
 type ClaimResult struct {
+	HTTPStatus            int           `json:"httpStatus,omitempty"`
 	IntentID              string        `json:"intentId,omitempty"`
 	SessionID             string        `json:"sessionId,omitempty"`
 	Type                  string        `json:"type,omitempty"`
@@ -75,12 +102,24 @@ type ClaimResult struct {
 	ClaimedAt             *time.Time    `json:"claimedAt,omitempty"`
 	ExpiresAt             time.Time     `json:"expiresAt"`
 	Deadline              time.Time     `json:"deadline"`
+	DeadlineRaw           string        `json:"-"`
 	OrgID                 string        `json:"orgId,omitempty"`
 	KeyID                 string        `json:"keyId,omitempty"`
 	CoSignerDeploymentID  string        `json:"coSignerDeploymentId,omitempty"`
 	DescriptorBytes       []byte        `json:"descriptorBytesBase64,omitempty"`
 	DescriptorFingerprint string        `json:"descriptorFingerprint,omitempty"`
 	ChainCode             []byte        `json:"chainCodeBase64,omitempty"`
+}
+
+func (r *ClaimResult) retainExactResponseFields(raw []byte) error {
+	var exact struct {
+		Deadline string `json:"deadline"`
+	}
+	if err := json.Unmarshal(raw, &exact); err != nil {
+		return err
+	}
+	r.DeadlineRaw = exact.Deadline
+	return nil
 }
 
 func (r ClaimResult) DeadlineTime() time.Time {

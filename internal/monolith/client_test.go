@@ -45,7 +45,7 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
 		bodyHashHeaderIsAbsent = len(r.Header.Values("X-Api-Body-Hash")) == 0
 		signatureIsValid = verifyRequestSignature(t, r, pub, "")
-		_, _ = w.Write([]byte(`{"expiresAt":"2026-04-16T12:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"httpStatus":200,"status":"CLAIMED","expiresAt":"2026-04-16T12:00:00Z"}`))
 	}))
 	defer srv.Close()
 
@@ -70,6 +70,7 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{
+			"httpStatus":200,
 			"intentId":"intent-1",
 			"sessionId":"session-1",
 			"type":"DKG",
@@ -134,6 +135,192 @@ func TestClaimIntentDecodesDualPartyContractFixture(t *testing.T) {
 		intent.Payload.Threshold != 2 ||
 		len(intent.Payload.Parties) != 3 {
 		t.Fatalf("unexpected dual-party claimed intent = %+v", intent)
+	}
+	if claim.DeadlineRaw != "2026-07-30T00:00:00.000Z" {
+		t.Fatalf("DeadlineRaw = %q, want exact backend value", claim.DeadlineRaw)
+	}
+}
+
+func TestListActionableIntentsDecodesStrictBackendFixture(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/listing-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	listing, err := client.ListActionableIntents(context.Background())
+	if err != nil {
+		t.Fatalf("ListActionableIntents() error = %v", err)
+	}
+	if listing.HTTPStatus != http.StatusOK {
+		t.Fatalf("HTTPStatus = %d, want %d", listing.HTTPStatus, http.StatusOK)
+	}
+	if len(listing.OwnClaimedDKG) != 1 {
+		t.Fatalf("len(OwnClaimedDKG) = %d, want 1", len(listing.OwnClaimedDKG))
+	}
+	claimed := listing.OwnClaimedDKG[0]
+	if claimed.IntentID != "intent-122" ||
+		claimed.SessionID != "dkg-122" ||
+		claimed.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174001" ||
+		claimed.Type != "DKG" ||
+		claimed.Status != "CLAIMED" ||
+		claimed.CoSignerDeploymentID != "co-signer-deployment-1" ||
+		claimed.DeadlineRaw != "2026-07-30T00:00:00.000Z" ||
+		len(claimed.DescriptorBytes) == 0 {
+		t.Fatalf("unexpected own claimed DKG = %+v", claimed)
+	}
+	if len(listing.Pending) != 2 {
+		t.Fatalf("len(Pending) = %d, want 2", len(listing.Pending))
+	}
+	if listing.Pending[0].Type != "DKG" ||
+		listing.Pending[0].Status != "PENDING" ||
+		listing.Pending[0].DeadlineRaw != "2026-07-30T00:00:00.000Z" {
+		t.Fatalf("unexpected pending DKG = %+v", listing.Pending[0])
+	}
+	if listing.Pending[1].Type != "SIGN" || listing.Pending[1].Status != "PENDING" {
+		t.Fatalf("unexpected pending SIGN = %+v", listing.Pending[1])
+	}
+}
+
+func TestGetPendingIntentsExcludesOwnClaimedDKGFromStrictListing(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/listing-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	pending, err := client.GetPendingIntents(context.Background())
+	if err != nil {
+		t.Fatalf("GetPendingIntents() error = %v", err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("len(pending) = %d, want 2", len(pending))
+	}
+	if pending[0].IntentID != "intent-123" || pending[0].Type != "DKG" ||
+		pending[1].IntentID != "intent-124" || pending[1].Type != "SIGN" {
+		t.Fatalf("pending = %+v, want backend pending collection only", pending)
+	}
+}
+
+func TestListActionableIntentsRejectsNonStrictListingContract(t *testing.T) {
+	validDescriptor := base64.StdEncoding.EncodeToString([]byte(`{"descriptorKind":"test"}`))
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "legacy response shape",
+			body: `{"intents":[]}`,
+		},
+		{
+			name: "unknown top-level field",
+			body: `{"httpStatus":200,"ownClaimedDkg":[],"pending":[],"extra":true}`,
+		},
+		{
+			name: "duplicate top-level field",
+			body: `{"httpStatus":200,"httpStatus":200,"ownClaimedDkg":[],"pending":[]}`,
+		},
+		{
+			name: "missing claimed collection",
+			body: `{"httpStatus":200,"pending":[]}`,
+		},
+		{
+			name: "body status mismatch",
+			body: `{"httpStatus":201,"ownClaimedDkg":[],"pending":[]}`,
+		},
+		{
+			name: "unknown item field",
+			body: `{"httpStatus":200,"ownClaimedDkg":[],"pending":[{"createdAt":"2026-07-29T00:00:00Z","intentId":"intent-1","keyId":"key-1","orgId":"org-1","status":"PENDING","type":"SIGN","extra":true}]}`,
+		},
+		{
+			name: "noncanonical descriptor base64",
+			body: `{"httpStatus":200,"ownClaimedDkg":[],"pending":[{"createdAt":"2026-07-29T00:00:00Z","deadline":"2026-07-30T00:00:00Z","descriptorBytesBase64":"` + strings.TrimRight(validDescriptor, "=") + `","descriptorFingerprint":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","intentId":"intent-1","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174000","orgId":"org-1","sessionId":"dkg-1","status":"PENDING","type":"DKG"}]}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			client, _ := newTestClient(t, srv.URL)
+			if _, err := client.ListActionableIntents(context.Background()); err == nil {
+				t.Fatal("ListActionableIntents() error = nil")
+			}
+		})
+	}
+}
+
+func TestListActionableIntentsRejectsUnexpectedHTTPStatusWithValidBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"httpStatus":200,"ownClaimedDkg":[],"pending":[]}`))
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	if _, err := client.ListActionableIntents(context.Background()); err == nil {
+		t.Fatal("ListActionableIntents() error = nil")
+	}
+}
+
+func TestClaimIntentRejectsUnknownBackendFixtureField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"expiresAt":"2026-04-16T12:00:00Z","unexpected":true}`))
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	if _, err := client.ClaimIntent(context.Background(), "intent-1"); err == nil {
+		t.Fatal("ClaimIntent() error = nil")
+	}
+}
+
+func TestClaimIntentRequiresMatchingHTTPStatusContract(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+	}{
+		{
+			name:       "missing body status",
+			statusCode: http.StatusOK,
+			body:       `{"status":"CLAIMED","deadline":"2026-07-30T00:00:00Z"}`,
+		},
+		{
+			name:       "unexpected HTTP status",
+			statusCode: http.StatusCreated,
+			body:       `{"httpStatus":200,"status":"CLAIMED","deadline":"2026-07-30T00:00:00Z"}`,
+		},
+		{
+			name:       "body status mismatch",
+			statusCode: http.StatusOK,
+			body:       `{"httpStatus":201,"status":"CLAIMED","deadline":"2026-07-30T00:00:00Z"}`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+
+			client, _ := newTestClient(t, srv.URL)
+			if _, err := client.ClaimIntent(context.Background(), "intent-1"); err == nil {
+				t.Fatal("ClaimIntent() error = nil")
+			}
+		})
 	}
 }
 
@@ -369,12 +556,14 @@ func TestNewRequestSignsExactRequestTarget(t *testing.T) {
 	}
 }
 
-func TestGetPendingIntentsDecodesHDIntentPayload(t *testing.T) {
+func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"intents":[{
+		_, _ = w.Write([]byte(`{
+			"httpStatus":200,
 			"intentId":"intent-1",
 			"sessionId":"session-1",
 			"type":"SIGN",
+			"status":"CLAIMED",
 			"expiresAt":"2026-04-16T12:00:00Z",
 			"payload":{
 				"type":"SIGN",
@@ -415,20 +604,17 @@ func TestGetPendingIntentsDecodesHDIntentPayload(t *testing.T) {
 					"keyVersion":1
 				}
 			}
-		}]}`))
+		}`))
 	}))
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	intents, err := client.GetPendingIntents(context.Background())
+	claim, err := client.ClaimIntent(context.Background(), "intent-1")
 	if err != nil {
-		t.Fatalf("GetPendingIntents() error = %v", err)
-	}
-	if len(intents) != 1 {
-		t.Fatalf("len(intents) = %d, want 1", len(intents))
+		t.Fatalf("ClaimIntent() error = %v", err)
 	}
 
-	payload := intents[0].Payload
+	payload := claim.Payload
 	if payload.Type != "SIGN" ||
 		payload.OrgID != "org-1" ||
 		payload.WalletID != "wallet-1" ||
