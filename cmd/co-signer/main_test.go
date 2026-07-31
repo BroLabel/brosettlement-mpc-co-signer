@@ -36,6 +36,53 @@ func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T
 	}
 }
 
+func TestCoSignerStartupPreservesEarlyCapabilityErrorWithoutPanic(t *testing.T) {
+	root := t.TempDir()
+	stateDir := filepath.Join(root, "state")
+	if err := os.Mkdir(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	primaryTarget := filepath.Join(root, "primary-target")
+	if err := os.Mkdir(primaryTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	primaryStore := filepath.Join(root, "primary")
+	if err := os.Symlink(primaryTarget, primaryStore); err != nil {
+		t.Fatal(err)
+	}
+
+	privateKey := base64.StdEncoding.EncodeToString(make([]byte, ed25519.PrivateKeySize))
+	command := exec.Command("go", "run", ".")
+	command.Env = append(os.Environ(), []string{
+		"GOWORK=off",
+		"CO_SIGNER_MONOLITH_URL=https://monolith.test",
+		"CO_SIGNER_API_KEY_ID=key-1",
+		"CO_SIGNER_API_PRIVATE_KEY=" + privateKey,
+		"CO_SIGNER_DEPLOYMENT_ID=deployment-1",
+		"CO_SIGNER_PRIMARY_PARTY_ID=co-signer-primary",
+		"CO_SIGNER_RECOVERY_PARTY_ID=co-signer-recovery",
+		"CO_SIGNER_PRIMARY_SHARES_DIR=" + primaryStore,
+		"CO_SIGNER_RECOVERY_SHARES_DIR=" + filepath.Join(root, "recovery"),
+		"CO_SIGNER_STATE_DIR=" + stateDir,
+		"CO_SIGNER_LOCK_PATH=" + filepath.Join(stateDir, "co-signer.lock"),
+		"CO_SIGNER_SHARE_ENCRYPTION_KEY=" + base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		"CO_SIGNER_SHARE_ENCRYPTION_KEY_REF=keyref-1",
+		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES=1",
+		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM=1",
+	}...)
+
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("co-signer startup succeeded with an invalid primary store")
+	}
+	if strings.Contains(string(output), "panic:") {
+		t.Fatalf("co-signer startup panicked instead of returning the capability error: %s", output)
+	}
+	if !strings.Contains(string(output), "open signing and provisioning capabilities: initialize primary artifact store:") {
+		t.Fatalf("co-signer startup output = %s, want original capability error", output)
+	}
+}
+
 func TestVerifyMPC2of3PropagatesMandatoryChildFailure(t *testing.T) {
 	bin := t.TempDir()
 	writeCommand := func(name, body string) {

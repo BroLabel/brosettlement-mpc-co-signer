@@ -76,7 +76,9 @@ func main() {
 			return resources.startupPublisher.Handoff(handoffCtx, job, done)
 		},
 		SetDKGAdmissionOpen: func(open bool) {
-			resources.scheduler.SetDKGAdmissionOpen(open)
+			if resources != nil {
+				resources.scheduler.SetDKGAdmissionOpen(open)
+			}
 		},
 		ProvisioningReady: func() bool {
 			return resources.provisioningReady()
