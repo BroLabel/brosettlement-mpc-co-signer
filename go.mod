@@ -2,12 +2,15 @@ module github.com/BroLabel/brosettlement-mpc-co-signer
 
 go 1.24.0
 
-require github.com/BroLabel/brosettlement-mpc-core v0.2.2
+require (
+	github.com/BroLabel/brosettlement-mpc-core v0.2.2
+	github.com/btcsuite/btcd v0.20.1-beta
+	github.com/gowebpki/jcs v1.0.1
+)
 
 require (
 	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412 // indirect
 	github.com/bnb-chain/tss-lib v1.5.0 // indirect
-	github.com/btcsuite/btcd v0.20.1-beta // indirect
 	github.com/btcsuite/btcutil v1.0.2 // indirect
 	github.com/decred/dcrd/dcrec/edwards/v2 v2.0.0 // indirect
 	github.com/gogo/protobuf v1.2.1 // indirect
