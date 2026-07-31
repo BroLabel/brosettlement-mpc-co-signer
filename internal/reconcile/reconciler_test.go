@@ -26,6 +26,35 @@ const (
 	failedFixture    = "terminal-failed-request.json"
 )
 
+func TestStartupReconcilerIgnoresOwnClaimedSignDiscovery(t *testing.T) {
+	now := time.Now().UTC()
+	backend := &recordingBackend{listing: monolith.ActionableListing{
+		HTTPStatus: 200,
+		OwnClaimedSign: []monolith.ActionableIntent{{
+			CoSignerDeploymentID: testDeploymentID,
+			CreatedAt:            now.Add(-time.Minute),
+			Deadline:             now.Add(time.Hour),
+			DeadlineRaw:          now.Add(time.Hour).Format(time.RFC3339Nano),
+			IntentID:             "intent-125",
+			SessionID:            "sign-125",
+			KeyID:                "key-125",
+			OrgID:                "org-123",
+			Status:               "CLAIMED",
+			Type:                 "SIGN",
+		}},
+	}}
+	primary := &recordingStore{name: "primary"}
+	recovery := &recordingStore{name: "recovery"}
+	reconciler := mustReconciler(t, now, backend, &recordingPreflight{}, primary, recovery)
+	result, err := reconciler.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	if result.Disposition != DispositionEligible || backend.claimCalls != 0 || len(primary.existsKeys) != 0 || len(recovery.existsKeys) != 0 {
+		t.Fatalf("startup reconciliation consumed SIGN discovery: result=%+v claims=%d primary=%v recovery=%v", result, backend.claimCalls, primary.existsKeys, recovery.existsKeys)
+	}
+}
+
 func TestReconcilerClassifiesFullActionableArtifactMatrix(t *testing.T) {
 	now := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
 	base := fixturePendingDKG(t)

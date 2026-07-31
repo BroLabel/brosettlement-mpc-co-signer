@@ -183,6 +183,12 @@ func runSessionWithPermits(
 		}
 		return
 	}
+	if admittedKind == intentKindSIGN && intent.CoSignerDeploymentID != "" {
+		if err := validateRediscoveredSignClaim(intent, claim); err != nil {
+			log.Error("rediscovered SIGN claim replay mismatch", "intent_id", intent.IntentID, "err", err)
+			return
+		}
+	}
 	intent = claimedIntent
 
 	if err := validateIntent(intent, localPartyID); err != nil {
@@ -278,6 +284,21 @@ func runSessionWithPermits(
 
 	result := BuildResult(runErr, sessionCtx, intent)
 	postResult(ctx, client, intent.IntentID, result, log)
+}
+
+func validateRediscoveredSignClaim(discovery monolith.Intent, claim monolith.ClaimResult) error {
+	if discovery.DiscoveryStatus != "CLAIMED" || discovery.Type != "SIGN" || discovery.IntentID == "" || discovery.SessionID == "" ||
+		discovery.Payload.OrgID == "" || discovery.Payload.KeyID == "" || discovery.DeadlineRaw == "" || discovery.ExpiresAt.IsZero() {
+		return errors.New("rediscovered SIGN metadata is incomplete")
+	}
+	claimed := claim.Intent()
+	if claim.Status != "CLAIMED" || claim.CoSignerDeploymentID != discovery.CoSignerDeploymentID ||
+		claimed.IntentID != discovery.IntentID || claimed.SessionID != discovery.SessionID || claimed.Type != discovery.Type ||
+		claimed.Payload.OrgID != discovery.Payload.OrgID || claimed.Payload.KeyID != discovery.Payload.KeyID ||
+		claim.DeadlineRaw != discovery.DeadlineRaw || !claim.DeadlineTime().Equal(discovery.ExpiresAt) {
+		return errors.New("claim replay differs from SIGN discovery metadata")
+	}
+	return nil
 }
 
 func isPrimarySigningArtifactFailure(err error) bool {

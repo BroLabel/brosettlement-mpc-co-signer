@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ func TestVerifierAcceptsClosedProducerBundles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyHTTPBundle() error = %v", err)
 	}
-	if httpID != "sQa76ZLUXK4IsYbtw4iSUheQsaOWUN0dyjVRB8foE5A" {
+	if httpID != "V0lqMGXjsdi35Jw5Q51QwjZ9uhn8VQxDrfWSYmV04Dc" {
 		t.Fatalf("HTTP identity = %q", httpID)
 	}
 }
@@ -45,6 +46,30 @@ func TestVerifierRejectsChangedMissingAndUnexpectedProducerFiles(t *testing.T) {
 			mutate(t, root)
 			if _, err := VerifySignerBundle(root); err == nil {
 				t.Fatal("VerifySignerBundle() error = nil")
+			}
+		})
+	}
+}
+
+func TestHTTPVerifierRejectsChangedMissingAndUnexpectedProducerFiles(t *testing.T) {
+	for name, mutate := range map[string]func(t *testing.T, root string){
+		"changed SIGN claim": func(t *testing.T, root string) {
+			write(t, filepath.Join(root, "sign-claim-response.json"), []byte(`{}`))
+		},
+		"missing SIGN terminal": func(t *testing.T, root string) {
+			if err := os.Remove(filepath.Join(root, "sign-terminal-completed-request.json")); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"unexpected HTTP artifact": func(t *testing.T, root string) {
+			write(t, filepath.Join(root, "compatibility-response.json"), []byte(`{}`))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := copyBundle(t, filepath.Join("..", "..", "..", "testdata", "mpc-co-signer-http", "v1"))
+			mutate(t, root)
+			if _, err := VerifyHTTPBundle(root); err == nil {
+				t.Fatal("VerifyHTTPBundle() error = nil")
 			}
 		})
 	}
@@ -205,6 +230,50 @@ func TestHTTPFixtureValidatorRejectsBadShapesAndStatuses(t *testing.T) {
 		"null failed result": func(t *testing.T, root string) {
 			write(t, filepath.Join(root, "terminal-failed-request.json"), []byte(`{"terminalResult":{"intentId":"intent-123","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174002","result":null,"resultKind":"mpc-dkg-terminal-result","resultVersion":1,"sessionId":"dkg-123","status":"FAILED"},"terminalResultFingerprint":"xx0XKjmRzBHaiRDVPNRz6qA07rRLru9u0PPoqd9GMSo"}`))
 		},
+		"unknown own claimed SIGN field": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "listing-response.json", func(value map[string]any) {
+				value["ownClaimedSign"].([]any)[0].(map[string]any)["unexpected"] = true
+			})
+		},
+		"missing own claimed SIGN deadline": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "listing-response.json", func(value map[string]any) {
+				delete(value["ownClaimedSign"].([]any)[0].(map[string]any), "deadline")
+			})
+		},
+		"wrong own claimed SIGN status": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "listing-response.json", func(value map[string]any) {
+				value["ownClaimedSign"].([]any)[0].(map[string]any)["status"] = "PENDING"
+			})
+		},
+		"unknown SIGN claim payload field": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "sign-claim-response.json", func(value map[string]any) {
+				value["payload"].(map[string]any)["unexpected"] = true
+			})
+		},
+		"missing SIGN claim digest": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "sign-claim-response.json", func(value map[string]any) {
+				delete(value["payload"].(map[string]any), "digest")
+			})
+		},
+		"type-invalid SIGN claim threshold": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "sign-claim-response.json", func(value map[string]any) {
+				value["payload"].(map[string]any)["threshold"] = "2"
+			})
+		},
+		"SIGN terminal uses DKG family": func(t *testing.T, root string) {
+			raw, err := os.ReadFile(filepath.Join(root, "terminal-completed-request.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(root, "sign-terminal-completed-request.json"), raw)
+		},
+		"DKG terminal uses SIGN family": func(t *testing.T, root string) {
+			raw, err := os.ReadFile(filepath.Join(root, "sign-terminal-completed-request.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(root, "terminal-completed-request.json"), raw)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := copyBundle(t, filepath.Join("..", "..", "..", "testdata", "mpc-co-signer-http", "v1"))
@@ -214,6 +283,25 @@ func TestHTTPFixtureValidatorRejectsBadShapesAndStatuses(t *testing.T) {
 			}
 		})
 	}
+}
+
+func mutateJSONFixture(t *testing.T, root, name string, mutate func(map[string]any)) {
+	t.Helper()
+	path := filepath.Join(root, name)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatal(err)
+	}
+	mutate(value)
+	raw, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, raw)
 }
 
 func copyBundle(t *testing.T, source string) string {

@@ -9,12 +9,15 @@ import (
 )
 
 type Intent struct {
-	CreatedAt time.Time
-	IntentID  string        `json:"intentId"`
-	SessionID string        `json:"sessionId"`
-	Type      string        `json:"type"`
-	ExpiresAt time.Time     `json:"expiresAt"`
-	Payload   IntentPayload `json:"payload"`
+	CreatedAt            time.Time
+	CoSignerDeploymentID string
+	DeadlineRaw          string
+	DiscoveryStatus      string
+	IntentID             string        `json:"intentId"`
+	SessionID            string        `json:"sessionId"`
+	Type                 string        `json:"type"`
+	ExpiresAt            time.Time     `json:"expiresAt"`
+	Payload              IntentPayload `json:"payload"`
 }
 
 // ActionableIntent is one exact backend-addressed listing item. DeadlineRaw is
@@ -37,9 +40,10 @@ type ActionableIntent struct {
 }
 
 type ActionableListing struct {
-	HTTPStatus    int
-	OwnClaimedDKG []ActionableIntent
-	Pending       []ActionableIntent
+	HTTPStatus     int
+	OwnClaimedDKG  []ActionableIntent
+	OwnClaimedSign []ActionableIntent
+	Pending        []ActionableIntent
 }
 
 type IntentPayload struct {
