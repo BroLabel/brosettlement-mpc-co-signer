@@ -127,7 +127,7 @@ func TestClaimIntentDecodesDualPartyContractFixture(t *testing.T) {
 	}
 	intent := claim.Intent()
 	if intent.Type != "DKG" ||
-		intent.SessionID != "dkg-123" ||
+		intent.SessionID != "123e4567-e89b-42d3-a456-426614174123" ||
 		intent.Payload.OrgID != "org-123" ||
 		intent.Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174002" ||
 		len(intent.Payload.DescriptorBytes) == 0 ||
@@ -244,7 +244,7 @@ func TestListActionableIntentsDecodesStrictBackendFixture(t *testing.T) {
 	}
 	claimed := listing.OwnClaimedDKG[0]
 	if claimed.IntentID != "intent-122" ||
-		claimed.SessionID != "dkg-122" ||
+		claimed.SessionID != "123e4567-e89b-42d3-a456-426614174122" ||
 		claimed.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174001" ||
 		claimed.Type != "DKG" ||
 		claimed.Status != "CLAIMED" ||
@@ -445,15 +445,21 @@ func TestClaimIntentRequiresMatchingHTTPStatusContract(t *testing.T) {
 
 func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	var gotSignature, gotBodyHash, gotIdempotency, gotNonce, gotAPIKeyID string
+	var gotBody []byte
 	var signatureIsValid bool
 	var signatureIsInvalidWithDifferentAPIKeyID bool
 	var gotPayload map[string]any
+	wantBody, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/mailbox-frame.json")
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, pub := newTestClient(t, "https://example.test")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("ReadAll() error = %v", err)
 		}
+		gotBody = append([]byte(nil), body...)
 
 		gotSignature = r.Header.Get("X-Api-Signature")
 		gotBodyHash = r.Header.Get("X-Api-Body-Hash")
@@ -483,18 +489,24 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	err := client.PostMessage(context.Background(), "session-1", OutboundFrame{
-		MessageID:   "msg-1",
-		ProtocolSeq: 9,
-		Round:       2,
-		FromPartyID: "co-signer-primary",
-		ToPartyID:   "mpc-signer",
-		Payload:     []byte("abc"),
+	err = client.PostMessage(context.Background(), "123e4567-e89b-42d3-a456-426614174123", OutboundFrame{
+		AuthenticatedPartyID:  "co-signer-primary",
+		Broadcast:             false,
+		FromPartyID:           "co-signer-primary",
+		IntentID:              "intent-123",
+		MessageID:             "msg_0123456789abcdef",
+		OrgID:                 "org-123",
+		Payload:               []byte{0},
+		ProtocolSeq:           1,
+		Round:                 1,
+		SessionID:             "123e4567-e89b-42d3-a456-426614174123",
+		ToPartyID:             "mpc-signer",
+		DerivationContextHash: "must-not-be-an-extra-http-field",
 	})
 	if err != nil {
 		t.Fatalf("PostMessage() error = %v", err)
 	}
-	if gotSignature == "" || gotBodyHash == "" || gotIdempotency != "msg-1" {
+	if gotSignature == "" || gotBodyHash == "" || gotIdempotency != "msg_0123456789abcdef" {
 		t.Fatalf("missing required headers signature=%q bodyHash=%q idempotency=%q", gotSignature, gotBodyHash, gotIdempotency)
 	}
 	if gotNonce == "" {
@@ -509,14 +521,17 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	if !signatureIsInvalidWithDifferentAPIKeyID {
 		t.Fatal("signature remained valid after changing the API key ID")
 	}
-	if gotPayload["messageId"] != "msg-1" {
-		t.Fatalf("messageId = %v, want %q", gotPayload["messageId"], "msg-1")
+	if !bytes.Equal(gotBody, wantBody) {
+		t.Fatalf("PostMessage() body = %s, want exact producer fixture %s", gotBody, wantBody)
 	}
-	if gotPayload["protocolSeq"] != float64(9) {
-		t.Fatalf("protocolSeq = %v, want %d", gotPayload["protocolSeq"], 9)
+	if gotPayload["messageId"] != "msg_0123456789abcdef" {
+		t.Fatalf("messageId = %v, want %q", gotPayload["messageId"], "msg_0123456789abcdef")
 	}
-	if gotPayload["round"] != float64(2) {
-		t.Fatalf("round = %v, want %d", gotPayload["round"], 2)
+	if gotPayload["protocolSeq"] != float64(1) {
+		t.Fatalf("protocolSeq = %v, want %d", gotPayload["protocolSeq"], 1)
+	}
+	if gotPayload["round"] != float64(1) {
+		t.Fatalf("round = %v, want %d", gotPayload["round"], 1)
 	}
 	if gotPayload["fromPartyId"] != "co-signer-primary" {
 		t.Fatalf("fromPartyId = %v, want %q", gotPayload["fromPartyId"], "co-signer-primary")
@@ -524,8 +539,8 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	if gotPayload["toPartyId"] != "mpc-signer" {
 		t.Fatalf("toPartyId = %v, want %q", gotPayload["toPartyId"], "mpc-signer")
 	}
-	if gotPayload["payload"] != base64.StdEncoding.EncodeToString([]byte("abc")) {
-		t.Fatalf("payload = %v, want %q", gotPayload["payload"], base64.StdEncoding.EncodeToString([]byte("abc")))
+	if gotPayload["payload"] != "AA==" {
+		t.Fatalf("payload = %v, want %q", gotPayload["payload"], "AA==")
 	}
 	if _, exists := gotPayload["seq"]; exists {
 		t.Fatalf("unexpected legacy seq field in payload: %+v", gotPayload)

@@ -93,13 +93,19 @@ func TestSendFrameMapsOutboundPayload(t *testing.T) {
 	client := &stubClient{}
 	tr := transport.NewHTTPTransport(
 		client,
-		transport.FrameContext{SessionID: "session-1", Stage: "dkg", Protocol: "ECDSA"},
+		transport.FrameContext{
+			IntentID:  "intent-123",
+			OrgID:     "org-123",
+			SessionID: "123e4567-e89b-42d3-a456-426614174123",
+			Stage:     "dkg",
+			Protocol:  "ECDSA",
+		},
 		time.Millisecond,
 		slog.Default(),
 	)
 
 	err := tr.SendFrame(context.Background(), protocol.Frame{
-		MessageID: "msg-1",
+		MessageID: "msg_0123456789abcdef",
 		Seq:       9,
 		Round:     2,
 		FromParty: "co-signer-primary",
@@ -110,8 +116,8 @@ func TestSendFrameMapsOutboundPayload(t *testing.T) {
 		t.Fatalf("SendFrame: %v", err)
 	}
 
-	if client.lastOutbound.MessageID != "msg-1" {
-		t.Fatalf("MessageID = %q, want %q", client.lastOutbound.MessageID, "msg-1")
+	if client.lastOutbound.MessageID != "msg_0123456789abcdef" {
+		t.Fatalf("MessageID = %q, want %q", client.lastOutbound.MessageID, "msg_0123456789abcdef")
 	}
 	if client.lastOutbound.ProtocolSeq != 9 {
 		t.Fatalf("ProtocolSeq = %d, want %d", client.lastOutbound.ProtocolSeq, 9)
@@ -119,6 +125,11 @@ func TestSendFrameMapsOutboundPayload(t *testing.T) {
 	if client.lastOutbound.FromPartyID != "co-signer-primary" ||
 		client.lastOutbound.ToPartyID != "mpc-signer" {
 		t.Fatalf("party route = %q -> %q, want co-signer-primary -> mpc-signer", client.lastOutbound.FromPartyID, client.lastOutbound.ToPartyID)
+	}
+	if client.lastOutbound.IntentID != "intent-123" || client.lastOutbound.OrgID != "org-123" ||
+		client.lastOutbound.SessionID != "123e4567-e89b-42d3-a456-426614174123" ||
+		client.lastOutbound.AuthenticatedPartyID != "co-signer-primary" {
+		t.Fatalf("outbound frame lost immutable or authenticated context: %+v", client.lastOutbound)
 	}
 }
 
@@ -153,6 +164,33 @@ func TestSendFramePreservesPartyBoundEnvelopeForPlatformRouting(t *testing.T) {
 		got.ToPartyID != "mpc-signer" ||
 		got.Round != 2 {
 		t.Fatalf("outbound frame lost party-bound envelope: %+v", got)
+	}
+}
+
+func TestSendFrameAuthenticatesEachLocalPartyAsItself(t *testing.T) {
+	for _, partyID := range []string{"co-signer-primary", "co-signer-recovery"} {
+		t.Run(partyID, func(t *testing.T) {
+			client := &stubClient{}
+			tr := transport.NewHTTPTransport(
+				client,
+				transport.FrameContext{IntentID: "intent-123", OrgID: "org-123", SessionID: "123e4567-e89b-42d3-a456-426614174123", Stage: "dkg", Protocol: "ECDSA"},
+				time.Millisecond,
+				slog.Default(),
+			)
+			if err := tr.SendFrame(context.Background(), protocol.Frame{
+				MessageID: "msg_0123456789abcdef",
+				Seq:       1,
+				Round:     1,
+				FromParty: partyID,
+				ToParty:   "mpc-signer",
+				Payload:   []byte{0},
+			}); err != nil {
+				t.Fatalf("SendFrame() error = %v", err)
+			}
+			if client.lastOutbound.AuthenticatedPartyID != partyID || client.lastOutbound.FromPartyID != partyID {
+				t.Fatalf("party authentication mismatch: %+v", client.lastOutbound)
+			}
+		})
 	}
 }
 
@@ -377,7 +415,7 @@ func TestSendFrameMapsBroadcastOutboundPayload(t *testing.T) {
 	if !client.lastOutbound.Broadcast {
 		t.Fatalf("Broadcast = %v, want true", client.lastOutbound.Broadcast)
 	}
-	if client.lastOutbound.ToPartyID != "" {
-		t.Fatalf("ToPartyID = %q, want empty for broadcast frame", client.lastOutbound.ToPartyID)
+	if client.lastOutbound.ToPartyID != "broadcast" {
+		t.Fatalf("ToPartyID = %q, want explicit broadcast recipient marker", client.lastOutbound.ToPartyID)
 	}
 }

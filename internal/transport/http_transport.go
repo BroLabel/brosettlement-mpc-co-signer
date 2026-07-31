@@ -20,6 +20,8 @@ var (
 const platformPartyID = "mpc-signer"
 
 type FrameContext struct {
+	IntentID  string
+	OrgID     string
 	SessionID string
 	Stage     string
 	Protocol  string
@@ -90,16 +92,22 @@ func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) err
 	)
 
 	outbound := monolith.OutboundFrame{
+		AuthenticatedPartyID:  frame.FromParty,
 		MessageID:             frame.MessageID,
+		IntentID:              t.frameCtx.IntentID,
+		OrgID:                 t.frameCtx.OrgID,
 		ProtocolSeq:           frame.Seq,
 		Round:                 logicalRound(frame),
 		FromPartyID:           frame.FromParty,
 		Broadcast:             frame.IsBroadcast(),
+		SessionID:             t.frameCtx.SessionID,
 		Payload:               frame.Payload,
 		DerivationContextHash: frame.DerivationContextHash,
 	}
 	if !frame.IsBroadcast() {
 		outbound.ToPartyID = frame.ToParty
+	} else {
+		outbound.ToPartyID = "broadcast"
 	}
 
 	return t.client.PostMessage(ctx, t.frameCtx.SessionID, outbound)

@@ -74,14 +74,18 @@ type IntentPayload struct {
 }
 
 type OutboundFrame struct {
+	AuthenticatedPartyID  string `json:"authenticatedPartyId"`
+	Broadcast             bool   `json:"broadcast"`
+	FromPartyID           string `json:"fromPartyId"`
+	IntentID              string `json:"intentId"`
 	MessageID             string `json:"messageId"`
+	OrgID                 string `json:"orgId"`
+	Payload               []byte `json:"payload"`
 	ProtocolSeq           uint64 `json:"protocolSeq"`
 	Round                 uint32 `json:"round"`
-	FromPartyID           string `json:"fromPartyId"`
-	ToPartyID             string `json:"toPartyId,omitempty"`
-	Broadcast             bool   `json:"broadcast,omitempty"`
-	Payload               []byte `json:"payload"`
-	DerivationContextHash string `json:"derivationContextHash,omitempty"`
+	SessionID             string `json:"sessionId"`
+	ToPartyID             string `json:"toPartyId"`
+	DerivationContextHash string `json:"-"`
 }
 
 type InboundMessage struct {

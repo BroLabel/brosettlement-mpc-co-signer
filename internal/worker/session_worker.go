@@ -225,6 +225,8 @@ func runSessionWithPermits(
 	defer cancel()
 
 	frameCtx := transport.FrameContext{
+		IntentID:  intent.IntentID,
+		OrgID:     intent.Payload.OrgID,
 		SessionID: intent.SessionID,
 		Stage:     strings.ToLower(intent.Type),
 		Protocol:  intent.Payload.Algorithm,

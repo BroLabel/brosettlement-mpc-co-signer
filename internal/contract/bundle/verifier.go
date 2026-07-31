@@ -18,8 +18,8 @@ import (
 
 const (
 	signerBundleIdentity = "dRgKBw7Y392uHY7AkBj5dkahjKmwYcFYhjtYv62-5mA"
-	httpBundleIdentity   = "V0lqMGXjsdi35Jw5Q51QwjZ9uhn8VQxDrfWSYmV04Dc"
-	backendSourceCommit  = "0a5a0136146b9fa8e6e6c4e6d0be31433a377c4c"
+	httpBundleIdentity   = "i8b8gekJUm6QgKFC7YyK_zFxzthd61QiAPJloDnVfoU"
+	backendSourceCommit  = "9ee1b0f941aa9d5b3fd0c85f2b1616ee8f24a1ac"
 	deploymentID         = "co-signer-deployment-1"
 )
 
@@ -35,7 +35,9 @@ var (
 	}
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 	keyIDPattern      = regexp.MustCompile(`^mpc_key_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	messageIDPattern  = regexp.MustCompile(`^msg_[0-9a-f]{16}$`)
 	utcPattern        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`)
+	uuidV4Pattern     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 )
 
 type manifestFile struct {
@@ -417,10 +419,11 @@ func parseDKG(fields map[string]json.RawMessage, expectedStatus string, owned bo
 }
 
 func parseClaim(fields map[string]json.RawMessage) (dkgFixture, error) {
-	for _, key := range []string{"intentId", "sessionId", "orgId", "keyId", "deadline"} {
-		if !identifier(stringMust(fields, key), key, map[string]string{"intentId": "intent-", "sessionId": "dkg-", "orgId": "org-"}[key]) {
-			return dkgFixture{}, fmt.Errorf("invalid claim %s", key)
-		}
+	if !identifier(stringMust(fields, "intentId"), "intentId", "intent-") ||
+		!uuidV4Pattern.MatchString(stringMust(fields, "sessionId")) ||
+		!identifier(stringMust(fields, "orgId"), "orgId", "org-") ||
+		!keyIDPattern.MatchString(stringMust(fields, "keyId")) {
+		return dkgFixture{}, fmt.Errorf("invalid claim identity")
 	}
 	if _, err := exactUTC(stringMust(fields, "deadline")); err != nil {
 		return dkgFixture{}, err
@@ -435,7 +438,7 @@ func parseClaim(fields map[string]json.RawMessage) (dkgFixture, error) {
 
 func descriptorFixture(fields map[string]json.RawMessage, createdAt time.Time) (dkgFixture, error) {
 	intentID, sessionID, orgID, keyID := stringMust(fields, "intentId"), stringMust(fields, "sessionId"), stringMust(fields, "orgId"), stringMust(fields, "keyId")
-	if !identifier(intentID, "intentId", "intent-") || !identifier(sessionID, "sessionId", "dkg-") || !identifier(orgID, "orgId", "org-") || !keyIDPattern.MatchString(keyID) {
+	if !identifier(intentID, "intentId", "intent-") || !uuidV4Pattern.MatchString(sessionID) || !identifier(orgID, "orgId", "org-") || !keyIDPattern.MatchString(keyID) {
 		return dkgFixture{}, fmt.Errorf("invalid DKG identity")
 	}
 	bytes, err := parseStandardBase64(stringMust(fields, "descriptorBytesBase64"), -1)
@@ -565,10 +568,13 @@ func signCreatedAt(fields map[string]json.RawMessage) time.Time {
 }
 
 func validateMailbox(fields map[string]json.RawMessage, claim dkgFixture) error {
-	for key, prefix := range map[string]string{"intentId": "intent-", "sessionId": "dkg-", "orgId": "org-", "messageId": "msg-"} {
+	for key, prefix := range map[string]string{"intentId": "intent-", "orgId": "org-"} {
 		if !identifier(stringMust(fields, key), key, prefix) {
 			return fmt.Errorf("invalid mailbox %s", key)
 		}
+	}
+	if !uuidV4Pattern.MatchString(stringMust(fields, "sessionId")) || !messageIDPattern.MatchString(stringMust(fields, "messageId")) {
+		return fmt.Errorf("invalid mailbox session or message identity")
 	}
 	if stringMust(fields, "intentId") != claim.intentID || stringMust(fields, "sessionId") != claim.sessionID || stringMust(fields, "orgId") != claim.orgID {
 		return fmt.Errorf("mailbox differs from claimed DKG")

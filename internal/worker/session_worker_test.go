@@ -19,13 +19,17 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
+	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
 type stubClient struct {
+	mu          sync.Mutex
 	claimResult monolith.ClaimResult
 	claimErr    error
 	lastResult  monolith.IntentResult
+	lastSession string
+	lastFrame   monolith.OutboundFrame
 }
 
 func (s *stubClient) ClaimIntent(_ context.Context, _ string) (monolith.ClaimResult, error) {
@@ -40,7 +44,11 @@ func (s *stubClient) PostResult(_ context.Context, _ string, result monolith.Int
 	return nil
 }
 
-func (s *stubClient) PostMessage(context.Context, string, monolith.OutboundFrame) error {
+func (s *stubClient) PostMessage(_ context.Context, sessionID string, frame monolith.OutboundFrame) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastSession = sessionID
+	s.lastFrame = frame
 	return nil
 }
 
@@ -130,6 +138,25 @@ type capturingDKGExecutor struct {
 	err    error
 }
 
+type mailboxSendingDKGExecutor struct {
+	result DKGResult
+	err    error
+}
+
+func (e *mailboxSendingDKGExecutor) Run(ctx context.Context, _ monolith.Intent, tr coretss.Transport) (DKGResult, error) {
+	if err := tr.SendFrame(ctx, protocol.Frame{
+		MessageID: "msg_0123456789abcdef",
+		Seq:       1,
+		Round:     1,
+		FromParty: "co-signer-primary",
+		ToParty:   "mpc-signer",
+		Payload:   []byte{0},
+	}); err != nil {
+		return DKGResult{}, err
+	}
+	return e.result, e.err
+}
+
 type terminalPublisherFunc func(context.Context, terminal.Job) (terminal.Outcome, error)
 
 func (f terminalPublisherFunc) Publish(ctx context.Context, job terminal.Job) (terminal.Outcome, error) {
@@ -187,6 +214,26 @@ func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 	}
 	if client.lastResult.Status != "" {
 		t.Fatalf("DKG used legacy result endpoint: %+v", client.lastResult)
+	}
+}
+
+func TestRunSessionPassesClaimedMailboxContextToDKGTransport(t *testing.T) {
+	intent := authoritativeDKGIntent()
+	intent.SessionID = "123e4567-e89b-42d3-a456-426614174123"
+	intent.Payload.OrgID = "org-123"
+	client := &stubClient{claimResult: claimResultForIntent(intent)}
+	executor := &mailboxSendingDKGExecutor{result: completeDKGResultForIntent(t, intent)}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+
+	RunSessionWithExecutors(context.Background(), intent, client, &stubRunner{}, executor, acceptingTerminalPublisher(nil), "co-signer", time.Millisecond, sem, nil, slog.Default())
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.lastSession != intent.SessionID || client.lastFrame.SessionID != intent.SessionID ||
+		client.lastFrame.IntentID != intent.IntentID || client.lastFrame.OrgID != intent.Payload.OrgID ||
+		client.lastFrame.AuthenticatedPartyID != "co-signer-primary" {
+		t.Fatalf("worker lost claimed mailbox context: route=%q frame=%+v", client.lastSession, client.lastFrame)
 	}
 }
 
