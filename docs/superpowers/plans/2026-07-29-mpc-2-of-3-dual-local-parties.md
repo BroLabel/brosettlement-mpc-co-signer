@@ -121,6 +121,7 @@ incoming deliverables it consumes and the outputs it provides.
 | ------------------------ | --------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CONTRACT-BUNDLE-V1`     | `mpc-signer / SIG-001 + SIG-002`              | `CS-001`, then all wire-facing steps            | Whole signer-owned bundle is vendored and hash-verified. It contains shared proto/descriptor/terminal/digest/JCS material, not artifact v1. |
 | `COSIGNER-HTTP-V1`       | `back-end / BE-001`                           | vendored by `CS-001`; used by `CS-004`, `CS-007`, `CS-008a` | Backend-owned strict HTTP/mailbox fixtures and manifest.                                                                                    |
+| `SIGN-CLAIM-HTTP-V1`     | `back-end / BE-008a`                          | `CS-009c`                                      | Strict SIGN claim/result fixture family added to the same backend-owned HTTP bundle.                                                        |
 | `MPC-CORE-V0.3.0`        | `mpc-core / CORE-001`–`CORE-007` release gate | `CS-003`–`CS-005`, `CS-009a`                    | Exact Go module tag after real 2-of-3 DKG/signing, single-use preparams, codec, race, subprocess, and bounded fuzz gates.                    |
 
 ### Outputs
@@ -164,6 +165,7 @@ incoming deliverables it consumes and the outputs it provides.
 | `REQ-020`, `REQ-030`, `REQ-041`, `REQ-059`, `REQ-077`; `INV-006`, `INV-007`, `INV-028`, `INV-036`, `INV-044`, `INV-052`                                                                                                           | recovery proof                | `PLAN-STEP-CS-009a`                           | `TEST-CS-061`–`067`   | isolated tagged test binary        |
 | `REQ-068`–`REQ-070`, `REQ-079`, `REQ-080`; `INV-041`, `INV-045`, `INV-054`, `INV-055`                                                                                                                                                | operations and verification   | `PLAN-STEP-CS-009b`                           | `TEST-CS-068`–`072`   | safe metrics/docs/full verify      |
 | `REQ-073`–`REQ-075`; `INV-048`–`INV-050`                                                                                                                                                                                             | upstream state integration    | `PLAN-STEP-CS-007`, `PLAN-STEP-CS-008a`, `PLAN-STEP-CS-009a` | coordinated E2E | A evidence/typed backend outcomes  |
+| `REQ-082`–`REQ-084`; `INV-057`–`INV-059`                                                                                                                                                                                             | normal SIGN HTTP contract     | `PLAN-STEP-CS-009c`                           | `TEST-CS-073`–`077`   | vendored fixtures/client routing   |
 
 ## Implementation Steps
 
@@ -910,6 +912,48 @@ incoming deliverables it consumes and the outputs it provides.
       and metrics but are not reimplemented here.
 - [ ] Commit with `docs(operations): define recovery artifact support`.
 
+### PLAN-STEP-CS-009c: Pin and prove normal SIGN claim/result fixtures
+
+**Sources:** `REQ-082`-`REQ-084`, `DECISION-048`, `INV-057`-`INV-059`,
+`AC-005`, `AC-014`, `AC-038`
+
+**Depends on:** `PLAN-STEP-CS-009b`, `SIGN-CLAIM-HTTP-V1`
+
+**Files:**
+
+- Modify: `testdata/mpc-co-signer-http/v1/` vendored fixture bundle
+- Modify: HTTP contract manifest verifier and golden tests
+- Modify: backend HTTP client claim/result tests
+- Modify: repository verification/sync tests as required by the new manifest
+
+**Interfaces:**
+
+- `make sync-contracts` copies the complete updated backend-owned HTTP bundle
+  from an explicit local source, verifies the temporary copy, atomically
+  replaces the fixed destination, and verifies the final destination.
+- The production worker continues to use the existing shared claim and result
+  routes for DKG and SIGN. The client strictly validates the SIGN claim fixture,
+  preserves the immutable `intentId`, `sessionId`, deadline, deployment owner,
+  and payload, and posts only the existing minimal SIGN `COMPLETED`/`FAILED`
+  result shape.
+- DKG terminal publication remains canonical and fingerprinted. SIGN must never
+  enter the DKG terminal publisher, while DKG cannot use the generic SIGN result
+  path.
+- This step adds no scheduler lane, generic intent API, recovery capability,
+  feature flag, or compatibility mode.
+
+- [ ] Vendor the exact `SIGN-CLAIM-HTTP-V1` producer bundle with source commit
+      and per-file hashes; prove missing, altered, or unexpected files fail.
+- [ ] Add fixture-driven client tests for SIGN claim success, same-owner replay,
+      typed conflict, immutable payload/deadline preservation, completed result,
+      failed result, and strict unknown-field rejection.
+- [ ] Add routing tests proving SIGN uses generic `PostResult`, DKG uses the
+      canonical terminal publisher, and neither parser accepts the other
+      intent kind.
+- [ ] Run contract verification, focused HTTP/worker tests, `go test -race
+      ./...`, `go vet ./...`, and `make verify-mpc-2of3` on Linux.
+- [ ] Commit with `test(contract): pin sign claim lifecycle fixtures`.
+
 ## Test Matrix
 
 | Test IDs            | Behavior                                                                 | Step                    | Evidence                         |
@@ -926,6 +970,7 @@ incoming deliverables it consumes and the outputs it provides.
 | `TEST-CS-053`–`060` | Lock/process death, startup handoff, split readiness, SIGN during replay | `PLAN-STEP-CS-008b`     | helper process/lifecycle         |
 | `TEST-CS-061`–`067` | Tagged `_test.go` B+C proof, derivation, negative digest, no prod reader | `PLAN-STEP-CS-009a`     | isolated compiled test binary    |
 | `TEST-CS-068`–`072` | Safe metrics, docs, redaction, production build, full verify target      | `PLAN-STEP-CS-009b`     | Linux release command            |
+| `TEST-CS-073`–`077` | SIGN fixture pin, strict claim/replay/conflict, result-kind separation   | `PLAN-STEP-CS-009c`     | vendored manifest and client tests |
 
 ## Failure and Recovery Matrix
 
@@ -938,6 +983,7 @@ incoming deliverables it consumes and the outputs it provides.
 | Duplicate B run or stale cleanup token               | Reject duplicate same-session/same-party execution; stale release cannot clear a newer pair.                                                                     | `TEST-CS-022`–`024` |
 | B or C runtime/store fails                           | Cancel sibling, join both, keep pair until all writer calls return, release only this generation, publish FAILED, never activate/reuse key ID.                    | `TEST-CS-025`–`034` |
 | Terminal HTTP response is lost for a running DKG     | Retain normal DKG/general permits and retry byte-identical request indefinitely; available general capacity continues SIGN.                                       | `TEST-CS-040`–`043` |
+| SIGN claim/result HTTP contract drifts                | Reject the fixture bundle or response before running/terminalizing the session; DKG terminal state is untouched.                                                  | `TEST-CS-073`–`077` |
 | Startup terminal endpoint is unavailable/malformed  | Complete safe handoff, open SIGN intake/readiness, hold no general permit, keep `dkgAdmissionOpen=false` and provisioning unready.                                 | `TEST-CS-053`–`057` |
 | Startup publisher cannot start or accept handoff     | Do not open intake or readiness; retain lifecycle lock until clean shutdown.                                                                                     | `TEST-CS-054` |
 | Startup terminal result is confirmed                 | Record authoritative result, alert on typed conflict, wake scheduler, and consider DKG only after a fresh poll.                                                   | `TEST-CS-056`–`058` |
