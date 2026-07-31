@@ -936,6 +936,11 @@ incoming deliverables it consumes and the outputs it provides.
   preserves the immutable `intentId`, `sessionId`, deadline, deployment owner,
   and payload, and posts only the existing minimal SIGN `COMPLETED`/`FAILED`
   result shape.
+- The strict listing exposes discovery-only `ownClaimedSign[]`. Normal intake
+  combines those entries with `pending[]` and calls the same claim endpoint, so
+  a restarted stable deployment receives the authoritative same-owner payload
+  and deadline replay. Startup reconciliation continues to consume only
+  `ownClaimedDkg[]`.
 - DKG terminal publication remains canonical and fingerprinted. SIGN must never
   enter the DKG terminal publisher, while DKG cannot use the generic SIGN result
   path.
@@ -945,8 +950,9 @@ incoming deliverables it consumes and the outputs it provides.
 - [ ] Vendor the exact `SIGN-CLAIM-HTTP-V1` producer bundle with source commit
       and per-file hashes; prove missing, altered, or unexpected files fail.
 - [ ] Add fixture-driven client tests for SIGN claim success, same-owner replay,
-      typed conflict, immutable payload/deadline preservation, completed result,
-      failed result, and strict unknown-field rejection.
+      restart rediscovery through `ownClaimedSign[]`, typed conflict, immutable
+      payload/deadline preservation, completed result, failed result, and strict
+      unknown-field rejection.
 - [ ] Add routing tests proving SIGN uses generic `PostResult`, DKG uses the
       canonical terminal publisher, and neither parser accepts the other
       intent kind.
