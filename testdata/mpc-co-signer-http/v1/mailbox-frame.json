@@ -1,1 +1,1 @@
-{"authenticatedPartyId":"co-signer-primary","broadcast":false,"fromPartyId":"co-signer-primary","intentId":"intent-123","messageId":"msg-123","orgId":"org-123","payload":"AA==","protocolSeq":1,"round":1,"sessionId":"dkg-123","toPartyId":"mpc-signer"}
+{"authenticatedPartyId":"co-signer-primary","broadcast":false,"fromPartyId":"co-signer-primary","intentId":"intent-123","messageId":"msg_0123456789abcdef","orgId":"org-123","payload":"AA==","protocolSeq":1,"round":1,"sessionId":"123e4567-e89b-42d3-a456-426614174123","toPartyId":"mpc-signer"}

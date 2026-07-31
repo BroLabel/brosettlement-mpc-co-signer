@@ -22,7 +22,7 @@ func TestVerifierAcceptsClosedProducerBundles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyHTTPBundle() error = %v", err)
 	}
-	if httpID != "V0lqMGXjsdi35Jw5Q51QwjZ9uhn8VQxDrfWSYmV04Dc" {
+	if httpID != "i8b8gekJUm6QgKFC7YyK_zFxzthd61QiAPJloDnVfoU" {
 		t.Fatalf("HTTP identity = %q", httpID)
 	}
 }
@@ -216,19 +216,27 @@ func TestSyncPreservesBackupStagingWhenRollbackRestoreFails(t *testing.T) {
 func TestHTTPFixtureValidatorRejectsBadShapesAndStatuses(t *testing.T) {
 	for name, mutate := range map[string]func(t *testing.T, root string){
 		"unknown fixture field": func(t *testing.T, root string) {
-			write(t, filepath.Join(root, "mailbox-frame.json"), []byte(`{"authenticatedPartyId":"co-signer-primary","broadcast":false,"extra":true,"fromPartyId":"co-signer-primary","intentId":"intent-123","messageId":"msg-123","orgId":"org-123","payload":"AA==","protocolSeq":1,"round":1,"sessionId":"dkg-123","toPartyId":"mpc-signer"}`))
+			mutateJSONFixture(t, root, "mailbox-frame.json", func(value map[string]any) { value["extra"] = true })
 		},
 		"wrong response status": func(t *testing.T, root string) {
-			write(t, filepath.Join(root, "accepted-response.json"), []byte(`{"authoritativeResultFingerprint":"ofDGx6fYlS706EETY7HPJYE1XqXCk2qwwdpkGpz5-JU","authoritativeStatus":"COMPLETED","httpStatus":201,"outcome":"ACCEPTED"}`))
+			mutateJSONFixture(t, root, "accepted-response.json", func(value map[string]any) { value["httpStatus"] = 201 })
 		},
 		"mailbox authentication mismatch": func(t *testing.T, root string) {
-			write(t, filepath.Join(root, "mailbox-frame.json"), []byte(`{"authenticatedPartyId":"co-signer-recovery","broadcast":false,"fromPartyId":"co-signer-primary","intentId":"intent-123","messageId":"msg-123","orgId":"org-123","payload":"AA==","protocolSeq":1,"round":1,"sessionId":"dkg-123","toPartyId":"mpc-signer"}`))
+			mutateJSONFixture(t, root, "mailbox-frame.json", func(value map[string]any) { value["authenticatedPartyId"] = "co-signer-recovery" })
 		},
 		"mailbox numeric string": func(t *testing.T, root string) {
-			write(t, filepath.Join(root, "mailbox-frame.json"), []byte(`{"authenticatedPartyId":"co-signer-primary","broadcast":false,"fromPartyId":"co-signer-primary","intentId":"intent-123","messageId":"msg-123","orgId":"org-123","payload":"AA==","protocolSeq":"1","round":1,"sessionId":"dkg-123","toPartyId":"mpc-signer"}`))
+			mutateJSONFixture(t, root, "mailbox-frame.json", func(value map[string]any) { value["protocolSeq"] = "1" })
 		},
 		"null failed result": func(t *testing.T, root string) {
-			write(t, filepath.Join(root, "terminal-failed-request.json"), []byte(`{"terminalResult":{"intentId":"intent-123","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174002","result":null,"resultKind":"mpc-dkg-terminal-result","resultVersion":1,"sessionId":"dkg-123","status":"FAILED"},"terminalResultFingerprint":"xx0XKjmRzBHaiRDVPNRz6qA07rRLru9u0PPoqd9GMSo"}`))
+			mutateJSONFixture(t, root, "terminal-failed-request.json", func(value map[string]any) { value["terminalResult"].(map[string]any)["result"] = nil })
+		},
+		"obsolete mailbox message ID": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "mailbox-frame.json", func(value map[string]any) { value["messageId"] = "msg-123" })
+		},
+		"obsolete DKG session ID": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "listing-response.json", func(value map[string]any) {
+				value["pending"].([]any)[0].(map[string]any)["sessionId"] = "dkg-123"
+			})
 		},
 		"unknown own claimed SIGN field": func(t *testing.T, root string) {
 			mutateJSONFixture(t, root, "listing-response.json", func(value map[string]any) {

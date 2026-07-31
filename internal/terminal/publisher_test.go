@@ -23,7 +23,7 @@ import (
 
 const (
 	fixtureIntentID  = "intent-123"
-	fixtureSessionID = "dkg-123"
+	fixtureSessionID = "123e4567-e89b-42d3-a456-426614174123"
 	fixtureKeyID     = "mpc_key_123e4567-e89b-42d3-a456-426614174002"
 )
 
@@ -282,7 +282,7 @@ func TestPublisherRejectsDuplicateAuthoritativeResponseFieldsWithSlowRetry(t *te
 	fields := []string{
 		`"outcome":"EXACT_REPLAY"`,
 		`"authoritativeStatus":"COMPLETED"`,
-		`"authoritativeResultFingerprint":"ofDGx6fYlS706EETY7HPJYE1XqXCk2qwwdpkGpz5-JU"`,
+		`"authoritativeResultFingerprint":"qQ-8-uXoRxlOUaJKqKRVlycQvqMwP6tNQ1bb6FDl7E0"`,
 		`"httpStatus":200`,
 	}
 	for _, field := range fields {
@@ -364,7 +364,7 @@ func TestPublisherReturnsTypedConflictWithAuthoritativeWinner(t *testing.T) {
 	}
 	if outcome.Kind != OutcomeTerminalConflict ||
 		outcome.AuthoritativeStatus != mpc2of3.TerminalStatusFailed ||
-		outcome.AuthoritativeFingerprint.String() != "xx0XKjmRzBHaiRDVPNRz6qA07rRLru9u0PPoqd9GMSo" {
+		outcome.AuthoritativeFingerprint.String() != "iFdDYnsaTdf44zp0M55qfYVIu_R2J7JhNVNfFWa0RbI" {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 	if alerts.count() != 1 {
@@ -495,8 +495,8 @@ func TestParseJobRejectsUnknownRequestFields(t *testing.T) {
 func TestParseJobRejectsDuplicateWrapperFields(t *testing.T) {
 	fixture := string(readFixture(t, "terminal-failed-request.json"))
 	for _, field := range []string{
-		`"terminalResultFingerprint":"xx0XKjmRzBHaiRDVPNRz6qA07rRLru9u0PPoqd9GMSo"`,
-		`"terminalResult":{"intentId":"intent-123","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174002","resultKind":"mpc-dkg-terminal-result","resultVersion":1,"sessionId":"dkg-123","status":"FAILED"}`,
+		`"terminalResultFingerprint":"iFdDYnsaTdf44zp0M55qfYVIu_R2J7JhNVNfFWa0RbI"`,
+		`"terminalResult":{"intentId":"intent-123","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174002","resultKind":"mpc-dkg-terminal-result","resultVersion":1,"sessionId":"123e4567-e89b-42d3-a456-426614174123","status":"FAILED"}`,
 	} {
 		duplicate := strings.Replace(fixture, field, field+","+field, 1)
 		if _, err := ParseJob([]byte(duplicate)); err == nil {
