@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
@@ -275,6 +276,9 @@ func (r *Router) deliver(ctx context.Context, partyID string, frame protocol.Fra
 		return r.currentError()
 	case <-ctx.Done():
 		return ctx.Err()
+	default:
+		metrics.ObserveRelayQueueOverflow()
+		return ErrQueueOverflow
 	}
 }
 

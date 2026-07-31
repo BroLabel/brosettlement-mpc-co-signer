@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 )
 
 func TestHealthOK(t *testing.T) {
@@ -31,7 +33,18 @@ func TestHealthOK(t *testing.T) {
 	}
 }
 
+func TestReadinessPublishesOnlyCapabilityGauges(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	state := health.NewReadiness()
+	state.Set(health.Snapshot{ProcessReady: true, SigningReady: true})
+	snapshot := metrics.Default.Snapshot()
+	if snapshot["co_signer_process_ready"][""] != 1 || snapshot["co_signer_signing_ready"][""] != 1 || snapshot["co_signer_provisioning_ready"][""] != 0 {
+		t.Fatalf("readiness gauges = %#v", snapshot)
+	}
+}
+
 func TestHealthFailMissingDir(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
 	h := health.NewHandler("0.1.0", "/nonexistent/path/shares")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
@@ -45,6 +58,12 @@ func TestHealthFailMissingDir(t *testing.T) {
 	if body["status"] != "fail" {
 		t.Errorf("got status=%q, want fail", body["status"])
 	}
+	metricsSnapshot := metrics.Default.Snapshot()
+	if metricsSnapshot["co_signer_process_ready"][""] != 0 ||
+		metricsSnapshot["co_signer_signing_ready"][""] != 0 ||
+		metricsSnapshot["co_signer_provisioning_ready"][""] != 0 {
+		t.Fatalf("readiness gauges do not reflect 503 response: %#v", metricsSnapshot)
+	}
 }
 
 func TestHealthOnlyGetAllowed(t *testing.T) {
@@ -55,6 +74,16 @@ func TestHealthOnlyGetAllowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("got status %d, want 405", rec.Code)
+	}
+}
+
+func TestMetricsEndpointRendersOnlySafeRegistryValues(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	metrics.Default.Inc("intent_claims_total", metrics.Labels{"type": "DKG", "outcome": "accepted"})
+	rec := httptest.NewRecorder()
+	health.NewHandler("0.1.0", t.TempDir()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "intent_claims_total") || strings.Contains(rec.Body.String(), "mpc_key_") {
+		t.Fatalf("metrics response = status:%d body:%q", rec.Code, rec.Body.String())
 	}
 }
 
@@ -93,6 +122,28 @@ func TestHealthReportsSplitLifecycleReadiness(t *testing.T) {
 	}
 	if !body.Capabilities["sign"] || body.Capabilities["dkg"] {
 		t.Fatalf("capabilities = %#v, want sign only", body.Capabilities)
+	}
+}
+
+func TestHealthClosesProcessAndSigningForSystemicPrimaryProbeLoss(t *testing.T) {
+	state := health.NewReadiness()
+	state.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
+	available := true
+	h := health.NewLifecycleHandlerWithSigningProbe("0.1.0", t.TempDir(), state, func() bool { return available })
+	available = false
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d, want 503", rec.Code)
+	}
+	if got := state.Snapshot(); !got.ProcessReady || !got.SigningReady || !got.ProvisioningReady {
+		t.Fatalf("probe incorrectly latched lifecycle state=%#v", got)
+	}
+	available = true
+	restored := httptest.NewRecorder()
+	h.ServeHTTP(restored, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if restored.Code != http.StatusOK {
+		t.Fatalf("restored status=%d", restored.Code)
 	}
 }
 

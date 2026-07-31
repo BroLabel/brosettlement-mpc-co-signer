@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
+	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 	ecdsakeygen "github.com/bnb-chain/tss-lib/ecdsa/keygen"
 )
@@ -35,6 +37,86 @@ func TestProductionPreParamsProfileIsStaticAndUsesExplicitParallelism(t *testing
 
 	if _, err := ProductionProfile(0); err == nil {
 		t.Fatal("ProductionProfile(0) error = nil, want invalid parallelism")
+	}
+}
+
+func TestPreparamsMetricsCountConsumedBeforeRuntimeFailureAndConflictsOnce(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	owner := coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(staticPreParamsSource{}))
+	coreHandle, err := owner.AcquireDKGPreParams(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &recordingCoreService{acquired: coreHandle, runErr: errors.New("runtime failure after consume")}
+	controller, err := NewController(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := controller.AcquireDKGPreParams(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.RunDKGSessionWithPreParams(context.Background(), validDKGRequest(), handle); err == nil {
+		t.Fatal("runtime failure was lost")
+	}
+	if _, err := controller.RunDKGSessionWithPreParams(context.Background(), validDKGRequest(), handle); !errors.Is(err, coretss.ErrPreParamsConsumed) {
+		t.Fatalf("repeat run=%v", err)
+	}
+	got := metrics.Default.Snapshot()
+	if got["preparams_consumed_total"][""] != 1 || got["preparams_consume_conflict_total"][""] != 1 {
+		t.Fatalf("transitions=%#v", got)
+	}
+}
+
+func TestPreparamsMetricsCountDiscardOnlyOnceUnderConcurrentRepeats(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	owner := coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(staticPreParamsSource{}))
+	coreHandle, err := owner.AcquireDKGPreParams(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewController(&recordingCoreService{acquired: coreHandle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := controller.AcquireDKGPreParams(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for range 2 {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = handle.Discard() }()
+	}
+	wg.Wait()
+	got := metrics.Default.Snapshot()
+	if got["preparams_discarded_before_start_total"][""] != 1 || got["preparams_consume_conflict_total"][""] != 0 {
+		t.Fatalf("transitions=%#v", got)
+	}
+}
+
+func TestInvalidPreparamsRequestLeavesHandleAcquiredForDiscard(t *testing.T) {
+	owner := coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(staticPreParamsSource{}))
+	coreHandle, err := owner.AcquireDKGPreParams(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := NewController(&recordingCoreService{acquired: coreHandle})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := controller.AcquireDKGPreParams(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.RunDKGSessionWithPreParams(context.Background(), coretss.DKGSessionRequest{}, handle); err == nil {
+		t.Fatal("invalid request accepted")
+	}
+	if err := handle.Discard(); err != nil {
+		t.Fatalf("discard after invalid request: %v", err)
+	}
+	if err := handle.Discard(); err != nil {
+		t.Fatalf("idempotent discard: %v", err)
 	}
 }
 
@@ -181,7 +263,7 @@ func TestPreParamsControllerKeepsCoreHandleOpaqueUntilRunOrDiscard(t *testing.T)
 	if handle == nil {
 		t.Fatal("controller returned nil opaque handle")
 	}
-	request := coretss.DKGSessionRequest{}
+	request := validDKGRequest()
 	if _, err := controller.RunDKGSessionWithPreParams(context.Background(), request, handle); err != nil {
 		t.Fatalf("RunDKGSessionWithPreParams() error = %v", err)
 	}
@@ -200,6 +282,17 @@ func TestPreParamsControllerKeepsCoreHandleOpaqueUntilRunOrDiscard(t *testing.T)
 
 type staticPreParamsSource struct{}
 
+type validatingTransport struct{}
+
+func (validatingTransport) SendFrame(context.Context, protocol.Frame) error { return nil }
+func (validatingTransport) RecvFrame(context.Context) (protocol.Frame, error) {
+	return protocol.Frame{}, context.Canceled
+}
+
+func validDKGRequest() coretss.DKGSessionRequest {
+	return coretss.DKGSessionRequest{Session: coretss.DKGSessionDescriptor{SessionID: "dkg-1", OrgID: "org-1", Parties: []string{"a", "b"}, Threshold: 2, Algorithm: "TEST"}, LocalPartyID: "b", Transport: validatingTransport{}}
+}
+
 func (staticPreParamsSource) Acquire(context.Context) (*ecdsakeygen.LocalPreParams, error) {
 	return &ecdsakeygen.LocalPreParams{}, nil
 }
@@ -209,6 +302,7 @@ type recordingCoreService struct {
 	snapshot    coretss.Snapshot
 	acquired    coretss.DKGPreParamsHandle
 	run         coretss.DKGPreParamsHandle
+	runErr      error
 	pauses      int
 	resumes     int
 	pauseSignal chan struct{}
@@ -229,6 +323,9 @@ func (s *recordingCoreService) RunDKGSessionWithPreParams(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.run = handle
+	if s.runErr != nil {
+		return coretss.DKGOutput{}, s.runErr
+	}
 	return coretss.DKGOutput{KeyID: request.Session.KeyID}, nil
 }
 

@@ -54,6 +54,7 @@ func (c *Client) GetPendingIntents(ctx context.Context) ([]Intent, error) {
 	intents := make([]Intent, 0, len(listing.Pending))
 	for _, item := range listing.Pending {
 		intents = append(intents, Intent{
+			CreatedAt: item.CreatedAt,
 			IntentID:  item.IntentID,
 			SessionID: item.SessionID,
 			Type:      item.Type,

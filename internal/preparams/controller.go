@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
@@ -36,16 +37,28 @@ type coreService interface {
 type Controller struct {
 	service coreService
 
-	mu        sync.Mutex
-	jobActive bool
-	ready     bool
-	wakeups   chan struct{}
+	mu         sync.Mutex
+	jobActive  bool
+	ready      bool
+	generating bool
+	startedAt  time.Time
+	wakeups    chan struct{}
 }
 
 type serviceHandle struct {
 	owner *Controller
 	core  coretss.DKGPreParamsHandle
+	mu    sync.Mutex
+	state handleState
 }
+
+type handleState uint8
+
+const (
+	handleAcquired handleState = iota
+	handleConsumed
+	handleDiscarded
+)
 
 func NewController(service coreService) (*Controller, error) {
 	if service == nil {
@@ -97,9 +110,19 @@ func (c *Controller) AdmissionHint() bool {
 
 func (c *Controller) observe() bool {
 	snapshot := c.service.Snapshot()
+	metrics.ObservePreparams(float64(snapshot.PreParamsPoolSize), float64(snapshot.PreParamsGenerationInFlight))
 	ready := snapshot.PreParamsPoolSize >= 2 && snapshot.PreParamsGenerationInFlight == 0
 
 	c.mu.Lock()
+	if snapshot.PreParamsGenerationInFlight > 0 && !c.generating {
+		c.generating = true
+		c.startedAt = time.Now()
+	}
+	if snapshot.PreParamsGenerationInFlight == 0 && c.generating {
+		metrics.ObservePreparamsGeneration(time.Since(c.startedAt).Seconds())
+		c.generating = false
+		c.startedAt = time.Time{}
+	}
 	if c.jobActive {
 		ready = false
 	}
@@ -142,6 +165,7 @@ func (c *Controller) BeginJob(ctx context.Context) (func(), error) {
 		c.jobActive = false
 		c.mu.Unlock()
 		c.observe()
+		metrics.ObservePreparamsTransition("discarded_before_start")
 		return nil, err
 	}
 	var once sync.Once
@@ -180,12 +204,15 @@ func (c *Controller) AcquireDKGPreParams(ctx context.Context) (Handle, error) {
 	}
 	handle, err := c.service.AcquireDKGPreParams(ctx)
 	if err != nil {
+		metrics.ObservePreparamsTransition("acquire_failed")
 		return nil, err
 	}
 	if handle == nil {
+		metrics.ObservePreparamsTransition("acquire_failed")
 		return nil, ErrInvalidHandle
 	}
-	return &serviceHandle{owner: c, core: handle}, nil
+	metrics.ObservePreparamsTransition("acquired")
+	return &serviceHandle{owner: c, core: handle, state: handleAcquired}, nil
 }
 
 func (c *Controller) RunDKGSessionWithPreParams(
@@ -200,14 +227,48 @@ func (c *Controller) RunDKGSessionWithPreParams(
 	if owned.owner != c {
 		return coretss.DKGOutput{}, ErrForeignHandle
 	}
-	return c.service.RunDKGSessionWithPreParams(ctx, request, owned.core)
+	if err := request.Validate(); err != nil {
+		return coretss.DKGOutput{}, err
+	}
+	owned.mu.Lock()
+	if owned.state != handleAcquired {
+		state := owned.state
+		owned.mu.Unlock()
+		metrics.ObservePreparamsTransition("consume_conflict")
+		if state == handleConsumed {
+			return coretss.DKGOutput{}, coretss.ErrPreParamsConsumed
+		}
+		return coretss.DKGOutput{}, coretss.ErrPreParamsDiscarded
+	}
+	// The core atomically consumes before constructing a party. Once this
+	// invocation is accepted, later protocol/runtime failure cannot unconsume it.
+	owned.state = handleConsumed
+	owned.mu.Unlock()
+	metrics.ObservePreparamsTransition("consumed")
+	output, err := c.service.RunDKGSessionWithPreParams(ctx, request, owned.core)
+	return output, err
 }
 
 func (h *serviceHandle) Discard() error {
 	if h == nil || h.core == nil {
 		return ErrInvalidHandle
 	}
-	return h.core.Discard()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.state != handleAcquired {
+		if h.state == handleConsumed {
+			metrics.ObservePreparamsTransition("consume_conflict")
+			return coretss.ErrPreParamsConsumed
+		}
+		return nil
+	}
+	err := h.core.Discard()
+	if err != nil {
+		return err
+	}
+	h.state = handleDiscarded
+	metrics.ObservePreparamsTransition("discarded_before_start")
+	return err
 }
 
 var _ Handle = (*serviceHandle)(nil)

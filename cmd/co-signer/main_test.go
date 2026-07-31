@@ -11,6 +11,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +33,75 @@ func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T
 	}
 	if recovery.calls != 0 {
 		t.Fatalf("recovery probe calls = %d, want 0 after primary failure", recovery.calls)
+	}
+}
+
+func TestVerifyMPC2of3PropagatesMandatoryChildFailure(t *testing.T) {
+	bin := t.TempDir()
+	writeCommand := func(name, body string) {
+		t.Helper()
+		path := filepath.Join(bin, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeCommand("uname", "echo Linux")
+	writeCommand("grep", "exit 1")
+	writeCommand("go", "exit 23")
+	command := exec.Command("/bin/sh", filepath.Join("..", "..", "scripts", "verify-mpc-2of3.sh"))
+	command.Env = append(os.Environ(), "PATH="+bin, "GOWORK=on")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatal("verify script accepted a failing mandatory child")
+	}
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 23 {
+		t.Fatalf("exit = %v, output=%s", err, output)
+	}
+}
+
+func TestRecoveryDocumentationStatesTopologyAndSupportBoundary(t *testing.T) {
+	paths := []string{
+		filepath.Join("..", "..", "README.md"),
+		filepath.Join("..", "..", "SECURITY.md"),
+		filepath.Join("..", "..", "docs", "artifact-format-v1.md"),
+		filepath.Join("..", "..", "docs", "runbooks", "recovery-artifact.md"),
+	}
+	needles := []string{"one co-signer replica", "no overlap", "one writable", "stable lock", "not distributed", "FUTURE-001"}
+	for _, path := range paths {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if len(contents) == 0 {
+			t.Fatalf("empty operational document %s", path)
+		}
+	}
+	combined := ""
+	for _, path := range paths {
+		contents, _ := os.ReadFile(path)
+		combined += string(contents)
+	}
+	for _, needle := range needles {
+		if !strings.Contains(strings.ToLower(combined), strings.ToLower(needle)) {
+			t.Fatalf("documentation missing %q", needle)
+		}
+	}
+}
+
+func TestArtifactInventoryExportsAggregateOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mpc_key_123e4567-e89b-42d3-a456-426614174000.primary.json"), []byte("B"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".artifact.tmp-1"), []byte("tmp"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	files, temporary, bytes, _, err := artifactInventory([]string{dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files != 1 || temporary != 1 || bytes != 1 {
+		t.Fatalf("aggregate inventory = files:%d temporary:%d bytes:%d", files, temporary, bytes)
 	}
 }
 

@@ -12,7 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/transport"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
@@ -121,9 +123,30 @@ func runSessionWithPermits(
 		log.Error("unsupported admitted intent type")
 		return
 	}
+	metricKind := "SIGN"
+	if admittedKind == intentKindDKG {
+		metricKind = "DKG"
+	}
+	metrics.JobStarted(metricKind)
+	started := time.Now()
+	defer func() {
+		metrics.JobFinished(metricKind)
+		metrics.ObserveSessionDuration(metricKind, time.Since(started).Seconds())
+	}()
 
 	claim, err := client.ClaimIntent(ctx, intent.IntentID)
 	if err != nil {
+		outcome := "failed"
+		if errors.Is(err, monolith.ErrAlreadyClaimed) {
+			outcome = "conflict"
+		}
+		if errors.Is(err, monolith.ErrClaimOutcomeUnknown) {
+			outcome = "unknown"
+		}
+		metrics.ObserveClaim(metricKind, outcome)
+		if admittedKind == intentKindDKG && errors.Is(err, monolith.ErrAlreadyClaimed) {
+			metrics.ObserveClaimConflict()
+		}
 		permits.Release()
 		if claimDispatched != nil {
 			claimDispatched()
@@ -140,12 +163,16 @@ func runSessionWithPermits(
 		}
 		return
 	}
+	metrics.ObserveClaim(metricKind, "accepted")
 	if claimDispatched != nil {
 		claimDispatched()
 	}
 	claimedIntent := claim.Intent()
 	claimedKind, claimedKindOK := classifyIntentKind(claimedIntent.Type)
 	if !claimedKindOK || claimedKind != admittedKind {
+		if admittedKind == intentKindDKG {
+			metrics.ObserveClaimConflict()
+		}
 		log.Error("claimed intent kind mismatch")
 		if admittedKind == intentKindDKG {
 			if !publishClaimedDKGFailure(ctx, terminalPublisher, claimedIntent, log) && ctx.Err() == nil {
@@ -212,6 +239,9 @@ func runSessionWithPermits(
 		dkgResult, runErr = dkgRunner.Run(sessionCtx, intent, tr)
 	case "SIGN":
 		runErr = signRunner.RunSignSession(sessionCtx, buildSignRequest(intent, localPartyID, tr))
+		if isPrimarySigningArtifactFailure(runErr) {
+			log.Error("critical primary signing material failure", "alert_class", "primary_material_unavailable")
+		}
 	default:
 		runErr = fmt.Errorf("%w: unknown intent type: %s", errInvalidIntent, intent.Type)
 	}
@@ -248,6 +278,13 @@ func runSessionWithPermits(
 
 	result := BuildResult(runErr, sessionCtx, intent)
 	postResult(ctx, client, intent.IntentID, result, log)
+}
+
+func isPrimarySigningArtifactFailure(err error) bool {
+	return errors.Is(err, coretss.ErrShareNotFound) ||
+		errors.Is(err, sharestore.ErrArtifactBinding) ||
+		errors.Is(err, coretss.ErrInvalidSharePayload) ||
+		errors.Is(err, coretss.ErrMetadataMismatch)
 }
 
 func publishClaimedDKGFailure(
@@ -342,7 +379,7 @@ func BuildResult(runErr error, sessionCtx context.Context, _ monolith.Intent) mo
 		return failedResult(ErrorCodeShareNotFound, runErr)
 	case errors.Is(runErr, coretss.ErrInvalidSharePayload):
 		return failedResult(ErrorCodeInvalidSharePayload, runErr)
-	case errors.Is(runErr, coretss.ErrMetadataMismatch):
+	case errors.Is(runErr, sharestore.ErrArtifactBinding), errors.Is(runErr, coretss.ErrMetadataMismatch):
 		return failedResult(ErrorCodeShareMetadata, runErr)
 	case errors.Is(runErr, coretss.ErrMissingDKGPublicKey):
 		return failedResult(ErrorCodeMissingPublicKey, runErr)

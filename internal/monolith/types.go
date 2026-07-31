@@ -9,6 +9,7 @@ import (
 )
 
 type Intent struct {
+	CreatedAt time.Time
 	IntentID  string        `json:"intentId"`
 	SessionID string        `json:"sessionId"`
 	Type      string        `json:"type"`

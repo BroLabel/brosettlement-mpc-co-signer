@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/reconcile"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
 )
@@ -21,16 +22,19 @@ type Dependencies struct {
 	Reconcile           func(context.Context) (reconcile.Result, error)
 	Handoff             func(context.Context, terminal.Job, func(terminal.PublishResult)) error
 	SetDKGAdmissionOpen func(bool)
-	ProvisioningReady   func() bool
-	StartScheduler      func(context.Context)
-	WakeScheduler       func()
-	StartIntake         func(context.Context) error
-	StopIntake          func(context.Context) error
-	Drain               func(context.Context) error
-	WaitPublisher       func()
-	Readiness           *health.Readiness
-	OnReadiness         func(bool)
-	OnCancel            func()
+	// SigningReady reports systemic primary-store/shared-key availability. A
+	// key-specific B failure is reported by that SIGN only and must not flip it.
+	SigningReady      func() bool
+	ProvisioningReady func() bool
+	StartScheduler    func(context.Context)
+	WakeScheduler     func()
+	StartIntake       func(context.Context) error
+	StopIntake        func(context.Context) error
+	Drain             func(context.Context) error
+	WaitPublisher     func()
+	Readiness         *health.Readiness
+	OnReadiness       func(bool)
+	OnCancel          func()
 }
 
 type Coordinator struct {
@@ -95,6 +99,7 @@ func (c *Coordinator) Start(parent context.Context) (err error) {
 	if err != nil {
 		return fmt.Errorf("acquire lifetime lock: %w", err)
 	}
+	metrics.SetLockHeld(true)
 	c.capabilities, err = c.deps.OpenCapabilities(ctx)
 	if err != nil {
 		return fmt.Errorf("open signing and provisioning capabilities: %w", err)
@@ -119,8 +124,10 @@ func (c *Coordinator) Start(parent context.Context) (err error) {
 
 	switch result.Disposition {
 	case reconcile.DispositionEligible:
+		metrics.SetTerminalUnconfirmed(false)
 		c.setAdmission(true)
 	case reconcile.DispositionCapabilityDeferred:
+		metrics.SetTerminalUnconfirmed(false)
 		c.mu.Lock()
 		c.latched = true
 		c.mu.Unlock()
@@ -130,6 +137,7 @@ func (c *Coordinator) Start(parent context.Context) (err error) {
 			return errors.New("reconciliation requires publication without an immutable job")
 		}
 		c.setAdmission(false)
+		metrics.SetTerminalUnconfirmed(true)
 		if err = c.deps.Handoff(ctx, *result.Job, c.publicationDone); err != nil {
 			return fmt.Errorf("handoff startup terminal publication: %w", err)
 		}
@@ -147,10 +155,11 @@ func (c *Coordinator) Start(parent context.Context) (err error) {
 		return fmt.Errorf("start normal intake: %w", err)
 	}
 
-	snapshot := health.Snapshot{ProcessReady: true, SigningReady: true}
+	signingReady := c.deps.SigningReady == nil || c.deps.SigningReady()
+	snapshot := health.Snapshot{ProcessReady: signingReady, SigningReady: signingReady}
 	switch result.Disposition {
 	case reconcile.DispositionEligible:
-		snapshot.ProvisioningReady = c.deps.ProvisioningReady()
+		snapshot.ProvisioningReady = signingReady && c.deps.ProvisioningReady()
 		if !snapshot.ProvisioningReady {
 			snapshot.ProvisioningReason = health.ReasonProvisioningUnavailable
 		}
@@ -190,6 +199,7 @@ func (c *Coordinator) publicationDone(result terminal.PublishResult) {
 	c.mu.Unlock()
 
 	c.setAdmission(true)
+	metrics.SetTerminalUnconfirmed(false)
 	c.mu.Lock()
 	if c.stopping || c.latched {
 		c.mu.Unlock()
@@ -255,6 +265,7 @@ func (c *Coordinator) shutdown(ctx context.Context, stopIntake bool) error {
 		ctx = context.Background()
 	}
 	c.deps.Readiness.Set(health.Snapshot{})
+	metrics.SetTerminalUnconfirmed(false)
 	if c.deps.OnReadiness != nil {
 		c.deps.OnReadiness(false)
 	}
@@ -278,6 +289,7 @@ func (c *Coordinator) shutdown(ctx context.Context, stopIntake bool) error {
 	if c.lock != nil {
 		errs = appendError(errs, c.lock.Close())
 		c.lock = nil
+		metrics.SetLockHeld(false)
 	}
 	return errors.Join(errs...)
 }

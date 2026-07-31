@@ -81,6 +81,7 @@ func main() {
 		ProvisioningReady: func() bool {
 			return resources.provisioningReady()
 		},
+		SigningReady: func() bool { return resources != nil && resources.signingReady() },
 		StartScheduler: func(schedulerCtx context.Context) {
 			resources.startScheduler(schedulerCtx)
 		},
@@ -144,6 +145,7 @@ type applicationResources struct {
 	reconciler        *reconcile.Reconciler
 	healthServer      *http.Server
 	provisioningReady func() bool
+	signingReady      func() bool
 	background        sync.WaitGroup
 }
 
@@ -267,6 +269,7 @@ func openApplicationResources(
 			filesystemFreeBytes,
 		)
 	}
+	signingReady := func() bool { return primaryReader.ProbeReadCapability() == nil }
 	scheduler := worker.NewScheduler(
 		client,
 		tssService,
@@ -278,6 +281,7 @@ func openApplicationResources(
 			MaxInterval:        cfg.PollMaxInterval,
 			BackoffFactor:      cfg.PollBackoffFactor,
 			ProvisioningHint:   provisioningReady,
+			PreparamsHint:      preParamsController.AdmissionHint,
 			ProvisioningWakeup: preParamsController.Wakeups(),
 			TerminalPublisher:  terminalPublisher,
 		},
@@ -290,9 +294,10 @@ func openApplicationResources(
 		startupPublisher:  startupPublisher,
 		reconciler:        actionableReconciler,
 		provisioningReady: provisioningReady,
+		signingReady:      signingReady,
 		healthServer: &http.Server{
 			Addr:    cfg.HTTPAddr,
-			Handler: health.NewLifecycleHandler(version, cfg.StateDir, readiness),
+			Handler: health.NewLifecycleHandlerWithSigningProbe(version, cfg.StateDir, readiness, signingReady),
 		},
 	}
 	if preParamsCapabilityErr == nil {

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 )
 
@@ -23,8 +24,10 @@ type SchedulerConfig struct {
 	MaxInterval        time.Duration
 	BackoffFactor      float64
 	ProvisioningHint   func() bool
+	PreparamsHint      func() bool
 	ProvisioningWakeup <-chan struct{}
 	TerminalPublisher  DKGTerminalPublisher
+	Now                func() time.Time
 }
 
 type sessionLauncher func(context.Context, monolith.Intent, *jobPermitLease) <-chan struct{}
@@ -60,6 +63,9 @@ func NewScheduler(
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
 	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
 	repollCh := make(chan struct{}, 1)
 	scheduler := &Scheduler{
 		client:            client,
@@ -74,6 +80,8 @@ func NewScheduler(
 	}
 	scheduler.launch = scheduler.launchSession
 	scheduler.forwardWakeups = scheduler.forwardProvisioningWakeups
+	metrics.SetDKGAdmission(false)
+	metrics.SetDKGGuard(false)
 	return scheduler
 }
 
@@ -126,6 +134,7 @@ func (s *Scheduler) SetDKGAdmissionOpen(open bool) {
 		return
 	}
 	s.dkgAdmissionOpen.Store(open)
+	metrics.SetDKGAdmission(open)
 	if open {
 		s.Wake()
 	}
@@ -163,6 +172,17 @@ func (s *Scheduler) forwardProvisioningWakeups(ctx context.Context) {
 }
 
 func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent) {
+	var dkg, sign float64
+	for _, intent := range intents {
+		if kind, ok := classifyIntentKind(intent.Type); ok && kind == intentKindDKG {
+			dkg++
+		} else if ok {
+			sign++
+		}
+	}
+	now := s.cfg.Now()
+	metrics.ObservePending("DKG", oldestPendingAge(intents, intentKindDKG, now), dkg)
+	metrics.ObservePending("SIGN", oldestPendingAge(intents, intentKindSIGN, now), sign)
 	dkgConsidered := false
 	for _, intent := range intents {
 		kind, ok := classifyIntentKind(intent.Type)
@@ -176,7 +196,13 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 				continue
 			}
 			dkgConsidered = true
-			if !s.DKGAdmissionOpen() || !s.provisioningReady() {
+			if !s.DKGAdmissionOpen() {
+				continue
+			}
+			if !s.provisioningReady() {
+				if s.cfg.PreparamsHint != nil && !s.cfg.PreparamsHint() {
+					metrics.ObserveDKGSkippedPreparams()
+				}
 				continue
 			}
 			permits := s.permits.tryAcquireDKG()
@@ -196,6 +222,27 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 			}
 		}
 	}
+}
+
+func oldestPendingAge(intents []monolith.Intent, want intentKind, now time.Time) float64 {
+	var oldest time.Time
+	for _, intent := range intents {
+		kind, ok := classifyIntentKind(intent.Type)
+		if !ok || kind != want || intent.CreatedAt.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || intent.CreatedAt.Before(oldest) {
+			oldest = intent.CreatedAt
+		}
+	}
+	if oldest.IsZero() {
+		return 0
+	}
+	age := now.Sub(oldest).Seconds()
+	if age < 0 {
+		return 0
+	}
+	return age
 }
 
 func waitForClaimDispatch(ctx context.Context, dispatched <-chan struct{}) bool {

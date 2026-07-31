@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 )
 
 type Reason string
@@ -37,6 +40,7 @@ func NewReadiness() *Readiness {
 func (r *Readiness) Set(snapshot Snapshot) {
 	if r != nil {
 		r.value.Store(snapshot)
+		metrics.SetReadiness(snapshot.ProcessReady, snapshot.SigningReady, snapshot.ProvisioningReady)
 	}
 }
 
@@ -67,9 +71,10 @@ type response struct {
 }
 
 type Handler struct {
-	version   string
-	sharesDir string
-	readiness *Readiness
+	version      string
+	sharesDir    string
+	readiness    *Readiness
+	signingProbe func() bool
 }
 
 func NewHandler(version, sharesDir string) http.Handler {
@@ -79,10 +84,15 @@ func NewHandler(version, sharesDir string) http.Handler {
 }
 
 func NewLifecycleHandler(version, sharesDir string, readiness *Readiness) http.Handler {
+	return NewLifecycleHandlerWithSigningProbe(version, sharesDir, readiness, nil)
+}
+
+func NewLifecycleHandlerWithSigningProbe(version, sharesDir string, readiness *Readiness, signingProbe func() bool) http.Handler {
 	return &Handler{
-		version:   version,
-		sharesDir: sharesDir,
-		readiness: readiness,
+		version:      version,
+		sharesDir:    sharesDir,
+		readiness:    readiness,
+		signingProbe: signingProbe,
 	}
 }
 
@@ -91,6 +101,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if r.URL.Path == "/metrics" {
+		metrics.ObserveGoRuntime()
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write([]byte(strings.Join(metrics.Default.Render(), "\n") + "\n"))
+		return
+	}
+	metrics.ObserveGoRuntime()
 
 	sharesDirCheck := checkResult{
 		Status:   "ok",
@@ -102,6 +119,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snapshot := h.readiness.Snapshot()
+	if h.signingProbe != nil && !h.signingProbe() {
+		snapshot.ProcessReady = false
+		snapshot.SigningReady = false
+		snapshot.ProvisioningReady = false
+		snapshot.ProvisioningReason = ReasonProvisioningUnavailable
+	}
 	resp := response{
 		Status:             "ok",
 		Ready:              snapshot.ProcessReady,
@@ -129,6 +152,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp.SigningReady = false
 		resp.ProvisioningReady = false
 	}
+	metrics.SetReadiness(resp.ProcessReady, resp.SigningReady, resp.ProvisioningReady)
 
 	w.Header().Set("Content-Type", "application/json")
 	statusCode := http.StatusOK

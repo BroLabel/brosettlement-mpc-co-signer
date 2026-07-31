@@ -208,6 +208,9 @@ func TestGetPendingIntentsExcludesOwnClaimedDKGFromStrictListing(t *testing.T) {
 		pending[1].IntentID != "intent-124" || pending[1].Type != "SIGN" {
 		t.Fatalf("pending = %+v, want backend pending collection only", pending)
 	}
+	if pending[0].CreatedAt.IsZero() || pending[1].CreatedAt.IsZero() || !pending[0].CreatedAt.Before(pending[1].CreatedAt) {
+		t.Fatalf("pending createdAt values were not preserved: %+v", pending)
+	}
 }
 
 func TestListActionableIntentsRejectsNonStrictListingContract(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 )
 
@@ -211,6 +212,7 @@ func (p *Publisher) Publish(ctx context.Context, job Job) (Outcome, error) {
 		if err := ctx.Err(); err != nil {
 			return Outcome{}, err
 		}
+		metrics.ObserveTerminalAttempt()
 		response, err := p.sender.PostTerminalResult(ctx, job.intentID, body)
 		if err != nil {
 			if ctx.Err() != nil {
@@ -238,6 +240,7 @@ func (p *Publisher) Publish(ctx context.Context, job Job) (Outcome, error) {
 			outcome, err := validateResponse(response, job)
 			if err == nil {
 				if outcome.Kind == OutcomeTerminalConflict {
+					metrics.ObserveTerminalConflict()
 					p.alert(response.StatusCode, "terminal_conflict")
 				}
 				return outcome, nil

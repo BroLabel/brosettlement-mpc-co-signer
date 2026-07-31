@@ -33,6 +33,21 @@ func TestCoordinatorStartsLockFirstAndPublishesReadinessLast(t *testing.T) {
 	}
 }
 
+func TestCoordinatorFailsProcessReadinessWhenPrimarySigningCapabilityIsSystemicallyUnavailable(t *testing.T) {
+	var events eventLog
+	deps := successfulDependencies(&events, reconcile.Result{Disposition: reconcile.DispositionEligible})
+	deps.SigningReady = func() bool { return false }
+	coordinator := mustCoordinator(t, deps)
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	t.Cleanup(func() { _ = coordinator.Shutdown(context.Background()) })
+	got := deps.Readiness.Snapshot()
+	if got.ProcessReady || got.SigningReady || got.ProvisioningReady {
+		t.Fatalf("systemic primary outage readiness = %#v", got)
+	}
+}
+
 func TestCoordinatorRequiresStartedPublisherHandoffBeforeIntake(t *testing.T) {
 	job, err := terminal.NewFailedJob("intent-1", "session-1", "mpc_key_123e4567-e89b-42d3-a456-426614174000")
 	if err != nil {

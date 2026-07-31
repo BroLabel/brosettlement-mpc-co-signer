@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
@@ -115,7 +116,11 @@ func New(
 	}, nil
 }
 
-func (r *Reconciler) Reconcile(ctx context.Context) (Result, error) {
+func (r *Reconciler) Reconcile(ctx context.Context) (result Result, returnErr error) {
+	started := time.Now()
+	defer func() {
+		metrics.ObserveReconciliation(time.Since(started).Seconds(), returnErr != nil || result.Disposition == DispositionProtocolIntegrity)
+	}()
 	if ctx == nil {
 		ctx = context.Background()
 	}

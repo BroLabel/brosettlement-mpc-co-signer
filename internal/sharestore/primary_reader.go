@@ -43,4 +43,25 @@ func (r *PrimaryReader) LoadShare(ctx context.Context, keyID string) (*coretss.S
 	return stored, nil
 }
 
+// ProbeReadCapability is a read-only systemic capability check. It neither
+// enumerates nor opens artifacts, so one corrupt B remains key-specific.
+func (r *PrimaryReader) ProbeReadCapability() error {
+	if r == nil || r.store == nil || r.store.config.keyProvider == nil || r.store.config.keyProvider.KeyRef() == "" {
+		return errors.New("primary share reader key provider is unavailable")
+	}
+	directory, err := os.Open(r.store.config.Directory())
+	if err != nil {
+		return fmt.Errorf("open primary artifact directory read-only: %w", err)
+	}
+	defer directory.Close()
+	info, err := directory.Stat()
+	if err != nil {
+		return fmt.Errorf("stat primary artifact directory: %w", err)
+	}
+	if !info.IsDir() {
+		return errors.New("primary artifact path is not a directory")
+	}
+	return nil
+}
+
 var _ coretss.ShareReader = (*PrimaryReader)(nil)

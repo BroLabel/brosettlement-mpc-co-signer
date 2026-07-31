@@ -12,7 +12,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 )
 
 type artifactCapabilityProber interface {
@@ -44,16 +49,62 @@ func dkgProvisioningAdmissionHint(
 	freeSpaceThreshold uint64,
 	freeSpace freeSpaceReader,
 ) bool {
+	files, temporary, bytes, oldest, inventoryErr := artifactInventory(artifactDirectories)
+	if inventoryErr == nil {
+		metrics.ObserveArtifactInventory(float64(files), float64(temporary), float64(bytes), oldest, 0)
+	}
 	if preparams == nil || !preparams.AdmissionHint() || freeSpaceThreshold == 0 || freeSpace == nil {
 		return false
 	}
 	for _, directory := range artifactDirectories {
 		available, err := freeSpace(directory)
+		if err == nil {
+			metrics.ObserveArtifactInventory(float64(files), float64(temporary), float64(bytes), oldest, float64(available))
+		}
 		if err != nil || available < freeSpaceThreshold {
 			return false
 		}
 	}
 	return true
+}
+
+// artifactInventory deliberately observes only aggregate filesystem shape. It
+// does not decrypt, open, classify terminal state, or return a file name/key ID.
+func artifactInventory(directories []string) (files, temporary, bytes uint64, oldestAge float64, returnErr error) {
+	now := time.Now()
+	var oldest time.Time
+	for _, directory := range directories {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		for _, entry := range entries {
+			info, err := entry.Info()
+			if err != nil {
+				return 0, 0, 0, 0, err
+			}
+			name := filepath.Base(entry.Name())
+			if strings.HasPrefix(name, ".") {
+				temporary++
+				continue
+			}
+			if !info.Mode().IsRegular() || (!strings.HasSuffix(name, ".primary.json") && !strings.HasSuffix(name, ".recovery.json")) {
+				continue
+			}
+			files++
+			bytes += uint64(info.Size())
+			if oldest.IsZero() || info.ModTime().Before(oldest) {
+				oldest = info.ModTime()
+			}
+		}
+	}
+	if !oldest.IsZero() {
+		oldestAge = now.Sub(oldest).Seconds()
+		if oldestAge < 0 {
+			oldestAge = 0
+		}
+	}
+	return files, temporary, bytes, oldestAge, nil
 }
 
 func decodePrivateKey(raw string) (ed25519.PrivateKey, error) {

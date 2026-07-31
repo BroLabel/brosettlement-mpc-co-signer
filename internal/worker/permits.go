@@ -1,6 +1,10 @@
 package worker
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
+)
 
 type permitPool struct {
 	slots chan struct{}
@@ -100,6 +104,7 @@ func (p *schedulerPermits) tryAcquireDKG() *jobPermitLease {
 		guard.release()
 		return nil
 	}
+	metrics.SetDKGGuard(true)
 	return &jobPermitLease{
 		general: &generalPermitToken{token: general},
 		dkg:     &dkgGuardPermitToken{token: guard},
@@ -124,6 +129,9 @@ func (p *jobPermitLease) Release() {
 	p.once.Do(func() {
 		p.general.release()
 		p.dkg.release()
+		if p.dkg != nil {
+			metrics.SetDKGGuard(false)
+		}
 		if p.wakeups != nil {
 			select {
 			case p.wakeups <- struct{}{}:

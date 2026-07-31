@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
@@ -31,7 +32,8 @@ func (s *Store) Exists(ctx context.Context, keyID string) (bool, error) {
 	}
 }
 
-func (s *Store) InspectExisting(ctx context.Context, expected ExpectedArtifactContext) (ArtifactEvidence, error) {
+func (s *Store) InspectExisting(ctx context.Context, expected ExpectedArtifactContext) (evidence ArtifactEvidence, returnErr error) {
+	defer func() { metrics.ObserveArtifactInspection(returnErr == nil) }()
 	if err := ctx.Err(); err != nil {
 		return ArtifactEvidence{}, err
 	}

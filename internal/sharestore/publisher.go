@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 )
 
 const capabilityProbeEntropyBytes = 16
@@ -148,7 +150,8 @@ func probePublishCapability(
 	return nil
 }
 
-func (s *Store) PublishAndInspect(ctx context.Context, input PublishInput) (ArtifactEvidence, error) {
+func (s *Store) PublishAndInspect(ctx context.Context, input PublishInput) (evidence ArtifactEvidence, returnErr error) {
+	defer func() { metrics.ObserveArtifactPublish(returnErr == nil) }()
 	if err := ctx.Err(); err != nil {
 		return ArtifactEvidence{}, err
 	}

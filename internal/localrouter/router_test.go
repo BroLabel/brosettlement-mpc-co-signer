@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/localrouter"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 )
 
@@ -75,6 +76,33 @@ func TestRouterDeliversLocalFramesAndSendsOnlyPlatformFramesToNetwork(t *testing
 	}
 	if got := network.recvSent(t); !sameFrame(got, broadcast) {
 		t.Fatalf("network broadcast = %+v, want %+v", got, broadcast)
+	}
+}
+
+func TestRouterFailsClosedAndCountsWhenBoundedQueueOverflows(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	network := newScriptedTransport()
+	router, err := localrouter.New(network, localrouter.Config{SessionID: testSession, PlatformPartyID: platformID, PrimaryPartyID: primaryID, RecoveryPartyID: recoveryID, Stage: "dkg", Protocol: testProtocol})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	router.Start(ctx)
+	for sequence := uint64(1); sequence <= 257; sequence++ {
+		frame := validFrame(platformID, recoveryID, sequence, 1, "overflow")
+		network.pushInbound(t, frame)
+	}
+	select {
+	case <-router.Done():
+	case <-time.After(time.Second):
+		t.Fatal("router did not cancel after queue overflow")
+	}
+	if !errors.Is(router.Err(), localrouter.ErrQueueOverflow) {
+		t.Fatalf("router error=%v", router.Err())
+	}
+	if metrics.Default.Snapshot()["relay_queue_overflow_total"][""] != 1 {
+		t.Fatalf("metrics=%#v", metrics.Default.Snapshot())
 	}
 }
 

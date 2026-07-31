@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
@@ -76,6 +78,49 @@ type countingSignRunner struct {
 func (r *countingSignRunner) RunSignSession(context.Context, coretss.SignSessionRequest) error {
 	r.calls++
 	return nil
+}
+
+type errorSignRunner struct {
+	err error
+}
+
+func (r *errorSignRunner) RunSignSession(context.Context, coretss.SignSessionRequest) error {
+	return r.err
+}
+
+type capturedLogRecord struct {
+	level   slog.Level
+	message string
+	attrs   []slog.Attr
+}
+
+type alertCapturingHandler struct {
+	mu      sync.Mutex
+	records []capturedLogRecord
+}
+
+func (h *alertCapturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *alertCapturingHandler) Handle(_ context.Context, record slog.Record) error {
+	captured := capturedLogRecord{level: record.Level, message: record.Message}
+	record.Attrs(func(attr slog.Attr) bool {
+		captured.attrs = append(captured.attrs, attr)
+		return true
+	})
+	h.mu.Lock()
+	h.records = append(h.records, captured)
+	h.mu.Unlock()
+	return nil
+}
+
+func (h *alertCapturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *alertCapturingHandler) WithGroup(string) slog.Handler { return h }
+
+func (h *alertCapturingHandler) Records() []capturedLogRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]capturedLogRecord(nil), h.records...)
 }
 
 type capturingDKGExecutor struct {
@@ -480,6 +525,97 @@ func TestBuildResultMapsShareNotFound(t *testing.T) {
 	result := BuildResult(coretss.ErrShareNotFound, context.Background(), monolith.Intent{Type: "SIGN"})
 	if result.ErrorCode != ErrorCodeShareNotFound {
 		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeShareNotFound)
+	}
+}
+
+func TestPrimarySigningArtifactFailuresEmitRedactedCriticalAlertAndDoNotDegradeReadiness(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode string
+	}{
+		{name: "missing", err: coretss.ErrShareNotFound, wantCode: ErrorCodeShareNotFound},
+		{name: "invalid payload", err: coretss.ErrInvalidSharePayload, wantCode: ErrorCodeInvalidSharePayload},
+		{name: "binding mismatch", err: sharestore.ErrArtifactBinding, wantCode: ErrorCodeShareMetadata},
+		{name: "metadata mismatch", err: coretss.ErrMetadataMismatch, wantCode: ErrorCodeShareMetadata},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			intent := validSignIntent(t)
+			intent.IntentID = "intent-secret-canary"
+			intent.SessionID = "session-secret-canary"
+			intent.Payload.KeyID = "key-secret-canary"
+			intent.Payload.Digest = []byte("ciphertext-secret-canary")
+			client := &stubClient{claimResult: claimResultForIntent(intent)}
+			handler := &alertCapturingHandler{}
+			sem := make(chan struct{}, 1)
+			sem <- struct{}{}
+			readiness := health.NewReadiness()
+			initial := health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true}
+			readiness.Set(initial)
+
+			RunSessionWithExecutors(
+				context.Background(), intent, client, &errorSignRunner{err: tt.err},
+				&capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil,
+				slog.New(handler),
+			)
+
+			if client.lastResult.Status != intentStatusFailed || client.lastResult.ErrorCode != tt.wantCode {
+				t.Fatalf("result = %+v, want key-specific failed code %q", client.lastResult, tt.wantCode)
+			}
+			if got := readiness.Snapshot(); got != initial {
+				t.Fatalf("primary artifact failure changed readiness: got %#v, want %#v", got, initial)
+			}
+
+			var alert *capturedLogRecord
+			records := handler.Records()
+			for i := range records {
+				record := records[i]
+				if record.level == slog.LevelError && record.message == "critical primary signing material failure" {
+					alert = &record
+					break
+				}
+			}
+			if alert == nil {
+				t.Fatal("missing critical primary signing artifact alert")
+			}
+			alertText := alert.message
+			classified := false
+			for _, attr := range alert.attrs {
+				alertText += " " + attr.Key + "=" + attr.Value.String()
+				if attr.Key == "alert_class" && attr.Value.String() == "primary_material_unavailable" {
+					classified = true
+				}
+			}
+			if !classified {
+				t.Fatalf("critical alert has no primary-material classification: %+v", alert.attrs)
+			}
+			alertText = strings.ToLower(alertText)
+			for _, forbidden := range []string{
+				"key", "session", "path", "share", "ciphertext", "descriptor", "secret",
+				"key-secret-canary", "session-secret-canary", "intent-secret-canary", "path-secret-canary",
+				"ciphertext-secret-canary", "descriptor-secret-canary", "share-secret-canary", "secret-canary",
+			} {
+				if strings.Contains(alertText, forbidden) {
+					t.Fatalf("critical alert leaked %q: %q", forbidden, alertText)
+				}
+			}
+
+			next := validSignIntent(t)
+			next.IntentID = "unrelated-sign-intent"
+			next.SessionID = "unrelated-sign-session"
+			nextClient := &stubClient{claimResult: claimResultForIntent(next)}
+			nextSem := make(chan struct{}, 1)
+			nextSem <- struct{}{}
+			RunSessionWithExecutors(
+				context.Background(), next, nextClient, &stubRunner{}, &capturingDKGExecutor{}, nil,
+				"co-signer", time.Millisecond, nextSem, nil, slog.New(handler),
+			)
+			if nextClient.lastResult.Status != intentStatusCompleted {
+				t.Fatalf("unrelated SIGN result = %+v, want completed", nextClient.lastResult)
+			}
+		})
 	}
 }
 

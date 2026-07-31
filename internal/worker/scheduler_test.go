@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 )
 
@@ -18,6 +19,24 @@ type stubPendingClient struct {
 	claimErr    error
 	claimErrors map[string]error
 	pollCalls   int
+}
+
+func TestSchedulerPublishesOldestPendingAgeFromCreatedAt(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
+	s := newDeterministicScheduler(t, 3, func() bool { return true })
+	s.cfg.Now = func() time.Time { return now }
+	s.launch = captureLaunches(new([]launchedSession))
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "sign-new", Type: "SIGN", CreatedAt: now.Add(-2 * time.Minute)},
+		{IntentID: "dkg-old", Type: "DKG", CreatedAt: now.Add(-7 * time.Minute)},
+		{IntentID: "sign-old", Type: "SIGN", CreatedAt: now.Add(-5 * time.Minute)},
+		{IntentID: "future", Type: "DKG", CreatedAt: now.Add(time.Minute)},
+	})
+	got := metrics.Default.Snapshot()
+	if got["oldest_pending_dkg_age_seconds"][""] != 420 || got["oldest_pending_sign_age_seconds"][""] != 300 {
+		t.Fatalf("pending ages = %#v", got)
+	}
 }
 
 func (s *stubPendingClient) GetPendingIntents(context.Context) ([]monolith.Intent, error) {
@@ -252,6 +271,21 @@ func TestSchedulerSkipsDKGWhenAdmissionOrProvisioningIsClosed(t *testing.T) {
 				t.Fatalf("launched = %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+func TestSchedulerCountsSkippedPreparamsOnlyForPreparamsUnavailability(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	s := newDeterministicScheduler(t, 1, func() bool { return false })
+	s.cfg.PreparamsHint = func() bool { return true }
+	s.dispatchBatch(context.Background(), []monolith.Intent{{IntentID: "dkg-disk", Type: "DKG"}})
+	if got := metrics.Default.Snapshot()["dkg_skipped_preparams_total"][""]; got != 0 {
+		t.Fatalf("disk gate incremented preparams skip: %v", got)
+	}
+	s.cfg.PreparamsHint = func() bool { return false }
+	s.dispatchBatch(context.Background(), []monolith.Intent{{IntentID: "dkg-preparams", Type: "DKG"}})
+	if got := metrics.Default.Snapshot()["dkg_skipped_preparams_total"][""]; got != 1 {
+		t.Fatalf("preparams skips=%v", got)
 	}
 }
 

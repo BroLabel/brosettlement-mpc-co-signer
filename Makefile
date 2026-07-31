@@ -1,4 +1,4 @@
-.PHONY: sync-contracts verify-contracts build-recovery-proof verify-recovery-proof
+.PHONY: sync-contracts verify-contracts build-recovery-proof verify-recovery-proof verify-mpc-2of3
 
 sync-contracts:
 	./scripts/sync-contracts.sh
@@ -12,3 +12,6 @@ build-recovery-proof:
 
 verify-recovery-proof: build-recovery-proof
 	"$$MPC_RECOVERY_TEST_BIN" -test.run '^TestIsolatedRecoveryProof$$'
+
+verify-mpc-2of3:
+	GOWORK=off ./scripts/verify-mpc-2of3.sh

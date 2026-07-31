@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 )
 
@@ -17,6 +18,7 @@ var (
 	ErrFrameConflict    = errors.New("conflicting routed frame")
 	ErrUnsupportedParty = errors.New("party is not registered with local router")
 	ErrRouterClosed     = errors.New("local router closed")
+	ErrQueueOverflow    = errors.New("local router queue overflow")
 )
 
 type frameRecord struct {
@@ -76,6 +78,7 @@ func (v *frameValidator) validateAndRecord(frame protocol.Frame, authenticatedSe
 	sequenceDigest := frameSequenceDigest(frame)
 	if owner, exists := owners[frame.Seq]; exists &&
 		(owner.messageID != frame.MessageID || owner.digest != sequenceDigest) {
+		metrics.ObserveRelayIntegrityConflict()
 		return ErrFrameConflict
 	}
 
@@ -83,6 +86,7 @@ func (v *frameValidator) validateAndRecord(frame protocol.Frame, authenticatedSe
 	digest := frameDigest(frame)
 	if previous, exists := v.seen[key]; exists {
 		if previous.digest != digest {
+			metrics.ObserveRelayIntegrityConflict()
 			return ErrFrameConflict
 		}
 		return ErrDuplicateFrame

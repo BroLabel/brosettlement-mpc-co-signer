@@ -35,6 +35,27 @@ configuration object. Configure and back up the original key and its key
 reference for the lifetime of every v1 artifact; there is no passphrase hashing
 or automatic key rotation.
 
+## Operating the recovery artifacts
+
+Run exactly one co-signer replica. During upgrades, stop the old process and
+prove it has exited before starting the new process: overlapping writers are
+unsupported. Both B and C directories and the stable lock path must be on one
+writable local state filesystem. The advisory lifetime lock is local-filesystem
+fencing only; it is not a distributed lease and does not coordinate another
+host or shared-NFS writer.
+
+Artifact v1 has one encryption-key lifetime. Keep the original encryption key
+and `CO_SIGNER_SHARE_ENCRYPTION_KEY_REF` with backups until every v1 B and C
+artifact has left service. Replacing either value fails closed; rotation,
+re-encryption, and old-key lookup are unsupported.
+
+Customers retain custody of their recovery artifact and matching key material.
+After activation, the service deliberately does not monitor C or make A+B
+signing depend on C remaining present. There is no supported recovery CLI or
+SDK in this release; `FUTURE-001` remains a DESIGN-only item. See
+[`docs/artifact-format-v1.md`](docs/artifact-format-v1.md) and
+[`docs/runbooks/recovery-artifact.md`](docs/runbooks/recovery-artifact.md).
+
 ## Client API request signing
 
 The co-signer authenticates monolith HTTP requests with Ed25519 signatures. The

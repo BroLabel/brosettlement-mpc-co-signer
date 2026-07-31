@@ -49,7 +49,6 @@ We follow coordinated disclosure and ask for reasonable time to investigate and 
 - key material remaining in memory longer than intended
 - authentication or authorization bypass on co-signer interfaces
 - vulnerabilities in cryptographic or signing dependencies
-- Docker image attack surface
 
 ### Out of scope
 
@@ -63,11 +62,13 @@ We follow coordinated disclosure and ask for reasonable time to investigate and 
 This project assumes:
 
 - the signer side may be compromised
-- the co-signer side may be compromised
 - the network is untrusted
-- simultaneous compromise of both trusted parties is outside the intended security boundary
+- the co-signer host is a quorum-bearing trust domain and is **not protected**
+  by v1: it holds B and C and can authorize threshold signing without A
 
-Issues that break the noncustodial guarantee or allow unilateral signing are critical.
+Issues that expose the co-signer host, artifacts, or shared key as a recovery
+quorum are critical. Offline recovery in v1 is only an artifact format and a
+customer custody responsibility; it is not a supported recovery product.
 
 ## Local artifact key custody
 
@@ -81,8 +82,19 @@ by hashing a passphrase.
 Operators must preserve the original encryption key, key reference, primary
 artifact directory, recovery artifact directory, and stable state/lock path.
 Changing the key or key reference while artifacts remain live makes recovery
-unsafe. A local filesystem lock is process fencing for the supported single-host
-writer topology; it is not a cross-host or distributed lease.
+unsafe. There is no rotation, re-encryption, or old-key lookup in v1. A local
+filesystem lock is process fencing for exactly one replica and one local
+writable state filesystem shared by B/C; it is not cross-host or distributed
+fencing. Upgrades require no overlap between old and new writable processes.
+
+The co-signer host is a quorum-bearing trust domain. Compromise of that host,
+or compromise of the shared key together with both B and C artifacts, can
+authorize recovery signing without platform party A. This accepted v1 risk must
+be treated as Critical. Customers retain custody and backup responsibility for
+their artifacts, original key, and key reference. After activation the product
+does not promise to monitor or guarantee C availability, and it provides no
+supported recovery tool. A future tool is `FUTURE-001` in the approved DESIGN,
+not a current product capability.
 
 ## Severity Classification
 
