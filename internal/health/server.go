@@ -71,10 +71,11 @@ type response struct {
 }
 
 type Handler struct {
-	version      string
-	sharesDir    string
-	readiness    *Readiness
-	signingProbe func() bool
+	version           string
+	sharesDir         string
+	readiness         *Readiness
+	signingProbe      func() bool
+	provisioningProbe func() bool
 }
 
 func NewHandler(version, sharesDir string) http.Handler {
@@ -88,11 +89,22 @@ func NewLifecycleHandler(version, sharesDir string, readiness *Readiness) http.H
 }
 
 func NewLifecycleHandlerWithSigningProbe(version, sharesDir string, readiness *Readiness, signingProbe func() bool) http.Handler {
+	return NewLifecycleHandlerWithReadinessProbes(version, sharesDir, readiness, signingProbe, nil)
+}
+
+func NewLifecycleHandlerWithReadinessProbes(
+	version,
+	sharesDir string,
+	readiness *Readiness,
+	signingProbe,
+	provisioningProbe func() bool,
+) http.Handler {
 	return &Handler{
-		version:      version,
-		sharesDir:    sharesDir,
-		readiness:    readiness,
-		signingProbe: signingProbe,
+		version:           version,
+		sharesDir:         sharesDir,
+		readiness:         readiness,
+		signingProbe:      signingProbe,
+		provisioningProbe: provisioningProbe,
 	}
 }
 
@@ -119,11 +131,27 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snapshot := h.readiness.Snapshot()
+	provisioningReady := false
+	provisioningChecked := h.provisioningProbe != nil && canRefreshProvisioning(snapshot)
+	if provisioningChecked {
+		provisioningReady = h.provisioningProbe()
+		// Lifecycle gates may change while a filesystem/preparams probe is in
+		// progress. Refresh the authoritative snapshot before applying the
+		// observational capability result.
+		snapshot = h.readiness.Snapshot()
+	}
 	if h.signingProbe != nil && !h.signingProbe() {
 		snapshot.ProcessReady = false
 		snapshot.SigningReady = false
 		snapshot.ProvisioningReady = false
 		snapshot.ProvisioningReason = ReasonProvisioningUnavailable
+	} else if provisioningChecked && canRefreshProvisioning(snapshot) {
+		snapshot.ProvisioningReady = provisioningReady
+		if provisioningReady {
+			snapshot.ProvisioningReason = ReasonNone
+		} else {
+			snapshot.ProvisioningReason = ReasonProvisioningUnavailable
+		}
 	}
 	resp := response{
 		Status:             "ok",
@@ -161,4 +189,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(statusCode)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func canRefreshProvisioning(snapshot Snapshot) bool {
+	if !snapshot.ProcessReady || !snapshot.SigningReady {
+		return false
+	}
+	return snapshot.ProvisioningReason == ReasonNone ||
+		snapshot.ProvisioningReason == ReasonProvisioningUnavailable
 }

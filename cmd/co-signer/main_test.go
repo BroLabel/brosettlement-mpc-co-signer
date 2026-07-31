@@ -8,15 +8,20 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
 )
 
 func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T) {
@@ -332,6 +337,38 @@ func TestApplicationResourcesCloseJoinsStartedBackgroundLoop(t *testing.T) {
 	close(releaseLoop)
 	if err := <-closeReturned; err != nil {
 		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestApplicationHealthServerUsesLiveProvisioningPredicate(t *testing.T) {
+	readiness := health.NewReadiness()
+	readiness.Set(health.Snapshot{
+		ProcessReady:       true,
+		SigningReady:       true,
+		ProvisioningReason: health.ReasonProvisioningUnavailable,
+	})
+	provisioningReady := false
+	resources := &applicationResources{
+		signingReady:      func() bool { return true },
+		provisioningReady: func() bool { return provisioningReady },
+	}
+	server := newApplicationHealthServer("127.0.0.1:0", t.TempDir(), readiness, resources)
+
+	provisioningReady = true
+	rec := httptest.NewRecorder()
+	server.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	var body struct {
+		ProcessReady       bool          `json:"processReady"`
+		SigningReady       bool          `json:"signingReady"`
+		ProvisioningReady  bool          `json:"provisioningReady"`
+		ProvisioningReason health.Reason `json:"provisioningReason"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	if !body.ProcessReady || !body.SigningReady || !body.ProvisioningReady || body.ProvisioningReason != health.ReasonNone {
+		t.Fatalf("application health readiness = %#v, want all ready", body)
 	}
 }
 

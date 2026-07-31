@@ -297,15 +297,30 @@ func openApplicationResources(
 		reconciler:        actionableReconciler,
 		provisioningReady: provisioningReady,
 		signingReady:      signingReady,
-		healthServer: &http.Server{
-			Addr:    cfg.HTTPAddr,
-			Handler: health.NewLifecycleHandlerWithSigningProbe(version, cfg.StateDir, readiness, signingReady),
-		},
 	}
+	resources.healthServer = newApplicationHealthServer(cfg.HTTPAddr, cfg.StateDir, readiness, resources)
 	if preParamsCapabilityErr == nil {
 		resources.startBackground(func() { preParamsController.Run(ctx) })
 	}
 	return resources, nil
+}
+
+func newApplicationHealthServer(
+	addr,
+	stateDir string,
+	readiness *health.Readiness,
+	resources *applicationResources,
+) *http.Server {
+	return &http.Server{
+		Addr: addr,
+		Handler: health.NewLifecycleHandlerWithReadinessProbes(
+			version,
+			stateDir,
+			readiness,
+			resources.signingReady,
+			resources.provisioningReady,
+		),
+	}
 }
 
 func newDKGCoreService(

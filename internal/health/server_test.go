@@ -147,6 +147,200 @@ func TestHealthClosesProcessAndSigningForSystemicPrimaryProbeLoss(t *testing.T) 
 	}
 }
 
+func TestHealthRefreshesProvisioningCapabilityAfterStartup(t *testing.T) {
+	state := health.NewReadiness()
+	state.Set(health.Snapshot{
+		ProcessReady:       true,
+		SigningReady:       true,
+		ProvisioningReady:  false,
+		ProvisioningReason: health.ReasonProvisioningUnavailable,
+	})
+	provisioningReady := false
+	h := health.NewLifecycleHandlerWithReadinessProbes(
+		"0.1.0",
+		t.TempDir(),
+		state,
+		func() bool { return true },
+		func() bool { return provisioningReady },
+	)
+
+	provisioningReady = true
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var body readinessResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !body.ProcessReady || !body.SigningReady || !body.ProvisioningReady {
+		t.Fatalf("readiness = process:%v signing:%v provisioning:%v, want all true", body.ProcessReady, body.SigningReady, body.ProvisioningReady)
+	}
+	if body.ProvisioningReason != health.ReasonNone || !body.Capabilities["dkg"] {
+		t.Fatalf("provisioning = reason:%q capabilities:%#v, want ready", body.ProvisioningReason, body.Capabilities)
+	}
+}
+
+func TestHealthClosesOnlyProvisioningWhenDynamicCapabilityFalls(t *testing.T) {
+	state := health.NewReadiness()
+	state.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
+	provisioningReady := true
+	h := health.NewLifecycleHandlerWithReadinessProbes(
+		"0.1.0",
+		t.TempDir(),
+		state,
+		func() bool { return true },
+		func() bool { return provisioningReady },
+	)
+
+	initial := serveReadiness(t, h)
+	if !initial.ProvisioningReady {
+		t.Fatal("initial provisioning readiness = false, want true")
+	}
+	provisioningReady = false
+	got := serveReadiness(t, h)
+
+	if !got.Ready || !got.ProcessReady || !got.SigningReady {
+		t.Fatalf("readiness = ready:%v process:%v signing:%v, want true", got.Ready, got.ProcessReady, got.SigningReady)
+	}
+	if got.ProvisioningReady || got.ProvisioningReason != health.ReasonProvisioningUnavailable {
+		t.Fatalf("provisioning = ready:%v reason:%q, want capability unavailable", got.ProvisioningReady, got.ProvisioningReason)
+	}
+	if !got.Capabilities["sign"] || got.Capabilities["dkg"] {
+		t.Fatalf("capabilities = %#v, want sign only", got.Capabilities)
+	}
+}
+
+func TestHealthDynamicProvisioningProbeCannotOverrideLifecycleGates(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason health.Reason
+	}{
+		{name: "terminal unconfirmed", reason: health.ReasonDKGTerminalUnconfirmed},
+		{name: "capability deferred", reason: health.ReasonCapabilityDeferred},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := health.NewReadiness()
+			state.Set(health.Snapshot{
+				ProcessReady:       true,
+				SigningReady:       true,
+				ProvisioningReason: tt.reason,
+			})
+			probeCalls := 0
+			h := health.NewLifecycleHandlerWithReadinessProbes(
+				"0.1.0",
+				t.TempDir(),
+				state,
+				func() bool { return true },
+				func() bool { probeCalls++; return true },
+			)
+
+			got := serveReadiness(t, h)
+
+			if !got.Ready || !got.ProcessReady || !got.SigningReady || got.ProvisioningReady {
+				t.Fatalf("readiness = %#v, want signing-only", got)
+			}
+			if got.ProvisioningReason != tt.reason {
+				t.Fatalf("provisioning reason = %q, want %q", got.ProvisioningReason, tt.reason)
+			}
+			if probeCalls != 0 {
+				t.Fatalf("provisioning probe calls = %d, want lifecycle gate to bypass probe", probeCalls)
+			}
+		})
+	}
+}
+
+func TestHealthSigningProbeOverridesDynamicProvisioningCapability(t *testing.T) {
+	state := health.NewReadiness()
+	state.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
+	h := health.NewLifecycleHandlerWithReadinessProbes(
+		"0.1.0",
+		t.TempDir(),
+		state,
+		func() bool { return false },
+		func() bool { return true },
+	)
+
+	got := serveReadiness(t, h)
+
+	if got.Ready || got.ProcessReady || got.SigningReady || got.ProvisioningReady {
+		t.Fatalf("readiness = %#v, want all closed", got)
+	}
+	if got.Capabilities["sign"] || got.Capabilities["dkg"] {
+		t.Fatalf("capabilities = %#v, want all closed", got.Capabilities)
+	}
+}
+
+func TestHealthDynamicProbeCannotReopenReadinessDuringShutdown(t *testing.T) {
+	state := health.NewReadiness()
+	state.Set(health.Snapshot{
+		ProcessReady:       true,
+		SigningReady:       true,
+		ProvisioningReason: health.ReasonProvisioningUnavailable,
+	})
+	probeEntered := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	h := health.NewLifecycleHandlerWithReadinessProbes(
+		"0.1.0",
+		t.TempDir(),
+		state,
+		func() bool { return true },
+		func() bool {
+			close(probeEntered)
+			<-releaseProbe
+			return true
+		},
+	)
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+		result <- rec
+	}()
+
+	select {
+	case <-probeEntered:
+	case rec := <-result:
+		t.Fatalf("request returned before dynamic probe: %s", rec.Body.String())
+	}
+	state.Set(health.Snapshot{})
+	close(releaseProbe)
+	got := decodeReadiness(t, <-result)
+
+	if got.Ready || got.ProcessReady || got.SigningReady || got.ProvisioningReady {
+		t.Fatalf("readiness reopened during shutdown: %#v", got)
+	}
+}
+
+type readinessResponse struct {
+	Status             string          `json:"status"`
+	Ready              bool            `json:"ready"`
+	ProcessReady       bool            `json:"processReady"`
+	SigningReady       bool            `json:"signingReady"`
+	ProvisioningReady  bool            `json:"provisioningReady"`
+	ProvisioningReason health.Reason   `json:"provisioningReason"`
+	Capabilities       map[string]bool `json:"capabilities"`
+}
+
+func serveReadiness(t *testing.T, h http.Handler) readinessResponse {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	return decodeReadiness(t, rec)
+}
+
+func decodeReadiness(t *testing.T, rec *httptest.ResponseRecorder) readinessResponse {
+	t.Helper()
+	var body readinessResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	return body
+}
+
 func TestHealthProcessReadinessClosesDuringShutdown(t *testing.T) {
 	dir := t.TempDir()
 	state := health.NewReadiness()
