@@ -35,7 +35,15 @@ var (
 	ErrAlreadyClaimed      = errors.New("intent already claimed")
 	ErrNotFound            = errors.New("intent not found")
 	ErrClaimOutcomeUnknown = errors.New("claim outcome unknown")
+	ErrTerminalConflict    = errors.New("terminal result conflict")
 )
+
+type ResultConflictError struct {
+	AuthoritativeStatus string
+}
+
+func (e *ResultConflictError) Error() string { return ErrTerminalConflict.Error() }
+func (e *ResultConflictError) Unwrap() error { return ErrTerminalConflict }
 
 func New(baseURL, keyID string, privateKey ed25519.PrivateKey, timeout time.Duration) *Client {
 	return &Client{
@@ -51,14 +59,17 @@ func (c *Client) GetPendingIntents(ctx context.Context) ([]Intent, error) {
 	if err != nil {
 		return nil, err
 	}
-	intents := make([]Intent, 0, len(listing.Pending))
-	for _, item := range listing.Pending {
+	intents := make([]Intent, 0, len(listing.OwnClaimedSign)+len(listing.Pending))
+	appendIntent := func(item ActionableIntent) {
 		intents = append(intents, Intent{
-			CreatedAt: item.CreatedAt,
-			IntentID:  item.IntentID,
-			SessionID: item.SessionID,
-			Type:      item.Type,
-			ExpiresAt: item.Deadline,
+			CreatedAt:            item.CreatedAt,
+			CoSignerDeploymentID: item.CoSignerDeploymentID,
+			DeadlineRaw:          item.DeadlineRaw,
+			DiscoveryStatus:      item.Status,
+			IntentID:             item.IntentID,
+			SessionID:            item.SessionID,
+			Type:                 item.Type,
+			ExpiresAt:            item.Deadline,
 			Payload: IntentPayload{
 				Type:                  item.Type,
 				OrgID:                 item.OrgID,
@@ -68,13 +79,20 @@ func (c *Client) GetPendingIntents(ctx context.Context) ([]Intent, error) {
 			},
 		})
 	}
+	for _, item := range listing.OwnClaimedSign {
+		appendIntent(item)
+	}
+	for _, item := range listing.Pending {
+		appendIntent(item)
+	}
 	return intents, nil
 }
 
 type actionableListingWire struct {
-	HTTPStatus    int                     `json:"httpStatus"`
-	OwnClaimedDKG *[]actionableIntentWire `json:"ownClaimedDkg"`
-	Pending       *[]actionableIntentWire `json:"pending"`
+	HTTPStatus     int                     `json:"httpStatus"`
+	OwnClaimedDKG  *[]actionableIntentWire `json:"ownClaimedDkg"`
+	OwnClaimedSign *[]actionableIntentWire `json:"ownClaimedSign"`
+	Pending        *[]actionableIntentWire `json:"pending"`
 }
 
 type actionableIntentWire struct {
@@ -89,6 +107,48 @@ type actionableIntentWire struct {
 	SessionID             string `json:"sessionId,omitempty"`
 	Status                string `json:"status"`
 	Type                  string `json:"type"`
+	fields                map[string]struct{}
+}
+
+func (wire *actionableIntentWire) UnmarshalJSON(raw []byte) error {
+	type plain actionableIntentWire
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	allowed := map[string]struct{}{
+		"coSignerDeploymentId": {}, "createdAt": {}, "deadline": {}, "descriptorBytesBase64": {},
+		"descriptorFingerprint": {}, "intentId": {}, "keyId": {}, "orgId": {}, "sessionId": {}, "status": {}, "type": {},
+	}
+	for name := range fields {
+		if _, ok := allowed[name]; !ok {
+			return fmt.Errorf("unknown actionable listing field %q", name)
+		}
+	}
+	var decoded plain
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	*wire = actionableIntentWire(decoded)
+	wire.fields = make(map[string]struct{}, len(fields))
+	for name := range fields {
+		wire.fields[name] = struct{}{}
+	}
+	return nil
+}
+
+func (wire actionableIntentWire) hasExactFields(expected ...string) bool {
+	if len(wire.fields) != len(expected) {
+		return false
+	}
+	for _, name := range expected {
+		if _, ok := wire.fields[name]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // ListActionableIntents consumes the backend-owned closed listing contract.
@@ -102,24 +162,32 @@ func (c *Client) ListActionableIntents(ctx context.Context) (ActionableListing, 
 	if wire.HTTPStatus != http.StatusOK {
 		return ActionableListing{}, errors.New("actionable listing body HTTP status mismatch")
 	}
-	if wire.OwnClaimedDKG == nil || wire.Pending == nil {
+	if wire.OwnClaimedDKG == nil || wire.OwnClaimedSign == nil || wire.Pending == nil {
 		return ActionableListing{}, errors.New("actionable listing collections are required")
 	}
 
 	listing := ActionableListing{
-		HTTPStatus:    wire.HTTPStatus,
-		OwnClaimedDKG: make([]ActionableIntent, 0, len(*wire.OwnClaimedDKG)),
-		Pending:       make([]ActionableIntent, 0, len(*wire.Pending)),
+		HTTPStatus:     wire.HTTPStatus,
+		OwnClaimedDKG:  make([]ActionableIntent, 0, len(*wire.OwnClaimedDKG)),
+		OwnClaimedSign: make([]ActionableIntent, 0, len(*wire.OwnClaimedSign)),
+		Pending:        make([]ActionableIntent, 0, len(*wire.Pending)),
 	}
 	for _, item := range *wire.OwnClaimedDKG {
-		decoded, err := decodeActionableIntent(item)
+		decoded, err := decodeActionableIntent(item, "own claimed DKG")
 		if err != nil {
 			return ActionableListing{}, fmt.Errorf("decode own claimed DKG listing item: %w", err)
 		}
 		listing.OwnClaimedDKG = append(listing.OwnClaimedDKG, decoded)
 	}
+	for _, item := range *wire.OwnClaimedSign {
+		decoded, err := decodeActionableIntent(item, "own claimed SIGN")
+		if err != nil {
+			return ActionableListing{}, fmt.Errorf("decode own claimed SIGN listing item: %w", err)
+		}
+		listing.OwnClaimedSign = append(listing.OwnClaimedSign, decoded)
+	}
 	for _, item := range *wire.Pending {
-		decoded, err := decodeActionableIntent(item)
+		decoded, err := decodeActionableIntent(item, "pending")
 		if err != nil {
 			return ActionableListing{}, fmt.Errorf("decode pending listing item: %w", err)
 		}
@@ -128,7 +196,7 @@ func (c *Client) ListActionableIntents(ctx context.Context) (ActionableListing, 
 	return listing, nil
 }
 
-func decodeActionableIntent(wire actionableIntentWire) (ActionableIntent, error) {
+func decodeActionableIntent(wire actionableIntentWire, collection string) (ActionableIntent, error) {
 	if wire.IntentID == "" || wire.KeyID == "" || wire.OrgID == "" || wire.Type == "" || wire.Status == "" {
 		return ActionableIntent{}, errors.New("actionable listing identity is incomplete")
 	}
@@ -163,6 +231,35 @@ func decodeActionableIntent(wire actionableIntentWire) (ActionableIntent, error)
 			return ActionableIntent{}, errors.New("actionable listing descriptor is not canonical padded base64")
 		}
 	}
+	switch collection {
+	case "own claimed DKG":
+		if !wire.hasExactFields("coSignerDeploymentId", "createdAt", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "intentId", "keyId", "orgId", "sessionId", "status", "type") ||
+			wire.Type != "DKG" || wire.Status != "CLAIMED" || wire.CoSignerDeploymentID == "" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes == "" || wire.DescriptorFingerprint == "" {
+			return ActionableIntent{}, errors.New("own claimed DKG fields are invalid")
+		}
+	case "own claimed SIGN":
+		if !wire.hasExactFields("coSignerDeploymentId", "createdAt", "deadline", "intentId", "keyId", "orgId", "sessionId", "status", "type") ||
+			wire.Type != "SIGN" || wire.Status != "CLAIMED" || wire.CoSignerDeploymentID == "" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes != "" || wire.DescriptorFingerprint != "" {
+			return ActionableIntent{}, errors.New("own claimed SIGN fields are invalid")
+		}
+	case "pending":
+		switch wire.Type {
+		case "DKG":
+			if !wire.hasExactFields("createdAt", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "intentId", "keyId", "orgId", "sessionId", "status", "type") ||
+				wire.Status != "PENDING" || wire.CoSignerDeploymentID != "" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes == "" || wire.DescriptorFingerprint == "" {
+				return ActionableIntent{}, errors.New("pending DKG fields are invalid")
+			}
+		case "SIGN":
+			if !wire.hasExactFields("createdAt", "intentId", "keyId", "orgId", "status", "type") ||
+				wire.Status != "PENDING" || wire.CoSignerDeploymentID != "" || wire.SessionID != "" || wire.Deadline != "" || wire.DescriptorBytes != "" || wire.DescriptorFingerprint != "" {
+				return ActionableIntent{}, errors.New("pending SIGN fields are invalid")
+			}
+		default:
+			return ActionableIntent{}, errors.New("pending intent type is invalid")
+		}
+	default:
+		return ActionableIntent{}, errors.New("actionable listing collection is invalid")
+	}
 	return item, nil
 }
 
@@ -184,7 +281,54 @@ func (c *Client) ClaimIntent(ctx context.Context, intentID string) (ClaimResult,
 	if out.HTTPStatus != http.StatusOK {
 		return ClaimResult{}, errors.New("claim response body HTTP status mismatch")
 	}
+	if err := validateClaimResult(out); err != nil {
+		return ClaimResult{}, err
+	}
 	return out, nil
+}
+
+func validateClaimResult(claim ClaimResult) error {
+	if claim.Status != "CLAIMED" {
+		return errors.New("claim response status is invalid")
+	}
+	if claim.Type == "SIGN" {
+		return validateSignClaimResult(claim)
+	}
+	if claim.Type == "DKG" {
+		if claim.Payload.Type != "" && claim.Payload.Type != "DKG" {
+			return errors.New("DKG claim payload kind mismatch")
+		}
+		return nil
+	}
+	if len(claim.DescriptorBytes) > 0 {
+		return nil
+	}
+	return errors.New("claim response kind is invalid")
+}
+
+func validateSignClaimResult(claim ClaimResult) error {
+	payload := claim.Payload
+	if claim.IntentID == "" || claim.SessionID == "" || claim.CoSignerDeploymentID == "" || claim.Deadline.IsZero() || claim.DeadlineRaw == "" ||
+		claim.ClaimedBy != "" || claim.ClaimedAt != nil || !claim.ExpiresAt.IsZero() || claim.OrgID != "" || claim.KeyID != "" || len(claim.DescriptorBytes) != 0 ||
+		claim.DescriptorFingerprint != "" || len(claim.ChainCode) != 0 ||
+		payload.Type != "SIGN" || payload.OrgID == "" || payload.KeyID == "" || payload.WalletID == "" || payload.ProfileID == "" || payload.ProfileTemplateID == "" ||
+		payload.ProfileVersion == 0 || len(payload.Parties) < 2 || payload.Threshold < 2 || payload.Algorithm == "" || payload.Curve == "" || payload.Chain == "" ||
+		len(payload.Digest) == 0 || payload.DigestType == "" || payload.HashAlgorithm == "" || payload.SigningPayloadType == "" || payload.DerivationContextHash == "" ||
+		payload.PartyID == "" || payload.DerivationContext == nil || payload.ChainCode != "" || payload.ChainCodeHash != "" || payload.DerivationScheme != "" ||
+		len(payload.DescriptorBytes) != 0 || payload.DescriptorFingerprint != "" {
+		return errors.New("SIGN claim response is incomplete")
+	}
+	derivation := payload.DerivationContext
+	if derivation.ProfileID == "" || derivation.ProfileTemplateID == "" || derivation.Chain == "" || derivation.Algorithm == "" || derivation.Curve == "" ||
+		derivation.Scheme == "" || derivation.AccountPath == "" || derivation.ChildPath == "" || derivation.FullPath == "" || derivation.PublicKeyFormat == "" ||
+		derivation.DescriptorVersion == 0 || derivation.ProfileVersion == 0 || derivation.KeyVersion == 0 {
+		return errors.New("SIGN claim derivation context is incomplete")
+	}
+	if payload.ProfileID != derivation.ProfileID || payload.ProfileTemplateID != derivation.ProfileTemplateID || payload.ProfileVersion != derivation.ProfileVersion ||
+		payload.Chain != derivation.Chain || !strings.EqualFold(payload.Algorithm, derivation.Algorithm) || !strings.EqualFold(payload.Curve, derivation.Curve) {
+		return errors.New("SIGN claim derivation context mismatch")
+	}
+	return nil
 }
 
 func (c *Client) PostMessage(ctx context.Context, sessionID string, frame OutboundFrame) error {
@@ -204,8 +348,109 @@ func (c *Client) GetMessages(ctx context.Context, sessionID string, afterSeq uin
 }
 
 func (c *Client) PostResult(ctx context.Context, intentID string, result IntentResult) error {
+	body, err := marshalSignResult(result)
+	if err != nil {
+		return err
+	}
 	path := "/api/v1/co-signer/intents/" + url.PathEscape(intentID) + "/result"
-	return c.doJSON(ctx, http.MethodPost, path, result, intentID, nil, 0)
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, err := c.newRequest(ctx, http.MethodPost, path, body)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-Idempotency-Key", intentID)
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = err
+			if attempt < maxAttempts && isRetryable(err) {
+				time.Sleep(backoff(attempt))
+				continue
+			}
+			return err
+		}
+		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxTerminalResponseBytes+1))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			lastErr = readErr
+			if attempt < maxAttempts {
+				time.Sleep(backoff(attempt))
+				continue
+			}
+			return readErr
+		}
+		if len(responseBody) > maxTerminalResponseBytes {
+			return errors.New("SIGN result response is too large")
+		}
+		if resp.StatusCode >= http.StatusInternalServerError {
+			lastErr = &httpStatusError{statusCode: resp.StatusCode, body: string(responseBody)}
+			if attempt < maxAttempts {
+				time.Sleep(backoff(attempt))
+				continue
+			}
+			return lastErr
+		}
+		return parseSignResultOutcome(resp.StatusCode, responseBody, result.Status)
+	}
+	return lastErr
+}
+
+func marshalSignResult(result IntentResult) ([]byte, error) {
+	if result.DkgMaterial != nil {
+		return nil, errors.New("DKG result material is not valid for generic SIGN results")
+	}
+	fields := make(map[string]string)
+	switch result.Status {
+	case "COMPLETED":
+		if result.ErrorCode != "" || result.ErrorMessage != "" {
+			return nil, errors.New("completed SIGN result must be minimal")
+		}
+		fields["status"] = result.Status
+	case "FAILED":
+		fields["status"] = result.Status
+		if result.ErrorCode != "" {
+			fields["errorCode"] = result.ErrorCode
+		}
+		if result.ErrorMessage != "" {
+			fields["errorMessage"] = result.ErrorMessage
+		}
+	default:
+		return nil, errors.New("invalid SIGN result status")
+	}
+	return json.Marshal(fields)
+}
+
+type signResultOutcomeWire struct {
+	AuthoritativeStatus string `json:"authoritativeStatus"`
+	HTTPStatus          int    `json:"httpStatus"`
+	Outcome             string `json:"outcome"`
+}
+
+func parseSignResultOutcome(statusCode int, body []byte, submittedStatus string) error {
+	var outcome signResultOutcomeWire
+	if err := decodeStrictJSON(body, &outcome); err != nil {
+		return fmt.Errorf("decode SIGN result outcome: %w", err)
+	}
+	if outcome.HTTPStatus != statusCode {
+		return errors.New("SIGN result HTTP status mismatch")
+	}
+	switch statusCode {
+	case http.StatusOK:
+		if outcome.Outcome != "ACCEPTED" && outcome.Outcome != "EXACT_REPLAY" {
+			return errors.New("invalid successful SIGN result outcome")
+		}
+		if outcome.AuthoritativeStatus != submittedStatus || (outcome.AuthoritativeStatus != "COMPLETED" && outcome.AuthoritativeStatus != "FAILED") {
+			return errors.New("successful SIGN result authoritative status mismatch")
+		}
+		return nil
+	case http.StatusConflict:
+		if outcome.Outcome != "TERMINAL_CONFLICT" || (outcome.AuthoritativeStatus != "COMPLETED" && outcome.AuthoritativeStatus != "FAILED" && outcome.AuthoritativeStatus != "TIMED_OUT") {
+			return errors.New("invalid conflicting SIGN result outcome")
+		}
+		return &ResultConflictError{AuthoritativeStatus: outcome.AuthoritativeStatus}
+	default:
+		return &httpStatusError{statusCode: statusCode, body: string(body)}
+	}
 }
 
 // PostTerminalResult performs exactly one HTTP attempt with the exact body

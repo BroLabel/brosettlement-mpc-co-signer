@@ -9,7 +9,18 @@ import (
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
+
+type notifyingSignRunner struct{ started chan struct{} }
+
+func (r *notifyingSignRunner) RunSignSession(context.Context, coretss.SignSessionRequest) error {
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	return nil
+}
 
 type stubPendingClient struct {
 	mu          sync.Mutex
@@ -129,6 +140,23 @@ func TestSchedulerSkipsBlockedDKGAndContinuesSIGN(t *testing.T) {
 	}
 	if launched[0].permits.dkg != nil {
 		t.Fatal("SIGN received a DKG guard")
+	}
+}
+
+func TestSchedulerDispatchesRediscoveredOwnClaimedSignThroughClaimReplay(t *testing.T) {
+	discovery, claim := rediscoveredSignFixture(t)
+	client := &stubPendingClient{claimResult: claim, claimErrors: make(map[string]error)}
+	runner := &notifyingSignRunner{started: make(chan struct{}, 1)}
+	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, "co-signer", time.Millisecond, SchedulerConfig{}, slog.Default(), 1)
+
+	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatal("rediscovered SIGN runtime did not start")
+	}
+	if got := client.claims(); !equalStrings(got, []string{"intent-125"}) {
+		t.Fatalf("claim calls = %v, want existing claim endpoint", got)
 	}
 }
 

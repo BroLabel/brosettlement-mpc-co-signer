@@ -190,6 +190,79 @@ func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 	}
 }
 
+func TestRunSessionRediscoveredSignClaimsReplayBeforeRuntime(t *testing.T) {
+	discovery, claim := rediscoveredSignFixture(t)
+	client := &stubClient{claimResult: claim}
+	runner := &countingSignRunner{}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+
+	RunSessionWithExecutors(context.Background(), discovery, client, runner, &capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
+
+	if runner.calls != 1 {
+		t.Fatalf("SIGN runtime calls = %d, want 1 after same-owner claim replay", runner.calls)
+	}
+	if client.lastResult.Status != "COMPLETED" {
+		t.Fatalf("SIGN result = %+v, want minimal completed result", client.lastResult)
+	}
+}
+
+func TestRunSessionRejectsRediscoveredSignClaimIdentityOrDeadlineMismatch(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(*monolith.ClaimResult)
+	}{
+		{name: "intent", edit: func(claim *monolith.ClaimResult) { claim.IntentID = "intent-other" }},
+		{name: "session", edit: func(claim *monolith.ClaimResult) { claim.SessionID = "session-other" }},
+		{name: "key", edit: func(claim *monolith.ClaimResult) { claim.Payload.KeyID = "key-other" }},
+		{name: "org", edit: func(claim *monolith.ClaimResult) { claim.Payload.OrgID = "org-other" }},
+		{name: "owner", edit: func(claim *monolith.ClaimResult) { claim.CoSignerDeploymentID = "foreign-deployment" }},
+		{name: "deadline value", edit: func(claim *monolith.ClaimResult) { claim.Deadline = claim.Deadline.Add(time.Second) }},
+		{name: "deadline representation", edit: func(claim *monolith.ClaimResult) { claim.DeadlineRaw = claim.Deadline.Format(time.RFC3339) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			discovery, claim := rediscoveredSignFixture(t)
+			tt.edit(&claim)
+			runner := &countingSignRunner{}
+			sem := make(chan struct{}, 1)
+			sem <- struct{}{}
+			RunSessionWithExecutors(context.Background(), discovery, &stubClient{claimResult: claim}, runner, &capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
+			if runner.calls != 0 {
+				t.Fatalf("SIGN runtime calls = %d, want 0", runner.calls)
+			}
+		})
+	}
+}
+
+func rediscoveredSignFixture(t *testing.T) (monolith.Intent, monolith.ClaimResult) {
+	t.Helper()
+	claimed := validSignIntent(t)
+	claimed.IntentID = "intent-125"
+	claimed.SessionID = "sign-125"
+	claimed.Payload.OrgID = "org-123"
+	claimed.Payload.KeyID = "key-125"
+	deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	deadlineRaw := deadline.Format("2006-01-02T15:04:05.000Z")
+	discovery := monolith.Intent{
+		CreatedAt:            time.Now().UTC().Add(-time.Minute),
+		CoSignerDeploymentID: "co-signer-deployment-1",
+		DeadlineRaw:          deadlineRaw,
+		DiscoveryStatus:      "CLAIMED",
+		IntentID:             claimed.IntentID,
+		SessionID:            claimed.SessionID,
+		Type:                 "SIGN",
+		ExpiresAt:            deadline,
+		Payload:              monolith.IntentPayload{Type: "SIGN", OrgID: claimed.Payload.OrgID, KeyID: claimed.Payload.KeyID},
+	}
+	claim := claimResultForIntent(claimed)
+	claim.Deadline = deadline
+	claim.ExpiresAt = time.Time{}
+	claim.DeadlineRaw = deadlineRaw
+	claim.CoSignerDeploymentID = discovery.CoSignerDeploymentID
+	return discovery, claim
+}
+
 func TestNormalDKGHoldsPermitLeaseUntilAuthoritativeTerminalOutcome(t *testing.T) {
 	intent := authoritativeDKGIntent()
 	client := &stubClient{claimResult: claimResultForIntent(intent)}

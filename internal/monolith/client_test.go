@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -45,7 +46,7 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
 		bodyHashHeaderIsAbsent = len(r.Header.Values("X-Api-Body-Hash")) == 0
 		signatureIsValid = verifyRequestSignature(t, r, pub, "")
-		_, _ = w.Write([]byte(`{"httpStatus":200,"status":"CLAIMED","expiresAt":"2026-04-16T12:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"httpStatus":200,"status":"CLAIMED","type":"DKG","expiresAt":"2026-04-16T12:00:00Z"}`))
 	}))
 	defer srv.Close()
 
@@ -141,6 +142,85 @@ func TestClaimIntentDecodesDualPartyContractFixture(t *testing.T) {
 	}
 }
 
+func TestClaimIntentPreservesSignClaimReplayPayloadAndDeadline(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/sign-claim-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/api/v1/co-signer/intents/intent-125/claim" {
+			t.Fatalf("request path = %q", r.URL.Path)
+		}
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	first, err := client.ClaimIntent(context.Background(), "intent-125")
+	if err != nil {
+		t.Fatalf("first ClaimIntent() error = %v", err)
+	}
+	second, err := client.ClaimIntent(context.Background(), "intent-125")
+	if err != nil {
+		t.Fatalf("replay ClaimIntent() error = %v", err)
+	}
+	if requests != 2 || !reflect.DeepEqual(first, second) {
+		t.Fatalf("claim replay changed immutable response: first=%+v second=%+v requests=%d", first, second, requests)
+	}
+	if first.IntentID != "intent-125" || first.SessionID != "sign-125" || first.Type != "SIGN" || first.Status != "CLAIMED" ||
+		first.CoSignerDeploymentID != "co-signer-deployment-1" || first.DeadlineRaw != "2026-07-30T00:00:00.000Z" ||
+		first.Payload.Type != "SIGN" || first.Payload.OrgID != "org-123" || first.Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174004" ||
+		!bytes.Equal(first.Payload.Digest, []byte{0xaa, 0xbb, 0xcc}) || !reflect.DeepEqual(first.Payload.Parties, []string{"mpc-signer", "co-signer-primary"}) ||
+		first.Payload.DerivationContext == nil || first.Payload.DerivationContext.FullPath != "m/44'/195'/0'/0/0" {
+		t.Fatalf("unexpected SIGN claim = %+v", first)
+	}
+}
+
+func TestClaimIntentRejectsWrongKindSignClaim(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/sign-claim-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongKind := bytes.Replace(fixture, []byte(`"type":"SIGN"`), []byte(`"type":"DKG"`), 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(wrongKind)
+	}))
+	defer srv.Close()
+	client, _ := newTestClient(t, srv.URL)
+	if _, err := client.ClaimIntent(context.Background(), "intent-125"); err == nil {
+		t.Fatal("ClaimIntent() error = nil")
+	}
+}
+
+func TestClaimIntentRejectsUnknownSignClaimPayloadField(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/sign-claim-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := bytes.Replace(fixture, []byte(`"algorithm":"ECDSA"`), []byte(`"algorithm":"ECDSA","unexpected":true`), 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(malformed) }))
+	defer srv.Close()
+	client, _ := newTestClient(t, srv.URL)
+	if _, err := client.ClaimIntent(context.Background(), "intent-125"); err == nil {
+		t.Fatal("ClaimIntent() error = nil")
+	}
+}
+
+func TestClaimIntentClassifiesTypedForeignConflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"httpStatus":409,"code":"INTENT_FOREIGN_CLAIM"}`))
+	}))
+	defer srv.Close()
+	client, _ := newTestClient(t, srv.URL)
+	_, err := client.ClaimIntent(context.Background(), "intent-125")
+	if !errors.Is(err, ErrAlreadyClaimed) {
+		t.Fatalf("ClaimIntent() error = %v, want ErrAlreadyClaimed", err)
+	}
+}
+
 func TestListActionableIntentsDecodesStrictBackendFixture(t *testing.T) {
 	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/listing-response.json")
 	if err != nil {
@@ -184,6 +264,15 @@ func TestListActionableIntentsDecodesStrictBackendFixture(t *testing.T) {
 	if listing.Pending[1].Type != "SIGN" || listing.Pending[1].Status != "PENDING" {
 		t.Fatalf("unexpected pending SIGN = %+v", listing.Pending[1])
 	}
+	if len(listing.OwnClaimedSign) != 1 {
+		t.Fatalf("len(OwnClaimedSign) = %d, want 1", len(listing.OwnClaimedSign))
+	}
+	rediscovered := listing.OwnClaimedSign[0]
+	if rediscovered.IntentID != "intent-125" || rediscovered.SessionID != "sign-125" || rediscovered.Type != "SIGN" ||
+		rediscovered.Status != "CLAIMED" || rediscovered.CoSignerDeploymentID != "co-signer-deployment-1" ||
+		rediscovered.DeadlineRaw != "2026-07-30T00:00:00.000Z" || len(rediscovered.DescriptorBytes) != 0 {
+		t.Fatalf("unexpected own claimed SIGN = %+v", rediscovered)
+	}
 }
 
 func TestGetPendingIntentsExcludesOwnClaimedDKGFromStrictListing(t *testing.T) {
@@ -201,15 +290,42 @@ func TestGetPendingIntentsExcludesOwnClaimedDKGFromStrictListing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPendingIntents() error = %v", err)
 	}
-	if len(pending) != 2 {
-		t.Fatalf("len(pending) = %d, want 2", len(pending))
+	if len(pending) != 3 {
+		t.Fatalf("len(pending) = %d, want 3", len(pending))
 	}
-	if pending[0].IntentID != "intent-123" || pending[0].Type != "DKG" ||
-		pending[1].IntentID != "intent-124" || pending[1].Type != "SIGN" {
-		t.Fatalf("pending = %+v, want backend pending collection only", pending)
+	if pending[0].IntentID != "intent-125" || pending[0].SessionID != "sign-125" || pending[0].Type != "SIGN" ||
+		pending[0].Payload.OrgID != "org-123" || pending[0].Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174004" ||
+		pending[0].ExpiresAt.Format(time.RFC3339Nano) != "2026-07-30T00:00:00Z" || len(pending[0].Payload.Digest) != 0 ||
+		pending[1].IntentID != "intent-123" || pending[1].Type != "DKG" ||
+		pending[2].IntentID != "intent-124" || pending[2].Type != "SIGN" {
+		t.Fatalf("pending = %+v, want own-claimed SIGN then backend pending collection", pending)
 	}
-	if pending[0].CreatedAt.IsZero() || pending[1].CreatedAt.IsZero() || !pending[0].CreatedAt.Before(pending[1].CreatedAt) {
+	if pending[0].CreatedAt.IsZero() || pending[1].CreatedAt.IsZero() || pending[2].CreatedAt.IsZero() ||
+		!pending[0].CreatedAt.Before(pending[1].CreatedAt) || !pending[1].CreatedAt.Before(pending[2].CreatedAt) {
 		t.Fatalf("pending createdAt values were not preserved: %+v", pending)
+	}
+}
+
+func TestListActionableIntentsRejectsInvalidOwnClaimedSignDiscovery(t *testing.T) {
+	valid := `{"coSignerDeploymentId":"co-signer-deployment-1","createdAt":"2026-07-29T00:00:00.500Z","deadline":"2026-07-30T00:00:00.000Z","intentId":"intent-125","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174004","orgId":"org-123","sessionId":"sign-125","status":"CLAIMED","type":"SIGN"}`
+	tests := []struct{ name, item string }{
+		{name: "missing deadline", item: strings.Replace(valid, `,"deadline":"2026-07-30T00:00:00.000Z"`, "", 1)},
+		{name: "wrong status", item: strings.Replace(valid, `"status":"CLAIMED"`, `"status":"PENDING"`, 1)},
+		{name: "wrong field type", item: strings.Replace(valid, `"deadline":"2026-07-30T00:00:00.000Z"`, `"deadline":7`, 1)},
+		{name: "unexpected payload", item: strings.Replace(valid, `,"sessionId"`, `,"payload":{},"sessionId"`, 1)},
+		{name: "known DKG field is still unexpected", item: strings.Replace(valid, `,"intentId"`, `,"descriptorFingerprint":"","intentId"`, 1)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"httpStatus":200,"ownClaimedDkg":[],"ownClaimedSign":[` + tt.item + `],"pending":[]}`))
+			}))
+			defer srv.Close()
+			client, _ := newTestClient(t, srv.URL)
+			if _, err := client.ListActionableIntents(context.Background()); err == nil {
+				t.Fatal("ListActionableIntents() error = nil")
+			}
+		})
 	}
 }
 
@@ -420,19 +536,92 @@ func TestPostResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
 	var gotIdempotency string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
-		w.WriteHeader(http.StatusNoContent)
+		_, _ = w.Write([]byte(`{"authoritativeStatus":"COMPLETED","httpStatus":200,"outcome":"ACCEPTED"}`))
 	}))
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
 	err := client.PostResult(context.Background(), "intent-42", IntentResult{
-		Status: "approved",
+		Status: "COMPLETED",
 	})
 	if err != nil {
 		t.Fatalf("PostResult() error = %v", err)
 	}
 	if gotIdempotency != "intent-42" {
 		t.Fatalf("X-Idempotency-Key = %q, want %q", gotIdempotency, "intent-42")
+	}
+}
+
+func TestPostResultPublishesMinimalCompletedAndFailedSignResults(t *testing.T) {
+	tests := []struct {
+		name, fixture, response string
+		result                  IntentResult
+	}{
+		{name: "completed", fixture: "sign-terminal-completed-request.json", response: `{"authoritativeStatus":"COMPLETED","httpStatus":200,"outcome":"ACCEPTED"}`, result: IntentResult{Status: "COMPLETED"}},
+		{name: "failed", fixture: "sign-terminal-failed-request.json", response: `{"authoritativeStatus":"FAILED","httpStatus":200,"outcome":"EXACT_REPLAY"}`, result: IntentResult{Status: "FAILED", ErrorCode: "PRIMARY_SIGN_FAILED"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wantBody, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/" + tt.fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBody, readErr := io.ReadAll(r.Body)
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if !bytes.Equal(gotBody, wantBody) {
+					t.Fatalf("result body = %s, want %s", gotBody, wantBody)
+				}
+				_, _ = w.Write([]byte(tt.response))
+			}))
+			defer srv.Close()
+			client, _ := newTestClient(t, srv.URL)
+			if err := client.PostResult(context.Background(), "intent-125", tt.result); err != nil {
+				t.Fatalf("PostResult() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestPostResultClassifiesAuthoritativeTerminalConflict(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"authoritativeStatus":"FAILED","httpStatus":409,"outcome":"TERMINAL_CONFLICT"}`))
+	}))
+	defer srv.Close()
+	client, _ := newTestClient(t, srv.URL)
+	err := client.PostResult(context.Background(), "intent-125", IntentResult{Status: "COMPLETED"})
+	if !errors.Is(err, ErrTerminalConflict) {
+		t.Fatalf("PostResult() error = %v, want ErrTerminalConflict", err)
+	}
+	var conflict *ResultConflictError
+	if !errors.As(err, &conflict) || conflict.AuthoritativeStatus != "FAILED" {
+		t.Fatalf("PostResult() conflict = %#v", conflict)
+	}
+}
+
+func TestPostResultRejectsMalformedAuthoritativeOutcome(t *testing.T) {
+	for _, body := range []string{
+		`{"authoritativeStatus":"COMPLETED","httpStatus":200,"outcome":"ACCEPTED","unknown":true}`,
+		`{"authoritativeStatus":"COMPLETED","httpStatus":200,"outcome":"TERMINAL_CONFLICT"}`,
+		`{"authoritativeStatus":"TIMED_OUT","httpStatus":200,"outcome":"ACCEPTED"}`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
+		client, _ := newTestClient(t, srv.URL)
+		if err := client.PostResult(context.Background(), "intent-125", IntentResult{Status: "COMPLETED"}); err == nil {
+			t.Fatalf("PostResult() accepted malformed outcome %s", body)
+		}
+		srv.Close()
+	}
+}
+
+func TestPostResultRejectsDKGResultFamily(t *testing.T) {
+	client, _ := newTestClient(t, "https://example.invalid")
+	err := client.PostResult(context.Background(), "intent-123", IntentResult{Status: "COMPLETED", DkgMaterial: &DkgParticipantResult{PartyID: "co-signer-primary"}})
+	if err == nil {
+		t.Fatal("PostResult() accepted DKG result material")
 	}
 }
 
@@ -567,7 +756,8 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 			"sessionId":"session-1",
 			"type":"SIGN",
 			"status":"CLAIMED",
-			"expiresAt":"2026-04-16T12:00:00Z",
+			"coSignerDeploymentId":"co-signer-deployment-1",
+			"deadline":"2027-04-16T12:00:00.000Z",
 			"payload":{
 				"type":"SIGN",
 				"orgId":"org-1",
@@ -585,9 +775,6 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 				"digestType":"transaction_hash",
 				"hashAlgorithm":"sha256",
 				"signingPayloadType":"ethereum_transaction",
-				"chainCode":"1111111111111111111111111111111111111111111111111111111111111111",
-				"chainCodeHash":"AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw",
-				"derivationScheme":"bip32_secp256k1",
 				"derivationContextHash":"context-hash",
 				"partyId":"co-signer",
 				"derivationContext":{
@@ -628,9 +815,6 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 		payload.DigestType != "transaction_hash" ||
 		payload.HashAlgorithm != "sha256" ||
 		payload.SigningPayloadType != "ethereum_transaction" ||
-		payload.ChainCode != "1111111111111111111111111111111111111111111111111111111111111111" ||
-		payload.ChainCodeHash != "AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw" ||
-		payload.DerivationScheme != "bip32_secp256k1" ||
 		payload.DerivationContextHash != "context-hash" ||
 		payload.PartyID != "co-signer" {
 		t.Fatalf("unexpected HD payload = %+v", payload)

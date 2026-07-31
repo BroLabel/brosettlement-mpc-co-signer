@@ -18,8 +18,8 @@ import (
 
 const (
 	signerBundleIdentity = "dRgKBw7Y392uHY7AkBj5dkahjKmwYcFYhjtYv62-5mA"
-	httpBundleIdentity   = "sQa76ZLUXK4IsYbtw4iSUheQsaOWUN0dyjVRB8foE5A"
-	backendSourceCommit  = "541b368f54afc8437c33d2376920e73ea8e81e35"
+	httpBundleIdentity   = "V0lqMGXjsdi35Jw5Q51QwjZ9uhn8VQxDrfWSYmV04Dc"
+	backendSourceCommit  = "0a5a0136146b9fa8e6e6c4e6d0be31433a377c4c"
 	deploymentID         = "co-signer-deployment-1"
 )
 
@@ -30,7 +30,8 @@ var (
 	}
 	httpPaths = []string{
 		"accepted-response.json", "claim-response.json", "conflict-response.json", "listing-response.json",
-		"mailbox-frame.json", "replay-response.json", "terminal-completed-request.json", "terminal-failed-request.json",
+		"mailbox-frame.json", "replay-response.json", "sign-claim-response.json", "sign-terminal-completed-request.json",
+		"sign-terminal-failed-request.json", "terminal-completed-request.json", "terminal-failed-request.json",
 	}
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
 	keyIDPattern      = regexp.MustCompile(`^mpc_key_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -244,7 +245,7 @@ type dkgFixture struct {
 }
 
 func verifyHTTPFixtures(root string) error {
-	listing, err := readObject(root, "listing-response.json", []string{"httpStatus", "ownClaimedDkg", "pending"})
+	listing, err := readObject(root, "listing-response.json", []string{"httpStatus", "ownClaimedDkg", "ownClaimedSign", "pending"})
 	if err != nil {
 		return err
 	}
@@ -255,12 +256,16 @@ func verifyHTTPFixtures(root string) error {
 	if err != nil {
 		return err
 	}
+	ownSign, err := array(listing, "ownClaimedSign")
+	if err != nil {
+		return err
+	}
 	pending, err := array(listing, "pending")
 	if err != nil {
 		return err
 	}
-	if len(own) != 1 || len(pending) != 2 {
-		return fmt.Errorf("listing must contain one claimed DKG and pending DKG/SIGN pair")
+	if len(own) != 1 || len(ownSign) != 1 || len(pending) != 2 {
+		return fmt.Errorf("listing must contain one claimed DKG, one claimed SIGN, and pending DKG/SIGN pair")
 	}
 
 	claimed, err := parseDKG(objectRaw(own[0]), "CLAIMED", true)
@@ -275,6 +280,10 @@ func verifyHTTPFixtures(root string) error {
 		return fmt.Errorf("second pending intent must be SIGN")
 	}
 	if err := parseSign(objectRaw(pending[1])); err != nil {
+		return err
+	}
+	claimedSign, err := parseOwnedSign(objectRaw(ownSign[0]))
+	if err != nil {
 		return err
 	}
 	if !claimed.createdAt.Before(pendingDKG.createdAt) || !pendingDKG.createdAt.Before(signCreatedAt(objectRaw(pending[1]))) {
@@ -304,6 +313,17 @@ func verifyHTTPFixtures(root string) error {
 	chain, err := parseStandardBase64(stringMust(claim, "chainCodeBase64"), 32)
 	if err != nil || digest(chain) != claimDKG.descriptor.ChainCodeHash {
 		return fmt.Errorf("claim chain code does not match descriptor")
+	}
+
+	signClaim, err := readObject(root, "sign-claim-response.json", []string{"coSignerDeploymentId", "deadline", "httpStatus", "intentId", "payload", "sessionId", "status", "type"})
+	if err != nil {
+		return err
+	}
+	if err := validateSignClaim(signClaim, claimedSign); err != nil {
+		return err
+	}
+	if err := validateSignTerminalFixtures(root); err != nil {
+		return err
 	}
 
 	terminals := map[string]string{}
@@ -438,6 +458,105 @@ func parseSign(fields map[string]json.RawMessage) error {
 	}
 	_, err := exactUTC(stringMust(fields, "createdAt"))
 	return err
+}
+
+type signDiscoveryFixture struct {
+	intentID, sessionID, keyID, orgID, deadline string
+}
+
+func parseOwnedSign(fields map[string]json.RawMessage) (signDiscoveryFixture, error) {
+	expected := []string{"coSignerDeploymentId", "createdAt", "deadline", "intentId", "keyId", "orgId", "sessionId", "status", "type"}
+	if !sameKeys(fields, expected) || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "CLAIMED" || stringMust(fields, "coSignerDeploymentId") != deploymentID {
+		return signDiscoveryFixture{}, fmt.Errorf("invalid own claimed SIGN schema")
+	}
+	createdAt, err := exactUTC(stringMust(fields, "createdAt"))
+	if err != nil {
+		return signDiscoveryFixture{}, err
+	}
+	deadline, err := exactUTC(stringMust(fields, "deadline"))
+	if err != nil || !createdAt.Before(deadline) {
+		return signDiscoveryFixture{}, fmt.Errorf("invalid own claimed SIGN deadline")
+	}
+	fixture := signDiscoveryFixture{
+		intentID: stringMust(fields, "intentId"), sessionID: stringMust(fields, "sessionId"),
+		keyID: stringMust(fields, "keyId"), orgID: stringMust(fields, "orgId"), deadline: stringMust(fields, "deadline"),
+	}
+	if !identifier(fixture.intentID, "intentId", "intent-") || !identifier(fixture.sessionID, "sessionId", "sign-") || !identifier(fixture.orgID, "orgId", "org-") || !keyIDPattern.MatchString(fixture.keyID) {
+		return signDiscoveryFixture{}, fmt.Errorf("invalid own claimed SIGN identity")
+	}
+	return fixture, nil
+}
+
+func validateSignClaim(fields map[string]json.RawMessage, listed signDiscoveryFixture) error {
+	if integer(fields, "httpStatus") != 200 || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "CLAIMED" || stringMust(fields, "coSignerDeploymentId") != deploymentID {
+		return fmt.Errorf("invalid SIGN claim status")
+	}
+	if stringMust(fields, "intentId") != listed.intentID || stringMust(fields, "sessionId") != listed.sessionID || stringMust(fields, "deadline") != listed.deadline {
+		return fmt.Errorf("SIGN claim differs from discovery identity")
+	}
+	if _, err := exactUTC(stringMust(fields, "deadline")); err != nil {
+		return err
+	}
+	payload := objectRaw(fields["payload"])
+	expected := []string{"algorithm", "chain", "curve", "derivationContext", "derivationContextHash", "digest", "digestType", "hashAlgorithm", "keyId", "orgId", "parties", "partyId", "profileId", "profileTemplateId", "profileVersion", "signingPayloadType", "threshold", "type", "walletId"}
+	if !sameKeys(payload, expected) || stringMust(payload, "type") != "SIGN" || stringMust(payload, "keyId") != listed.keyID || stringMust(payload, "orgId") != listed.orgID {
+		return fmt.Errorf("invalid SIGN claim payload schema or identity")
+	}
+	for _, key := range []string{"algorithm", "chain", "curve", "derivationContextHash", "digestType", "hashAlgorithm", "partyId", "profileId", "profileTemplateId", "signingPayloadType", "walletId"} {
+		if stringMust(payload, key) == "" {
+			return fmt.Errorf("invalid SIGN claim payload %s", key)
+		}
+	}
+	if digest, err := parseStandardBase64(stringMust(payload, "digest"), -1); err != nil || len(digest) == 0 {
+		return fmt.Errorf("invalid SIGN claim digest")
+	}
+	parties, err := array(payload, "parties")
+	if err != nil || len(parties) != 2 {
+		return fmt.Errorf("invalid SIGN claim parties")
+	}
+	for _, party := range parties {
+		var value string
+		if json.Unmarshal(party, &value) != nil || value == "" {
+			return fmt.Errorf("invalid SIGN claim party")
+		}
+	}
+	threshold, err := integerValue(payload, "threshold")
+	if err != nil || threshold != 2 {
+		return fmt.Errorf("invalid SIGN claim threshold")
+	}
+	profileVersion, err := integerValue(payload, "profileVersion")
+	if err != nil || profileVersion < 1 {
+		return fmt.Errorf("invalid SIGN claim profile version")
+	}
+	contextFields := objectRaw(payload["derivationContext"])
+	contextExpected := []string{"accountPath", "addressEncoding", "algorithm", "chain", "childPath", "curve", "descriptorVersion", "expectedAddress", "expectedPublicKey", "fullPath", "keyVersion", "profileId", "profileTemplateId", "profileVersion", "publicKeyFormat", "scheme"}
+	if !sameKeys(contextFields, contextExpected) {
+		return fmt.Errorf("invalid SIGN derivation context schema")
+	}
+	for _, key := range []string{"accountPath", "addressEncoding", "algorithm", "chain", "childPath", "curve", "expectedAddress", "expectedPublicKey", "fullPath", "profileId", "profileTemplateId", "publicKeyFormat", "scheme"} {
+		if stringMust(contextFields, key) == "" {
+			return fmt.Errorf("invalid SIGN derivation context %s", key)
+		}
+	}
+	for _, key := range []string{"descriptorVersion", "keyVersion", "profileVersion"} {
+		value, err := integerValue(contextFields, key)
+		if err != nil || value < 1 {
+			return fmt.Errorf("invalid SIGN derivation context %s", key)
+		}
+	}
+	return nil
+}
+
+func validateSignTerminalFixtures(root string) error {
+	completed, err := readObject(root, "sign-terminal-completed-request.json", []string{"status"})
+	if err != nil || stringMust(completed, "status") != "COMPLETED" {
+		return fmt.Errorf("invalid completed SIGN terminal request")
+	}
+	failed, err := readObject(root, "sign-terminal-failed-request.json", []string{"errorCode", "status"})
+	if err != nil || stringMust(failed, "status") != "FAILED" || stringMust(failed, "errorCode") == "" {
+		return fmt.Errorf("invalid failed SIGN terminal request")
+	}
+	return nil
 }
 
 func signCreatedAt(fields map[string]json.RawMessage) time.Time {
