@@ -43,24 +43,25 @@ type FileStore struct {
 
 var _ coretss.ShareStore = (*FileStore)(nil)
 
-// NewFileStore creates a FileStore. key must be exactly 32 bytes (AES-256).
-// The directory is created if it does not exist.
-func NewFileStore(dir string, key []byte) (*FileStore, error) {
-	if strings.TrimSpace(dir) == "" {
-		return nil, errors.New("shares dir is required")
+// NewLegacyPrimaryFileStore adapts the immutable primary profile to the
+// current single-store core API. It is deliberately primary-only until CS-003
+// replaces this API with separate v1 store capabilities.
+func NewLegacyPrimaryFileStore(config StoreConfig) (*FileStore, error) {
+	if config.Purpose() != StorePurposePrimary {
+		return nil, errors.New("legacy core store requires the primary store profile")
 	}
-	if len(key) != 32 {
-		return nil, fmt.Errorf("share encryption key must be 32 bytes, got %d", len(key))
+	if config.keyProvider == nil {
+		return nil, errors.New("primary store key provider is required")
 	}
-	if err := os.MkdirAll(dir, sharesDirPerm); err != nil {
+	if err := os.MkdirAll(config.Directory(), sharesDirPerm); err != nil {
 		return nil, fmt.Errorf("create shares dir: %w", err)
 	}
 
-	copiedKey := make([]byte, len(key))
-	copy(copiedKey, key)
+	copiedKey := make([]byte, encryptionKeyBytes)
+	copy(copiedKey, config.keyProvider.key[:])
 
 	return &FileStore{
-		dir: dir,
+		dir: config.Directory(),
 		key: copiedKey,
 	}, nil
 }

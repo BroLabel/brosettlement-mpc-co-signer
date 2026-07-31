@@ -69,6 +69,21 @@ This project assumes:
 
 Issues that break the noncustodial guarantee or allow unilateral signing are critical.
 
+## Local artifact key custody
+
+The primary and recovery artifact stores are bound to distinct, non-overlapping
+absolute directories and fixed party purposes. Both stores use one lifetime
+AES-256 key supplied as canonical standard base64 plus a non-secret key
+reference. The service rejects passphrases, non-canonical encodings, and keys
+whose decoded length is not exactly 32 bytes; it never derives an encryption key
+by hashing a passphrase.
+
+Operators must preserve the original encryption key, key reference, primary
+artifact directory, recovery artifact directory, and stable state/lock path.
+Changing the key or key reference while artifacts remain live makes recovery
+unsafe. A local filesystem lock is process fencing for the supported single-host
+writer topology; it is not a cross-host or distributed lease.
+
 ## Severity Classification
 
 | Severity | Examples |

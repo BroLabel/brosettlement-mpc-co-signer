@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -57,11 +56,6 @@ func normalizePEMEnv(raw string) string {
 		return strings.ReplaceAll(raw, `\n`, "\n")
 	}
 	return raw
-}
-
-func shareEncryptionKey(secret string) []byte {
-	sum := sha256.Sum256([]byte(secret))
-	return sum[:]
 }
 
 func serveHealth(log *slog.Logger, srv *http.Server) {

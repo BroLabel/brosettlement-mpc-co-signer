@@ -38,7 +38,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	shareStore, err := sharestore.NewFileStore(cfg.SharesDir, shareEncryptionKey(cfg.ShareEncryptionKey))
+	shareStore, err := sharestore.NewLegacyPrimaryFileStore(cfg.PrimaryStore)
 	if err != nil {
 		log.Error("failed to initialize share store", "err", err)
 		os.Exit(1)
@@ -63,7 +63,7 @@ func main() {
 	scheduler := worker.NewScheduler(
 		client,
 		tssSvc,
-		cfg.PartyID,
+		cfg.PrimaryStore.PartyID(),
 		cfg.FramePollInterval,
 		worker.SchedulerConfig{
 			MinInterval:   cfg.PollMinInterval,
@@ -76,7 +76,7 @@ func main() {
 
 	healthServer := &http.Server{
 		Addr:    cfg.HTTPAddr,
-		Handler: health.NewHandler(version, cfg.SharesDir),
+		Handler: health.NewHandler(version, cfg.StateDir),
 	}
 
 	go scheduler.Run(ctx)

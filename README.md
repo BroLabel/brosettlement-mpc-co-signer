@@ -9,6 +9,32 @@ Runtime model:
 - exchanges MPC frames via monolith message endpoints
 - posts final MPC results back to monolith
 
+## 2-of-3 co-signer configuration
+
+The co-signer has one stable deployment identity and two fixed local store
+profiles. It does not accept the legacy `CO_SIGNER_PARTY_ID` or
+`CO_SIGNER_SHARES_DIR` settings.
+
+| Variable | Required value |
+| --- | --- |
+| `CO_SIGNER_DEPLOYMENT_ID` | Stable backend identifier (1–255 bytes) matching `[A-Za-z0-9][A-Za-z0-9._:-]*`. Do not change it between restarts. |
+| `CO_SIGNER_PRIMARY_PARTY_ID` | Exactly `co-signer-primary`. |
+| `CO_SIGNER_RECOVERY_PARTY_ID` | Exactly `co-signer-recovery`. |
+| `CO_SIGNER_PRIMARY_SHARES_DIR` | Absolute primary-store directory. |
+| `CO_SIGNER_RECOVERY_SHARES_DIR` | Absolute recovery-store directory that does not equal or overlap the primary directory. |
+| `CO_SIGNER_STATE_DIR` | Absolute persistent state directory. |
+| `CO_SIGNER_LOCK_PATH` | Absolute stable lock-file path inside `CO_SIGNER_STATE_DIR`. |
+| `CO_SIGNER_SHARE_ENCRYPTION_KEY` | Canonical padded standard-base64 encoding of exactly 32 bytes. |
+| `CO_SIGNER_SHARE_ENCRYPTION_KEY_REF` | Stable printable-ASCII identifier (1–255 bytes) for that same non-secret key reference. |
+| `CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES` | Explicit minimum free-space threshold for provisioning. |
+| `CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM` | Explicit positive preparams generation parallelism. |
+
+The primary and recovery profiles use one in-memory key provider and the same
+key reference. The raw encryption key is never logged or returned by a store
+configuration object. Configure and back up the original key and its key
+reference for the lifetime of every v1 artifact; there is no passphrase hashing
+or automatic key rotation.
+
 ## Client API request signing
 
 The co-signer authenticates monolith HTTP requests with Ed25519 signatures. The

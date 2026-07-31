@@ -1,133 +1,211 @@
 package config_test
 
 import (
-	"os"
-	"path/filepath"
+	"encoding/base64"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/config"
 )
 
-func TestLoadMonolithDefaults(t *testing.T) {
-	t.Setenv("CO_SIGNER_MONOLITH_URL", "https://monolith.test")
-	t.Setenv("CO_SIGNER_API_KEY_ID", "key-1")
-	t.Setenv("CO_SIGNER_API_PRIVATE_KEY", "cHJpdmF0ZS1rZXk=")
-	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", "share-secret")
+func TestLoadBuildsBoundPrimaryAndRecoveryStores(t *testing.T) {
+	setRequiredEnv(t)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DeploymentID != "deployment-1" {
+		t.Fatalf("DeploymentID = %q, want deployment-1", cfg.DeploymentID)
+	}
+	if got, want := cfg.PrimaryStore.PartyID(), "co-signer-primary"; got != want {
+		t.Errorf("primary PartyID() = %q, want %q", got, want)
+	}
+	if got, want := cfg.RecoveryStore.PartyID(), "co-signer-recovery"; got != want {
+		t.Errorf("recovery PartyID() = %q, want %q", got, want)
+	}
+	if got, want := cfg.PrimaryStore.FinalPath("key-1"), "/var/lib/co-signer/primary/key-1.primary.json"; got != want {
+		t.Errorf("primary FinalPath() = %q, want %q", got, want)
+	}
+	if got, want := cfg.RecoveryStore.FinalPath("key-1"), "/var/lib/co-signer/recovery/key-1.recovery.json"; got != want {
+		t.Errorf("recovery FinalPath() = %q, want %q", got, want)
+	}
+	if got, want := cfg.PrimaryStore.KeyRef(), "keyref-1"; got != want {
+		t.Errorf("primary KeyRef() = %q, want %q", got, want)
+	}
+	if got, want := cfg.RecoveryStore.KeyRef(), "keyref-1"; got != want {
+		t.Errorf("recovery KeyRef() = %q, want %q", got, want)
+	}
+	if cfg.PreParamsGenerationParallelism != 2 {
+		t.Errorf("PreParamsGenerationParallelism = %d, want 2", cfg.PreParamsGenerationParallelism)
+	}
+	if cfg.FreeSpaceThresholdBytes != 1<<20 {
+		t.Errorf("FreeSpaceThresholdBytes = %d, want %d", cfg.FreeSpaceThresholdBytes, 1<<20)
+	}
+	if got, want := cfg.LockPath, "/var/lib/co-signer/state/co-signer.lock"; got != want {
+		t.Errorf("LockPath = %q, want %q", got, want)
+	}
+}
+
+func TestLoadRejectsMissingStableDeploymentID(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("CO_SIGNER_DEPLOYMENT_ID", "")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("Load() error = nil, want missing deployment ID error")
+	}
+}
+
+func TestLoadRequiresExplicitProvisioningCapacitySettings(t *testing.T) {
+	for _, variable := range []string{
+		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES",
+		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM",
+	} {
+		t.Run(variable, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv(variable, "")
+
+			if _, err := config.Load(); err == nil {
+				t.Fatalf("Load() error = nil, want missing %s error", variable)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsNonPositiveOrInvalidFreeSpaceThreshold(t *testing.T) {
+	for _, value := range []string{"0", "-1", "18446744073709551616"} {
+		t.Run(value, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES", value)
+
+			if _, err := config.Load(); err == nil {
+				t.Fatal("Load() error = nil, want free-space threshold rejection")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsZeroGenerationParallelism(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM", "0")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("Load() error = nil, want generation parallelism rejection")
+	}
+}
+
+func TestLoadRequiresLockPathInsideButNotEqualToStateDirectory(t *testing.T) {
+	for _, lockPath := range []string{
+		"/var/lib/co-signer/other/co-signer.lock",
+		"/var/lib/co-signer/state",
+	} {
+		t.Run(lockPath, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("CO_SIGNER_LOCK_PATH", lockPath)
+
+			if _, err := config.Load(); err == nil {
+				t.Fatal("Load() error = nil, want invalid lock path error")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsLegacySingleStoreSettings(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("CO_SIGNER_PARTY_ID", "co-signer")
+	t.Setenv("CO_SIGNER_SHARES_DIR", "/var/lib/co-signer/shares")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("Load() error = nil, want legacy configuration error")
+	}
+}
+
+func TestLoadRejectsRelativeOrOverlappingStorePaths(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		primary  string
+		recovery string
+	}{
+		{name: "relative primary", primary: "./primary", recovery: "/var/lib/co-signer/recovery"},
+		{name: "same directory", primary: "/var/lib/co-signer/stores", recovery: "/var/lib/co-signer/stores"},
+		{name: "overlapping directory", primary: "/var/lib/co-signer/stores", recovery: "/var/lib/co-signer/stores/recovery"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("CO_SIGNER_PRIMARY_SHARES_DIR", tc.primary)
+			t.Setenv("CO_SIGNER_RECOVERY_SHARES_DIR", tc.recovery)
+
+			if _, err := config.Load(); err == nil {
+				t.Fatal("Load() error = nil, want path validation error")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsInvalidKeyWithoutLeakingSecret(t *testing.T) {
+	setRequiredEnv(t)
+	secret := "not-a-base64-secret"
+	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", secret)
+
+	_, err := config.Load()
+	if err == nil {
+		t.Fatal("Load() error = nil, want key validation error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("Load() error leaked encryption key: %v", err)
+	}
+}
+
+func TestLoadedConfigRedactsEncryptionKeyWhenFormatted(t *testing.T) {
+	setRequiredEnv(t)
+	secret := base64.StdEncoding.EncodeToString([]byte("01234567890123456789012345678901"))
+	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", secret)
+
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if rendered := fmt.Sprintf("%+v", cfg); strings.Contains(rendered, secret) || strings.Contains(rendered, "01234567890123456789012345678901") {
+		t.Fatalf("formatted config leaked encryption key: %s", rendered)
+	}
+}
+
+func TestLoadUsesRuntimeDefaults(t *testing.T) {
+	setRequiredEnv(t)
 	t.Setenv("CO_SIGNER_POLL_MAX_INTERVAL", "")
 
 	cfg, err := config.Load()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.MonolithURL != "https://monolith.test" {
-		t.Errorf("got MonolithURL=%q, want https://monolith.test", cfg.MonolithURL)
-	}
-	if cfg.MaxConcurrent != 4 {
-		t.Errorf("got MaxConcurrent=%d, want 4", cfg.MaxConcurrent)
-	}
-	if cfg.PollMinInterval != 2*time.Second {
-		t.Errorf("got PollMinInterval=%s, want 2s", cfg.PollMinInterval)
-	}
-	if cfg.PollMaxInterval != 10*time.Second {
-		t.Errorf("got PollMaxInterval=%s, want 10s", cfg.PollMaxInterval)
-	}
-	if cfg.FramePollInterval != 500*time.Millisecond {
-		t.Errorf("got FramePollInterval=%s, want 500ms", cfg.FramePollInterval)
-	}
-	if cfg.PartyID != "co-signer" {
-		t.Errorf("got PartyID=%q, want co-signer", cfg.PartyID)
+	if cfg.MaxConcurrent != 4 || cfg.PollMinInterval != 2*time.Second || cfg.PollMaxInterval != 10*time.Second || cfg.FramePollInterval != 500*time.Millisecond {
+		t.Fatalf("unexpected runtime defaults: %+v", cfg)
 	}
 }
 
-func TestLoadAllowsOverridingPartyID(t *testing.T) {
-	t.Setenv("CO_SIGNER_MONOLITH_URL", "https://monolith.test")
-	t.Setenv("CO_SIGNER_API_KEY_ID", "key-1")
-	t.Setenv("CO_SIGNER_API_PRIVATE_KEY", "cHJpdmF0ZS1rZXk=")
-	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", "share-secret")
-	t.Setenv("CO_SIGNER_PARTY_ID", "party-9")
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.PartyID != "party-9" {
-		t.Errorf("got PartyID=%q, want party-9", cfg.PartyID)
-	}
-}
-
-func TestLoadUsesRenderPortWhenHTTPAddrIsUnset(t *testing.T) {
-	t.Setenv("CO_SIGNER_MONOLITH_URL", "https://monolith.test")
-	t.Setenv("CO_SIGNER_API_KEY_ID", "key-1")
-	t.Setenv("CO_SIGNER_API_PRIVATE_KEY", "cHJpdmF0ZS1rZXk=")
-	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", "share-secret")
-	t.Setenv("PORT", "10000")
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.HTTPAddr != "0.0.0.0:10000" {
-		t.Errorf("got HTTPAddr=%q, want 0.0.0.0:10000", cfg.HTTPAddr)
-	}
-}
-
-func TestLoadRequiresSigningInputs(t *testing.T) {
-	t.Setenv("CO_SIGNER_MONOLITH_URL", "https://monolith.test")
-	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY", "share-secret")
-	t.Setenv("CO_SIGNER_PARTY_ID", "party-1")
-
-	_, err := config.Load()
-	if err == nil {
-		t.Fatal("expected error for missing signing credentials")
-	}
-}
-
-func TestLoadRequiresShareEncryptionKey(t *testing.T) {
-	t.Setenv("CO_SIGNER_MONOLITH_URL", "https://monolith.test")
-	t.Setenv("CO_SIGNER_API_KEY_ID", "key-1")
-	t.Setenv("CO_SIGNER_API_PRIVATE_KEY", "cHJpdmF0ZS1rZXk=")
-	t.Setenv("CO_SIGNER_PARTY_ID", "party-1")
-
-	_, err := config.Load()
-	if err == nil {
-		t.Fatal("expected error for missing share encryption key")
-	}
-}
-
-func TestLoadReadsDotEnvWhenPresent(t *testing.T) {
-	dir := t.TempDir()
-
-	content := []byte("" +
-		"CO_SIGNER_MONOLITH_URL=https://monolith.test\n" +
-		"CO_SIGNER_API_KEY_ID=key-1\n" +
-		"CO_SIGNER_API_PRIVATE_KEY=cHJpdmF0ZS1rZXk=\n" +
-		"CO_SIGNER_SHARE_ENCRYPTION_KEY=share-secret\n")
-	if err := os.WriteFile(filepath.Join(dir, ".env"), content, 0o600); err != nil {
-		t.Fatalf("write .env: %v", err)
-	}
-
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatalf("Chdir() error = %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(wd); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	})
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if cfg.MonolithURL != "https://monolith.test" {
-		t.Errorf("got MonolithURL=%q, want https://monolith.test", cfg.MonolithURL)
-	}
-	if cfg.APIKeyID != "key-1" {
-		t.Errorf("got APIKeyID=%q, want key-1", cfg.APIKeyID)
+func setRequiredEnv(t *testing.T) {
+	t.Helper()
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	for name, value := range map[string]string{
+		"CO_SIGNER_MONOLITH_URL":                     "https://monolith.test",
+		"CO_SIGNER_API_KEY_ID":                       "key-1",
+		"CO_SIGNER_API_PRIVATE_KEY":                  "cHJpdmF0ZS1rZXk=",
+		"CO_SIGNER_DEPLOYMENT_ID":                    "deployment-1",
+		"CO_SIGNER_PRIMARY_PARTY_ID":                 "co-signer-primary",
+		"CO_SIGNER_RECOVERY_PARTY_ID":                "co-signer-recovery",
+		"CO_SIGNER_PRIMARY_SHARES_DIR":               "/var/lib/co-signer/primary",
+		"CO_SIGNER_RECOVERY_SHARES_DIR":              "/var/lib/co-signer/recovery",
+		"CO_SIGNER_STATE_DIR":                        "/var/lib/co-signer/state",
+		"CO_SIGNER_LOCK_PATH":                        "/var/lib/co-signer/state/co-signer.lock",
+		"CO_SIGNER_SHARE_ENCRYPTION_KEY":             key,
+		"CO_SIGNER_SHARE_ENCRYPTION_KEY_REF":         "keyref-1",
+		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES":       "1048576",
+		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM": "2",
+		"CO_SIGNER_PARTY_ID":                         "",
+		"CO_SIGNER_SHARES_DIR":                       "",
+	} {
+		t.Setenv(name, value)
 	}
 }
