@@ -20,12 +20,12 @@ profiles. It does not accept the legacy `CO_SIGNER_PARTY_ID` or
 | `CO_SIGNER_DEPLOYMENT_ID` | Stable backend identifier (1–255 bytes) matching `[A-Za-z0-9][A-Za-z0-9._:-]*`. Do not change it between restarts. |
 | `CO_SIGNER_PRIMARY_PARTY_ID` | Exactly `co-signer-primary`. |
 | `CO_SIGNER_RECOVERY_PARTY_ID` | Exactly `co-signer-recovery`. |
-| `CO_SIGNER_PRIMARY_SHARES_DIR` | Absolute primary-store directory. |
-| `CO_SIGNER_RECOVERY_SHARES_DIR` | Absolute recovery-store directory that does not equal or overlap the primary directory. |
+| `CO_SIGNER_PRIMARY_SHARES_DIR` | Absolute pre-existing private primary-store directory. |
+| `CO_SIGNER_RECOVERY_SHARES_DIR` | Absolute pre-existing private recovery-store directory that does not equal or overlap the primary directory. |
 | `CO_SIGNER_STATE_DIR` | Absolute persistent state directory. |
 | `CO_SIGNER_LOCK_PATH` | Absolute stable lock-file path inside `CO_SIGNER_STATE_DIR`. |
 | `CO_SIGNER_SHARE_ENCRYPTION_KEY` | Canonical padded standard-base64 encoding of exactly 32 bytes. |
-| `CO_SIGNER_SHARE_ENCRYPTION_KEY_REF` | Stable printable-ASCII identifier (1–255 bytes) for that same non-secret key reference. |
+| `CO_SIGNER_SHARE_ENCRYPTION_KEY_ID` | Stable printable-ASCII identifier (1–255 bytes) for that same non-secret key reference. |
 | `CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES` | Explicit minimum free-space threshold for provisioning. |
 | `CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM` | Explicit positive preparams generation parallelism. |
 
@@ -45,7 +45,7 @@ fencing only; it is not a distributed lease and does not coordinate another
 host or shared-NFS writer.
 
 Artifact v1 has one encryption-key lifetime. Keep the original encryption key
-and `CO_SIGNER_SHARE_ENCRYPTION_KEY_REF` with backups until every v1 B and C
+and `CO_SIGNER_SHARE_ENCRYPTION_KEY_ID` with backups until every v1 B and C
 artifact has left service. Replacing either value fails closed; rotation,
 re-encryption, and old-key lookup are unsupported.
 

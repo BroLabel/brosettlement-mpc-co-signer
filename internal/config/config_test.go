@@ -122,6 +122,16 @@ func TestLoadRejectsLegacySingleStoreSettings(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsLegacyEncryptionKeyReferenceVariable(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY_ID", "")
+	t.Setenv("CO_SIGNER_SHARE_ENCRYPTION_KEY_REF", "legacy-keyref")
+
+	if _, err := config.Load(); err == nil {
+		t.Fatal("Load() error = nil, want legacy key reference variable rejection")
+	}
+}
+
 func TestLoadRejectsRelativeOrOverlappingStorePaths(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -200,7 +210,8 @@ func setRequiredEnv(t *testing.T) {
 		"CO_SIGNER_STATE_DIR":                        "/var/lib/co-signer/state",
 		"CO_SIGNER_LOCK_PATH":                        "/var/lib/co-signer/state/co-signer.lock",
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY":             key,
-		"CO_SIGNER_SHARE_ENCRYPTION_KEY_REF":         "keyref-1",
+		"CO_SIGNER_SHARE_ENCRYPTION_KEY_ID":          "keyref-1",
+		"CO_SIGNER_SHARE_ENCRYPTION_KEY_REF":         "",
 		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES":       "1048576",
 		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM": "2",
 		"CO_SIGNER_PARTY_ID":                         "",

@@ -72,12 +72,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	if os.Getenv("CO_SIGNER_PARTY_ID") != "" || os.Getenv("CO_SIGNER_SHARES_DIR") != "" {
-		return Config{}, errors.New("CO_SIGNER_PARTY_ID and CO_SIGNER_SHARES_DIR are unsupported; configure explicit primary and recovery stores")
+	if os.Getenv("CO_SIGNER_PARTY_ID") != "" || os.Getenv("CO_SIGNER_SHARES_DIR") != "" || os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY_REF") != "" {
+		return Config{}, errors.New("legacy single-store and CO_SIGNER_SHARE_ENCRYPTION_KEY_REF settings are unsupported; configure explicit stores and CO_SIGNER_SHARE_ENCRYPTION_KEY_ID")
 	}
 
 	deploymentID := os.Getenv("CO_SIGNER_DEPLOYMENT_ID")
-	provider, err := sharestore.NewKeyProvider(os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY"), os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY_REF"))
+	provider, err := sharestore.NewKeyProvider(os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY"), os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY_ID"))
 	if err != nil {
 		return Config{}, fmt.Errorf("configure share encryption key: %w", err)
 	}

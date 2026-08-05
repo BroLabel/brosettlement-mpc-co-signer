@@ -71,7 +71,7 @@ func TestCoSignerStartupPreservesEarlyCapabilityErrorWithoutPanic(t *testing.T) 
 		"CO_SIGNER_STATE_DIR=" + stateDir,
 		"CO_SIGNER_LOCK_PATH=" + filepath.Join(stateDir, "co-signer.lock"),
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY=" + base64.StdEncoding.EncodeToString(make([]byte, 32)),
-		"CO_SIGNER_SHARE_ENCRYPTION_KEY_REF=keyref-1",
+		"CO_SIGNER_SHARE_ENCRYPTION_KEY_ID=keyref-1",
 		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES=1",
 		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM=1",
 	}...)
