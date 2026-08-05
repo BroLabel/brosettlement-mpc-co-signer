@@ -224,6 +224,52 @@ func TestCoordinatorDoesNotPublishStaleUnconfirmedReadinessWhenHandoffConfirmsIm
 	}
 }
 
+func TestCoordinatorImmediatePublicationConfirmationStillHonorsLiveCapabilities(t *testing.T) {
+	tests := []struct {
+		name              string
+		signingReady      bool
+		provisioningReady bool
+	}{
+		{name: "signing unavailable", signingReady: false, provisioningReady: true},
+		{name: "provisioning unavailable", signingReady: true, provisioningReady: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			job, err := terminal.NewFailedJob("intent-1", "session-1", "mpc_key_123e4567-e89b-42d3-a456-426614174000")
+			if err != nil {
+				t.Fatalf("NewFailedJob() error = %v", err)
+			}
+			var events eventLog
+			deps := successfulDependencies(&events, reconcile.Result{
+				Disposition: reconcile.DispositionTerminalPublicationRequired,
+				Job:         &job,
+			})
+			deps.SigningReady = func() bool { return tt.signingReady }
+			deps.ProvisioningReady = func() bool { return tt.provisioningReady }
+			deps.Handoff = func(_ context.Context, _ terminal.Job, done func(terminal.PublishResult)) error {
+				done(terminal.PublishResult{Outcome: terminal.Outcome{
+					Kind:                     terminal.OutcomeExactReplay,
+					AuthoritativeStatus:      mpc2of3.TerminalStatusFailed,
+					AuthoritativeFingerprint: job.Fingerprint(),
+				}})
+				return nil
+			}
+
+			coordinator := mustCoordinator(t, deps)
+			if err := coordinator.Start(context.Background()); err != nil {
+				t.Fatalf("Start() error = %v", err)
+			}
+			t.Cleanup(func() { _ = coordinator.Shutdown(context.Background()) })
+
+			got := deps.Readiness.Snapshot()
+			if got.ProvisioningReady || got.ProvisioningReason != health.ReasonProvisioningUnavailable {
+				t.Fatalf("immediately confirmed readiness = %#v, want provisioning unavailable", got)
+			}
+		})
+	}
+}
+
 func TestCoordinatorCapabilityDeferredGateIsLatchedUntilRestart(t *testing.T) {
 	var events eventLog
 	deferred := &reconcile.CapabilityDeferredError{Cause: errors.New("recovery unavailable")}

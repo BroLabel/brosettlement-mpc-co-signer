@@ -170,7 +170,10 @@ func (c *Coordinator) Start(parent context.Context) (err error) {
 		confirmed := c.confirmed
 		c.mu.Unlock()
 		if confirmed {
-			snapshot.ProvisioningReady = true
+			snapshot.ProvisioningReady = signingReady && c.deps.ProvisioningReady()
+			if !snapshot.ProvisioningReady {
+				snapshot.ProvisioningReason = health.ReasonProvisioningUnavailable
+			}
 		} else {
 			snapshot.ProvisioningReason = health.ReasonDKGTerminalUnconfirmed
 		}
@@ -206,7 +209,7 @@ func (c *Coordinator) publicationDone(result terminal.PublishResult) {
 		return
 	}
 	snapshot := c.deps.Readiness.Snapshot()
-	snapshot.ProvisioningReady = c.deps.ProvisioningReady()
+	snapshot.ProvisioningReady = snapshot.SigningReady && c.deps.ProvisioningReady()
 	if snapshot.ProvisioningReady {
 		snapshot.ProvisioningReason = health.ReasonNone
 	} else {
