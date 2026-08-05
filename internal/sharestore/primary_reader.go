@@ -36,9 +36,13 @@ func (r *PrimaryReader) LoadShare(ctx context.Context, keyID string) (*coretss.S
 		return nil, fmt.Errorf("read primary artifact: %w", err)
 	}
 	defer clear(finalBytes)
-	stored, _, err := loadValidatedRuntimeShare(r.store.config, nil, finalBytes)
+	stored, evidence, err := loadValidatedRuntimeShare(r.store.config, nil, finalBytes)
 	if err != nil {
 		return nil, err
+	}
+	if evidence.KeyID != keyID {
+		clear(stored.Blob)
+		return nil, fmt.Errorf("%w: requested key does not match primary artifact descriptor", ErrArtifactBinding)
 	}
 	return stored, nil
 }

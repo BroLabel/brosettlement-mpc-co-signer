@@ -251,6 +251,24 @@ func TestStoreRejectsUnsafeExistingArtifactDirectoryWithoutChangingIt(t *testing
 	}
 }
 
+func TestStoreRejectsMissingArtifactDirectoryWithoutCreatingIt(t *testing.T) {
+	provider, err := NewKeyProvider(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)), testKeyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(t.TempDir(), "primary")
+	config, err := NewStoreConfig("deployment-1", StorePurposePrimary, primaryPartyID, directory, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newStore(config); err == nil {
+		t.Fatal("newStore() created a missing deployment-owned artifact directory")
+	}
+	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing artifact directory changed, Lstat() error = %v", err)
+	}
+}
+
 func TestStoreRejectsSymlinkAndNonDirectoryArtifactDestination(t *testing.T) {
 	provider, err := NewKeyProvider(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)), testKeyRef)
 	if err != nil {

@@ -27,7 +27,6 @@ const (
 	maxArtifactEnvelopeBytes = 16 << 20
 	maxArtifactCipherBytes   = 12 << 20
 	maxArtifactPayloadBytes  = 8 << 20
-	storeDirectoryPerm       = 0o700
 )
 
 var canonicalKeyIDPattern = regexp.MustCompile(`^mpc_key_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -149,10 +148,7 @@ func configuredStore(config StoreConfig) (*Store, error) {
 func ensurePrivateStoreDirectory(directory string) error {
 	info, err := os.Lstat(directory)
 	if errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(directory, storeDirectoryPerm); err != nil {
-			return fmt.Errorf("create artifact directory: %w", err)
-		}
-		info, err = os.Lstat(directory)
+		return errors.New("artifact destination must exist before startup")
 	}
 	if err != nil {
 		return fmt.Errorf("inspect artifact directory: %w", err)
