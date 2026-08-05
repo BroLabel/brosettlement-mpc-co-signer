@@ -244,7 +244,7 @@ func TestRunSessionRediscoveredSignClaimsReplayBeforeRuntime(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), discovery, client, runner, &capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	RunSessionWithExecutors(context.Background(), discovery, client, runner, &capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil, slog.Default())
 
 	if runner.calls != 1 {
 		t.Fatalf("SIGN runtime calls = %d, want 1 after same-owner claim replay", runner.calls)
@@ -677,7 +677,7 @@ func TestPrimarySigningArtifactFailuresEmitRedactedCriticalAlertAndDoNotDegradeR
 
 			RunSessionWithExecutors(
 				context.Background(), intent, client, &errorSignRunner{err: tt.err},
-				&capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil,
+				&capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil,
 				slog.New(handler),
 			)
 
@@ -730,7 +730,7 @@ func TestPrimarySigningArtifactFailuresEmitRedactedCriticalAlertAndDoNotDegradeR
 			nextSem <- struct{}{}
 			RunSessionWithExecutors(
 				context.Background(), next, nextClient, &stubRunner{}, &capturingDKGExecutor{}, nil,
-				"co-signer", time.Millisecond, nextSem, nil, slog.New(handler),
+				coordinatorPrimaryParty, time.Millisecond, nextSem, nil, slog.New(handler),
 			)
 			if nextClient.lastResult.Status != intentStatusCompleted {
 				t.Fatalf("unrelated SIGN result = %+v, want completed", nextClient.lastResult)
@@ -873,13 +873,32 @@ func TestValidateIntentSignContract(t *testing.T) {
 			intent.Payload.DerivationScheme = coretss.DerivationSchemeBIP32Secp256k1
 		}},
 		{name: "conflicting payload type", edit: func(intent *monolith.Intent) { intent.Payload.Type = "DKG" }},
+		{name: "recovery subset", edit: func(intent *monolith.Intent) {
+			intent.Payload.Parties = []string{coordinatorPrimaryParty, coordinatorRecoveryParty}
+		}},
+		{name: "three party roster", edit: func(intent *monolith.Intent) {
+			intent.Payload.Parties = []string{coordinatorPlatformParty, coordinatorPrimaryParty, coordinatorRecoveryParty}
+		}},
+		{name: "reordered roster", edit: func(intent *monolith.Intent) {
+			intent.Payload.Parties = []string{coordinatorPrimaryParty, coordinatorPlatformParty}
+		}},
+		{name: "duplicate primary party", edit: func(intent *monolith.Intent) {
+			intent.Payload.Parties = []string{coordinatorPlatformParty, coordinatorPrimaryParty, coordinatorPrimaryParty}
+		}},
+		{name: "foreign local party", edit: func(intent *monolith.Intent) {
+			intent.Payload.Parties = []string{coordinatorPlatformParty, "foreign-primary"}
+		}},
+		{name: "threshold three", edit: func(intent *monolith.Intent) { intent.Payload.Threshold = 3 }},
+		{name: "payload party is recovery", edit: func(intent *monolith.Intent) {
+			intent.Payload.PartyID = coordinatorRecoveryParty
+		}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			intent := validSignIntent(t)
 			tt.edit(&intent)
-			if err := validateIntent(intent, "co-signer"); err == nil {
+			if err := validateIntent(intent, coordinatorPrimaryParty); err == nil {
 				t.Fatal("validateIntent() error = nil, want error")
 			}
 		})
@@ -892,14 +911,14 @@ func TestValidateIntentSignAcceptsEmptyDKGFieldsAndNormalizedPayloadType(t *test
 	intent.Payload.ChainCode = ""
 	intent.Payload.DerivationScheme = ""
 
-	if err := validateIntent(intent, "co-signer"); err != nil {
+	if err := validateIntent(intent, coordinatorPrimaryParty); err != nil {
 		t.Fatalf("validateIntent() error = %v", err)
 	}
 }
 
 func TestBuildSignRequestMapsHDPayload(t *testing.T) {
 	intent := validSignIntent(t)
-	req := buildSignRequest(intent, "co-signer", nil)
+	req := buildSignRequest(intent, coordinatorPrimaryParty, nil)
 
 	if req.Session.OrgID != "org-1" ||
 		req.Session.KeyID != "key-1" ||
@@ -1116,7 +1135,7 @@ func validSignIntent(t *testing.T) monolith.Intent {
 			ProfileID:             "profile-1",
 			ProfileVersion:        3,
 			ProfileTemplateID:     "ethereum-default",
-			Parties:               []string{"party-1", "co-signer"},
+			Parties:               []string{coordinatorPlatformParty, coordinatorPrimaryParty},
 			Threshold:             2,
 			Algorithm:             "ECDSA",
 			Curve:                 "secp256k1",
@@ -1126,7 +1145,7 @@ func validSignIntent(t *testing.T) monolith.Intent {
 			HashAlgorithm:         "sha256",
 			SigningPayloadType:    "ethereum_transaction",
 			DerivationContextHash: hash,
-			PartyID:               "co-signer",
+			PartyID:               coordinatorPrimaryParty,
 			DerivationContext:     &ctx,
 		},
 	}

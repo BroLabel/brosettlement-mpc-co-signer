@@ -147,7 +147,7 @@ func TestSchedulerDispatchesRediscoveredOwnClaimedSignThroughClaimReplay(t *test
 	discovery, claim := rediscoveredSignFixture(t)
 	client := &stubPendingClient{claimResult: claim, claimErrors: make(map[string]error)}
 	runner := &notifyingSignRunner{started: make(chan struct{}, 1)}
-	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, "co-signer", time.Millisecond, SchedulerConfig{}, slog.Default(), 1)
+	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 1)
 
 	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
 	select {

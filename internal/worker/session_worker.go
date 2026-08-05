@@ -24,6 +24,8 @@ const (
 	intentStatusCompleted = "COMPLETED"
 	intentStatusFailed    = "FAILED"
 	postResultTimeout     = 5 * time.Second
+	platformPartyID       = "mpc-signer"
+	primaryPartyID        = "co-signer-primary"
 )
 
 var (
@@ -465,10 +467,24 @@ func validateIntent(intent monolith.Intent, localPartyID string) error {
 	case "DKG":
 		return validateDKGPayload(intent.Payload)
 	case "SIGN":
+		if err := validateProductionSignRoster(intent.Payload, localPartyID); err != nil {
+			return err
+		}
 		return validateSignPayload(intent.Payload)
 	default:
 		return nil
 	}
+}
+
+func validateProductionSignRoster(payload monolith.IntentPayload, localPartyID string) error {
+	if localPartyID != primaryPartyID || payload.PartyID != primaryPartyID {
+		return fmt.Errorf("%w: SIGN local party must be %q", errInvalidIntent, primaryPartyID)
+	}
+	if payload.Threshold != 2 || len(payload.Parties) != 2 ||
+		payload.Parties[0] != platformPartyID || payload.Parties[1] != primaryPartyID {
+		return fmt.Errorf("%w: SIGN parties must be exactly [%q, %q] with threshold 2", errInvalidIntent, platformPartyID, primaryPartyID)
+	}
+	return nil
 }
 
 func validateCommonPayload(payload monolith.IntentPayload) error {
