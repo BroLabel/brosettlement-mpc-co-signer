@@ -38,7 +38,6 @@ const (
 	recoveryProofKeyID        = "mpc_key_123e4567-e89b-42d3-a456-426614174000"
 	recoveryProofOtherKeyID   = "mpc_key_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 	recoveryProofKeyRef       = "recovery-proof-key-v1"
-	recoveryProofDeploymentID = "recovery-proof"
 	recoveryProofPartyA       = "mpc-signer"
 	recoveryProofInputLimit   = 32 << 10
 )
@@ -78,7 +77,6 @@ var _ coretss.ShareReader = (*recoveryProofReader)(nil)
 
 type recoveryProofInput struct {
 	Version           int    `json:"version"`
-	DeploymentID      string `json:"deploymentId"`
 	KeyRef            string `json:"keyRef"`
 	EncodedKey        string `json:"encodedKey"`
 	KeyID             string `json:"keyId"`
@@ -335,7 +333,6 @@ func prepareIsolatedRecoveryProof(t *testing.T, fixture recoveryProofFixture, te
 	}
 	inputBytes, err := json.Marshal(recoveryProofInput{
 		Version:           recoveryProofInputVersion,
-		DeploymentID:      recoveryProofDeploymentID,
 		KeyRef:            keyRef,
 		EncodedKey:        encodedKey,
 		KeyID:             recoveryProofKeyID,
@@ -380,11 +377,11 @@ func runIsolatedRecoveryProof(inputPath string) error {
 	if err != nil {
 		return errors.New("validate recovery proof key")
 	}
-	primaryConfig, err := NewStoreConfig(input.DeploymentID, StorePurposePrimary, primaryPartyID, input.PrimaryDirectory, provider)
+	primaryConfig, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, input.PrimaryDirectory, provider)
 	if err != nil {
 		return errors.New("validate recovery proof primary binding")
 	}
-	recoveryConfig, err := NewStoreConfig(input.DeploymentID, StorePurposeRecovery, recoveryPartyID, input.RecoveryDirectory, provider)
+	recoveryConfig, err := NewStoreConfig(StorePurposeRecovery, recoveryPartyID, input.RecoveryDirectory, provider)
 	if err != nil || ValidateStorePair(primaryConfig, recoveryConfig) != nil {
 		return errors.New("validate recovery proof store pair")
 	}
@@ -620,7 +617,7 @@ func recoveryProofStoreConfig(t *testing.T, purpose StorePurpose, directory stri
 	if purpose == StorePurposeRecovery {
 		partyID = recoveryPartyID
 	}
-	config, err := NewStoreConfig(recoveryProofDeploymentID, purpose, partyID, directory, provider)
+	config, err := NewStoreConfig(purpose, partyID, directory, provider)
 	if err != nil {
 		t.Fatal("construct recovery proof store binding")
 	}

@@ -170,7 +170,7 @@ func TestClaimIntentPreservesSignClaimReplayPayloadAndDeadline(t *testing.T) {
 		t.Fatalf("claim replay changed immutable response: first=%+v second=%+v requests=%d", first, second, requests)
 	}
 	if first.IntentID != "intent-125" || first.SessionID != "sign-125" || first.Type != "SIGN" || first.Status != "CLAIMED" ||
-		first.CoSignerDeploymentID != "co-signer-deployment-1" || first.DeadlineRaw != "2026-07-30T00:00:00.000Z" ||
+		first.DeadlineRaw != "2026-07-30T00:00:00.000Z" ||
 		first.Payload.Type != "SIGN" || first.Payload.OrgID != "org-123" || first.Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174004" ||
 		!bytes.Equal(first.Payload.Digest, []byte{0xaa, 0xbb, 0xcc}) || !reflect.DeepEqual(first.Payload.Parties, []string{"mpc-signer", "co-signer-primary"}) ||
 		first.Payload.DerivationContext == nil || first.Payload.DerivationContext.FullPath != "m/44'/195'/0'/0/0" {
@@ -248,7 +248,6 @@ func TestListActionableIntentsDecodesStrictBackendFixture(t *testing.T) {
 		claimed.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174001" ||
 		claimed.Type != "DKG" ||
 		claimed.Status != "CLAIMED" ||
-		claimed.CoSignerDeploymentID != "co-signer-deployment-1" ||
 		claimed.DeadlineRaw != "2026-07-30T00:00:00.000Z" ||
 		len(claimed.DescriptorBytes) == 0 {
 		t.Fatalf("unexpected own claimed DKG = %+v", claimed)
@@ -269,7 +268,7 @@ func TestListActionableIntentsDecodesStrictBackendFixture(t *testing.T) {
 	}
 	rediscovered := listing.OwnClaimedSign[0]
 	if rediscovered.IntentID != "intent-125" || rediscovered.SessionID != "sign-125" || rediscovered.Type != "SIGN" ||
-		rediscovered.Status != "CLAIMED" || rediscovered.CoSignerDeploymentID != "co-signer-deployment-1" ||
+		rediscovered.Status != "CLAIMED" ||
 		rediscovered.DeadlineRaw != "2026-07-30T00:00:00.000Z" || len(rediscovered.DescriptorBytes) != 0 {
 		t.Fatalf("unexpected own claimed SIGN = %+v", rediscovered)
 	}
@@ -307,7 +306,7 @@ func TestGetPendingIntentsExcludesOwnClaimedDKGFromStrictListing(t *testing.T) {
 }
 
 func TestListActionableIntentsRejectsInvalidOwnClaimedSignDiscovery(t *testing.T) {
-	valid := `{"coSignerDeploymentId":"co-signer-deployment-1","createdAt":"2026-07-29T00:00:00.500Z","deadline":"2026-07-30T00:00:00.000Z","intentId":"intent-125","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174004","orgId":"org-123","sessionId":"sign-125","status":"CLAIMED","type":"SIGN"}`
+	valid := `{"createdAt":"2026-07-29T00:00:00.500Z","deadline":"2026-07-30T00:00:00.000Z","intentId":"intent-125","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174004","orgId":"org-123","sessionId":"sign-125","status":"CLAIMED","type":"SIGN"}`
 	tests := []struct{ name, item string }{
 		{name: "missing deadline", item: strings.Replace(valid, `,"deadline":"2026-07-30T00:00:00.000Z"`, "", 1)},
 		{name: "wrong status", item: strings.Replace(valid, `"status":"CLAIMED"`, `"status":"PENDING"`, 1)},
@@ -358,6 +357,10 @@ func TestListActionableIntentsRejectsNonStrictListingContract(t *testing.T) {
 		{
 			name: "unknown item field",
 			body: `{"httpStatus":200,"ownClaimedDkg":[],"pending":[{"createdAt":"2026-07-29T00:00:00Z","intentId":"intent-1","keyId":"key-1","orgId":"org-1","status":"PENDING","type":"SIGN","extra":true}]}`,
+		},
+		{
+			name: "removed deployment identity field",
+			body: `{"httpStatus":200,"ownClaimedDkg":[],"ownClaimedSign":[{"coSignerDeploymentId":"legacy-installation","createdAt":"2026-07-29T00:00:00.000Z","deadline":"2026-07-30T00:00:00.000Z","intentId":"intent-1","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174000","orgId":"org-1","sessionId":"sign-1","status":"CLAIMED","type":"SIGN"}],"pending":[]}`,
 		},
 		{
 			name: "noncanonical descriptor base64",
@@ -771,7 +774,6 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 			"sessionId":"session-1",
 			"type":"SIGN",
 			"status":"CLAIMED",
-			"coSignerDeploymentId":"co-signer-deployment-1",
 			"deadline":"2027-04-16T12:00:00.000Z",
 			"payload":{
 				"type":"SIGN",

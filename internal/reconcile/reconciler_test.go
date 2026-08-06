@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	testDeploymentID = "co-signer-deployment-1"
 	completedFixture = "terminal-completed-request.json"
 	failedFixture    = "terminal-failed-request.json"
 )
@@ -31,16 +30,15 @@ func TestStartupReconcilerIgnoresOwnClaimedSignDiscovery(t *testing.T) {
 	backend := &recordingBackend{listing: monolith.ActionableListing{
 		HTTPStatus: 200,
 		OwnClaimedSign: []monolith.ActionableIntent{{
-			CoSignerDeploymentID: testDeploymentID,
-			CreatedAt:            now.Add(-time.Minute),
-			Deadline:             now.Add(time.Hour),
-			DeadlineRaw:          now.Add(time.Hour).Format(time.RFC3339Nano),
-			IntentID:             "intent-125",
-			SessionID:            "sign-125",
-			KeyID:                "key-125",
-			OrgID:                "org-123",
-			Status:               "CLAIMED",
-			Type:                 "SIGN",
+			CreatedAt:   now.Add(-time.Minute),
+			Deadline:    now.Add(time.Hour),
+			DeadlineRaw: now.Add(time.Hour).Format(time.RFC3339Nano),
+			IntentID:    "intent-125",
+			SessionID:   "sign-125",
+			KeyID:       "key-125",
+			OrgID:       "org-123",
+			Status:      "CLAIMED",
+			Type:        "SIGN",
 		}},
 	}}
 	primary := &recordingStore{name: "primary"}
@@ -174,9 +172,6 @@ func TestReconcilerClassifiesFullActionableArtifactMatrix(t *testing.T) {
 			unrelatedPath, before := createUnrelatedSnapshot(t)
 			intent := base
 			intent.Status = tt.status
-			if tt.status == "CLAIMED" {
-				intent.CoSignerDeploymentID = testDeploymentID
-			}
 			listing := monolith.ActionableListing{HTTPStatus: 200}
 			if tt.status == "CLAIMED" {
 				listing.OwnClaimedDKG = []monolith.ActionableIntent{intent}
@@ -242,7 +237,6 @@ func TestReconcilerOwnClaimedRestartIsStableAcrossAbsoluteDeadline(t *testing.T)
 	for _, now := range []time.Time{deadline.Add(-time.Nanosecond), deadline, deadline.Add(time.Nanosecond)} {
 		intent := base
 		intent.Status = "CLAIMED"
-		intent.CoSignerDeploymentID = testDeploymentID
 		backend := &recordingBackend{
 			listing: monolith.ActionableListing{
 				HTTPStatus:    200,
@@ -397,7 +391,6 @@ func TestReconcilerDefersBeforeAnyArtifactAccessOrClaimWhenCapabilityUnavailable
 func TestReconcilerDefersOwnClaimedExistenceFailuresWithoutRetiringKey(t *testing.T) {
 	intent := fixturePendingDKG(t)
 	intent.Status = "CLAIMED"
-	intent.CoSignerDeploymentID = testDeploymentID
 	existsErr := errors.New("exact-path existence unavailable")
 	tests := []struct {
 		name              string
@@ -483,18 +476,11 @@ func TestReconcilerReturnsAbortReadyProtocolIntegrityWithoutArtifactAccess(t *te
 	base := fixturePendingDKG(t)
 	claimed := base
 	claimed.Status = "CLAIMED"
-	claimed.CoSignerDeploymentID = testDeploymentID
-	foreign := claimed
-	foreign.CoSignerDeploymentID = "foreign-deployment"
 
 	tests := []struct {
 		name    string
 		listing monolith.ActionableListing
 	}{
-		{
-			name:    "foreign claimed DKG",
-			listing: monolith.ActionableListing{HTTPStatus: 200, OwnClaimedDKG: []monolith.ActionableIntent{foreign}},
-		},
 		{
 			name: "multiple own claimed DKG",
 			listing: monolith.ActionableListing{
@@ -759,10 +745,7 @@ func mustReconciler(
 	recovery ArtifactStore,
 ) *Reconciler {
 	t.Helper()
-	reconciler, err := New(Config{
-		CoSignerDeploymentID: testDeploymentID,
-		Now:                  func() time.Time { return now },
-	}, backend, preflight, primary, recovery)
+	reconciler, err := New(Config{Now: func() time.Time { return now }}, backend, preflight, primary, recovery)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -832,7 +815,6 @@ func claimedResult(intent monolith.ActionableIntent) monolith.ClaimResult {
 		DeadlineRaw:           intent.DeadlineRaw,
 		OrgID:                 intent.OrgID,
 		KeyID:                 intent.KeyID,
-		CoSignerDeploymentID:  testDeploymentID,
 		DescriptorBytes:       append([]byte(nil), intent.DescriptorBytes...),
 		DescriptorFingerprint: intent.DescriptorFingerprint,
 	}

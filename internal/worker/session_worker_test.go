@@ -247,7 +247,7 @@ func TestRunSessionRediscoveredSignClaimsReplayBeforeRuntime(t *testing.T) {
 	RunSessionWithExecutors(context.Background(), discovery, client, runner, &capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil, slog.Default())
 
 	if runner.calls != 1 {
-		t.Fatalf("SIGN runtime calls = %d, want 1 after same-owner claim replay", runner.calls)
+		t.Fatalf("SIGN runtime calls = %d, want 1 after organization-scoped claim replay", runner.calls)
 	}
 	if client.lastResult.Status != "COMPLETED" {
 		t.Fatalf("SIGN result = %+v, want minimal completed result", client.lastResult)
@@ -263,7 +263,6 @@ func TestRunSessionRejectsRediscoveredSignClaimIdentityOrDeadlineMismatch(t *tes
 		{name: "session", edit: func(claim *monolith.ClaimResult) { claim.SessionID = "session-other" }},
 		{name: "key", edit: func(claim *monolith.ClaimResult) { claim.Payload.KeyID = "key-other" }},
 		{name: "org", edit: func(claim *monolith.ClaimResult) { claim.Payload.OrgID = "org-other" }},
-		{name: "owner", edit: func(claim *monolith.ClaimResult) { claim.CoSignerDeploymentID = "foreign-deployment" }},
 		{name: "deadline value", edit: func(claim *monolith.ClaimResult) { claim.Deadline = claim.Deadline.Add(time.Second) }},
 		{name: "deadline representation", edit: func(claim *monolith.ClaimResult) { claim.DeadlineRaw = claim.Deadline.Format(time.RFC3339) }},
 	}
@@ -292,21 +291,19 @@ func rediscoveredSignFixture(t *testing.T) (monolith.Intent, monolith.ClaimResul
 	deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
 	deadlineRaw := deadline.Format("2006-01-02T15:04:05.000Z")
 	discovery := monolith.Intent{
-		CreatedAt:            time.Now().UTC().Add(-time.Minute),
-		CoSignerDeploymentID: "co-signer-deployment-1",
-		DeadlineRaw:          deadlineRaw,
-		DiscoveryStatus:      "CLAIMED",
-		IntentID:             claimed.IntentID,
-		SessionID:            claimed.SessionID,
-		Type:                 "SIGN",
-		ExpiresAt:            deadline,
-		Payload:              monolith.IntentPayload{Type: "SIGN", OrgID: claimed.Payload.OrgID, KeyID: claimed.Payload.KeyID},
+		CreatedAt:       time.Now().UTC().Add(-time.Minute),
+		DeadlineRaw:     deadlineRaw,
+		DiscoveryStatus: "CLAIMED",
+		IntentID:        claimed.IntentID,
+		SessionID:       claimed.SessionID,
+		Type:            "SIGN",
+		ExpiresAt:       deadline,
+		Payload:         monolith.IntentPayload{Type: "SIGN", OrgID: claimed.Payload.OrgID, KeyID: claimed.Payload.KeyID},
 	}
 	claim := claimResultForIntent(claimed)
 	claim.Deadline = deadline
 	claim.ExpiresAt = time.Time{}
 	claim.DeadlineRaw = deadlineRaw
-	claim.CoSignerDeploymentID = discovery.CoSignerDeploymentID
 	return discovery, claim
 }
 

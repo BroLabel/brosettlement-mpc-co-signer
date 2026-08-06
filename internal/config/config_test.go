@@ -17,9 +17,6 @@ func TestLoadBuildsBoundPrimaryAndRecoveryStores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if cfg.DeploymentID != "deployment-1" {
-		t.Fatalf("DeploymentID = %q, want deployment-1", cfg.DeploymentID)
-	}
 	if got, want := cfg.PrimaryStore.PartyID(), "co-signer-primary"; got != want {
 		t.Errorf("primary PartyID() = %q, want %q", got, want)
 	}
@@ -46,15 +43,6 @@ func TestLoadBuildsBoundPrimaryAndRecoveryStores(t *testing.T) {
 	}
 	if got, want := cfg.LockPath, "/var/lib/co-signer/state/co-signer.lock"; got != want {
 		t.Errorf("LockPath = %q, want %q", got, want)
-	}
-}
-
-func TestLoadRejectsMissingStableDeploymentID(t *testing.T) {
-	setRequiredEnv(t)
-	t.Setenv("CO_SIGNER_DEPLOYMENT_ID", "")
-
-	if _, err := config.Load(); err == nil {
-		t.Fatal("Load() error = nil, want missing deployment ID error")
 	}
 }
 
@@ -202,7 +190,6 @@ func setRequiredEnv(t *testing.T) {
 		"CO_SIGNER_MONOLITH_URL":                     "https://monolith.test",
 		"CO_SIGNER_API_KEY_ID":                       "key-1",
 		"CO_SIGNER_API_PRIVATE_KEY":                  "cHJpdmF0ZS1rZXk=",
-		"CO_SIGNER_DEPLOYMENT_ID":                    "deployment-1",
 		"CO_SIGNER_PRIMARY_PARTY_ID":                 "co-signer-primary",
 		"CO_SIGNER_RECOVERY_PARTY_ID":                "co-signer-recovery",
 		"CO_SIGNER_PRIMARY_SHARES_DIR":               "/var/lib/co-signer/primary",

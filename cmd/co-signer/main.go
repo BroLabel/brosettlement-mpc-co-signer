@@ -254,7 +254,7 @@ func openApplicationResources(
 		return nil, err
 	}
 	actionableReconciler, err := reconcile.New(
-		reconcile.Config{CoSignerDeploymentID: cfg.DeploymentID, Now: time.Now},
+		reconcile.Config{Now: time.Now},
 		client,
 		staticInspectionPreflight{err: provisioningCapabilityErr},
 		primaryStore,

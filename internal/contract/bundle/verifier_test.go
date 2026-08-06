@@ -22,7 +22,7 @@ func TestVerifierAcceptsClosedProducerBundles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyHTTPBundle() error = %v", err)
 	}
-	if httpID != "i8b8gekJUm6QgKFC7YyK_zFxzthd61QiAPJloDnVfoU" {
+	if httpID != "DfiDHjeT5xYiTN7ICY9XDAjHP9XioZYO4N2EAYaH5WQ" {
 		t.Fatalf("HTTP identity = %q", httpID)
 	}
 }
@@ -241,6 +241,11 @@ func TestHTTPFixtureValidatorRejectsBadShapesAndStatuses(t *testing.T) {
 		"unknown own claimed SIGN field": func(t *testing.T, root string) {
 			mutateJSONFixture(t, root, "listing-response.json", func(value map[string]any) {
 				value["ownClaimedSign"].([]any)[0].(map[string]any)["unexpected"] = true
+			})
+		},
+		"removed deployment identity field": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "listing-response.json", func(value map[string]any) {
+				value["ownClaimedSign"].([]any)[0].(map[string]any)["coSignerDeploymentId"] = "legacy-installation"
 			})
 		},
 		"missing own claimed SIGN deadline": func(t *testing.T, root string) {

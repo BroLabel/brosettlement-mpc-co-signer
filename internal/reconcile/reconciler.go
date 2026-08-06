@@ -79,8 +79,7 @@ type ArtifactStore interface {
 }
 
 type Config struct {
-	CoSignerDeploymentID string
-	Now                  func() time.Time
+	Now func() time.Time
 }
 
 type Reconciler struct {
@@ -98,9 +97,6 @@ func New(
 	primary ArtifactStore,
 	recovery ArtifactStore,
 ) (*Reconciler, error) {
-	if config.CoSignerDeploymentID == "" {
-		return nil, errors.New("reconciler deployment ID is required")
-	}
 	if config.Now == nil {
 		return nil, errors.New("reconciler clock is required")
 	}
@@ -214,7 +210,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) (result Result, returnErr er
 				return Result{}, fmt.Errorf("claim actionable DKG intent: %w", err)
 			}
 		}
-		if reason := validateClaim(item.intent, claim, r.config.CoSignerDeploymentID); reason != "" {
+		if reason := validateClaim(item.intent, claim); reason != "" {
 			result := protocolIntegrity(reason)
 			result.DeadlineRaw = item.intent.DeadlineRaw
 			return result, nil
@@ -239,7 +235,7 @@ func (r *Reconciler) validateListing(listing monolith.ActionableListing) *Result
 		return &result
 	}
 	if len(listing.OwnClaimedDKG) > 1 {
-		result := protocolIntegrity("multiple deployment-owned CLAIMED DKG intents")
+		result := protocolIntegrity("multiple organization-scoped CLAIMED DKG intents")
 		return &result
 	}
 
@@ -248,10 +244,6 @@ func (r *Reconciler) validateListing(listing monolith.ActionableListing) *Result
 	for _, intent := range listing.OwnClaimedDKG {
 		if intent.Type != "DKG" || intent.Status != "CLAIMED" {
 			result := protocolIntegrity("own claimed listing contains a non-CLAIMED DKG intent")
-			return &result
-		}
-		if intent.CoSignerDeploymentID != r.config.CoSignerDeploymentID {
-			result := protocolIntegrity("own claimed listing contains a foreign deployment claim")
 			return &result
 		}
 		if reason := validateDKGIntent(intent); reason != "" {
@@ -323,16 +315,11 @@ func validateDKGIntent(intent monolith.ActionableIntent) string {
 	return ""
 }
 
-func validateClaim(
-	listed monolith.ActionableIntent,
-	claim monolith.ClaimResult,
-	deploymentID string,
-) string {
+func validateClaim(listed monolith.ActionableIntent, claim monolith.ClaimResult) string {
 	if claim.HTTPStatus != 200 || claim.Status != "CLAIMED" || claim.Type != "DKG" {
 		return "claim response is not a typed CLAIMED DKG"
 	}
-	if claim.CoSignerDeploymentID != deploymentID ||
-		claim.IntentID != listed.IntentID ||
+	if claim.IntentID != listed.IntentID ||
 		claim.SessionID != listed.SessionID ||
 		claim.KeyID != listed.KeyID ||
 		claim.OrgID != listed.OrgID {

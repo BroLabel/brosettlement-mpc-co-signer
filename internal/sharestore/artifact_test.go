@@ -235,7 +235,7 @@ func TestStoreRejectsUnsafeExistingArtifactDirectoryWithoutChangingIt(t *testing
 	if err := os.Chmod(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	config, err := NewStoreConfig("deployment-1", StorePurposePrimary, primaryPartyID, directory, provider)
+	config, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, directory, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,12 +257,12 @@ func TestStoreRejectsMissingArtifactDirectoryWithoutCreatingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := filepath.Join(t.TempDir(), "primary")
-	config, err := NewStoreConfig("deployment-1", StorePurposePrimary, primaryPartyID, directory, provider)
+	config, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, directory, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := newStore(config); err == nil {
-		t.Fatal("newStore() created a missing deployment-owned artifact directory")
+		t.Fatal("newStore() created a missing artifact directory")
 	}
 	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing artifact directory changed, Lstat() error = %v", err)
@@ -288,7 +288,7 @@ func TestStoreRejectsSymlinkAndNonDirectoryArtifactDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, destination := range []string{symlink, regular} {
-		config, err := NewStoreConfig("deployment-1", StorePurposePrimary, primaryPartyID, destination, provider)
+		config, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, destination, provider)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -369,7 +369,7 @@ func testStoreWithProvider(t fixtureT, purpose StorePurpose, provider *KeyProvid
 	if err := os.Chmod(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	config, err := NewStoreConfig("deployment-1", purpose, partyID, directory, provider)
+	config, err := NewStoreConfig(purpose, partyID, directory, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -470,7 +470,6 @@ func TestOpenStoreRetainsPurposeBoundCapabilityWhenProvisioningProbeFails(t *tes
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 	config, err := NewStoreConfig(
-		"deployment-1",
 		StorePurposeRecovery,
 		recoveryPartyID,
 		blockedPath,

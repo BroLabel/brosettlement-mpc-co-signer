@@ -14,7 +14,7 @@ func TestNewStoreFailsUnsupportedPublishCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config, err := NewStoreConfig("deployment-1", StorePurposePrimary, primaryPartyID, t.TempDir(), provider)
+	config, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, t.TempDir(), provider)
 	if err != nil {
 		t.Fatal(err)
 	}

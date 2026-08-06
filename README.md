@@ -11,13 +11,12 @@ Runtime model:
 
 ## 2-of-3 co-signer configuration
 
-The co-signer has one stable deployment identity and two fixed local store
-profiles. It does not accept the legacy `CO_SIGNER_PARTY_ID` or
+The co-signer has two fixed local store profiles and is scoped by the
+authenticated organization on every backend request. It does not accept the legacy `CO_SIGNER_PARTY_ID` or
 `CO_SIGNER_SHARES_DIR` settings.
 
 | Variable | Required value |
 | --- | --- |
-| `CO_SIGNER_DEPLOYMENT_ID` | Stable backend identifier (1–255 bytes) matching `[A-Za-z0-9][A-Za-z0-9._:-]*`. Do not change it between restarts. |
 | `CO_SIGNER_PRIMARY_PARTY_ID` | Exactly `co-signer-primary`. |
 | `CO_SIGNER_RECOVERY_PARTY_ID` | Exactly `co-signer-recovery`. |
 | `CO_SIGNER_PRIMARY_SHARES_DIR` | Absolute pre-existing private primary-store directory. |
@@ -37,7 +36,10 @@ or automatic key rotation.
 
 ## Operating the recovery artifacts
 
-Run exactly one co-signer replica. During upgrades, stop the old process and
+Run exactly one active co-signer installation per organization. A second
+installation using the same organization credentials may claim or replay the
+same work and cause a self-inflicted availability failure; v1 does not arbitrate
+between installations. During upgrades, stop the old process and
 prove it has exited before starting the new process: overlapping writers are
 unsupported. Both B and C directories and the stable lock path must be on one
 writable local state filesystem. The advisory lifetime lock is local-filesystem

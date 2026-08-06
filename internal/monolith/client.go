@@ -62,14 +62,13 @@ func (c *Client) GetPendingIntents(ctx context.Context) ([]Intent, error) {
 	intents := make([]Intent, 0, len(listing.OwnClaimedSign)+len(listing.Pending))
 	appendIntent := func(item ActionableIntent) {
 		intents = append(intents, Intent{
-			CreatedAt:            item.CreatedAt,
-			CoSignerDeploymentID: item.CoSignerDeploymentID,
-			DeadlineRaw:          item.DeadlineRaw,
-			DiscoveryStatus:      item.Status,
-			IntentID:             item.IntentID,
-			SessionID:            item.SessionID,
-			Type:                 item.Type,
-			ExpiresAt:            item.Deadline,
+			CreatedAt:       item.CreatedAt,
+			DeadlineRaw:     item.DeadlineRaw,
+			DiscoveryStatus: item.Status,
+			IntentID:        item.IntentID,
+			SessionID:       item.SessionID,
+			Type:            item.Type,
+			ExpiresAt:       item.Deadline,
 			Payload: IntentPayload{
 				Type:                  item.Type,
 				OrgID:                 item.OrgID,
@@ -96,7 +95,6 @@ type actionableListingWire struct {
 }
 
 type actionableIntentWire struct {
-	CoSignerDeploymentID  string `json:"coSignerDeploymentId,omitempty"`
 	CreatedAt             string `json:"createdAt"`
 	Deadline              string `json:"deadline,omitempty"`
 	DescriptorBytes       string `json:"descriptorBytesBase64,omitempty"`
@@ -117,7 +115,7 @@ func (wire *actionableIntentWire) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	allowed := map[string]struct{}{
-		"coSignerDeploymentId": {}, "createdAt": {}, "deadline": {}, "descriptorBytesBase64": {},
+		"createdAt": {}, "deadline": {}, "descriptorBytesBase64": {},
 		"descriptorFingerprint": {}, "intentId": {}, "keyId": {}, "orgId": {}, "sessionId": {}, "status": {}, "type": {},
 	}
 	for name := range fields {
@@ -152,7 +150,7 @@ func (wire actionableIntentWire) hasExactFields(expected ...string) bool {
 }
 
 // ListActionableIntents consumes the backend-owned closed listing contract.
-// It deliberately preserves defensive foreign/terminal entries for the
+// It deliberately preserves defensively invalid or terminal entries for the
 // reconciliation layer to classify as protocol-integrity failures.
 func (c *Client) ListActionableIntents(ctx context.Context) (ActionableListing, error) {
 	var wire actionableListingWire
@@ -206,7 +204,6 @@ func decodeActionableIntent(wire actionableIntentWire, collection string) (Actio
 	}
 
 	item := ActionableIntent{
-		CoSignerDeploymentID:  wire.CoSignerDeploymentID,
 		CreatedAt:             createdAt,
 		CreatedAtRaw:          wire.CreatedAt,
 		DeadlineRaw:           wire.Deadline,
@@ -233,25 +230,25 @@ func decodeActionableIntent(wire actionableIntentWire, collection string) (Actio
 	}
 	switch collection {
 	case "own claimed DKG":
-		if !wire.hasExactFields("coSignerDeploymentId", "createdAt", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "intentId", "keyId", "orgId", "sessionId", "status", "type") ||
-			wire.Type != "DKG" || wire.Status != "CLAIMED" || wire.CoSignerDeploymentID == "" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes == "" || wire.DescriptorFingerprint == "" {
+		if !wire.hasExactFields("createdAt", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "intentId", "keyId", "orgId", "sessionId", "status", "type") ||
+			wire.Type != "DKG" || wire.Status != "CLAIMED" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes == "" || wire.DescriptorFingerprint == "" {
 			return ActionableIntent{}, errors.New("own claimed DKG fields are invalid")
 		}
 	case "own claimed SIGN":
-		if !wire.hasExactFields("coSignerDeploymentId", "createdAt", "deadline", "intentId", "keyId", "orgId", "sessionId", "status", "type") ||
-			wire.Type != "SIGN" || wire.Status != "CLAIMED" || wire.CoSignerDeploymentID == "" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes != "" || wire.DescriptorFingerprint != "" {
+		if !wire.hasExactFields("createdAt", "deadline", "intentId", "keyId", "orgId", "sessionId", "status", "type") ||
+			wire.Type != "SIGN" || wire.Status != "CLAIMED" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes != "" || wire.DescriptorFingerprint != "" {
 			return ActionableIntent{}, errors.New("own claimed SIGN fields are invalid")
 		}
 	case "pending":
 		switch wire.Type {
 		case "DKG":
 			if !wire.hasExactFields("createdAt", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "intentId", "keyId", "orgId", "sessionId", "status", "type") ||
-				wire.Status != "PENDING" || wire.CoSignerDeploymentID != "" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes == "" || wire.DescriptorFingerprint == "" {
+				wire.Status != "PENDING" || wire.SessionID == "" || wire.Deadline == "" || wire.DescriptorBytes == "" || wire.DescriptorFingerprint == "" {
 				return ActionableIntent{}, errors.New("pending DKG fields are invalid")
 			}
 		case "SIGN":
 			if !wire.hasExactFields("createdAt", "intentId", "keyId", "orgId", "status", "type") ||
-				wire.Status != "PENDING" || wire.CoSignerDeploymentID != "" || wire.SessionID != "" || wire.Deadline != "" || wire.DescriptorBytes != "" || wire.DescriptorFingerprint != "" {
+				wire.Status != "PENDING" || wire.SessionID != "" || wire.Deadline != "" || wire.DescriptorBytes != "" || wire.DescriptorFingerprint != "" {
 				return ActionableIntent{}, errors.New("pending SIGN fields are invalid")
 			}
 		default:
@@ -308,7 +305,7 @@ func validateClaimResult(claim ClaimResult) error {
 
 func validateSignClaimResult(claim ClaimResult) error {
 	payload := claim.Payload
-	if claim.IntentID == "" || claim.SessionID == "" || claim.CoSignerDeploymentID == "" || claim.Deadline.IsZero() || claim.DeadlineRaw == "" ||
+	if claim.IntentID == "" || claim.SessionID == "" || claim.Deadline.IsZero() || claim.DeadlineRaw == "" ||
 		claim.ClaimedBy != "" || claim.ClaimedAt != nil || !claim.ExpiresAt.IsZero() || claim.OrgID != "" || claim.KeyID != "" || len(claim.DescriptorBytes) != 0 ||
 		claim.DescriptorFingerprint != "" || len(claim.ChainCode) != 0 ||
 		payload.Type != "SIGN" || payload.OrgID == "" || payload.KeyID == "" || payload.WalletID == "" || payload.ProfileID == "" || payload.ProfileTemplateID == "" ||

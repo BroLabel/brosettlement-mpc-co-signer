@@ -18,9 +18,8 @@ import (
 
 const (
 	signerBundleIdentity = "dRgKBw7Y392uHY7AkBj5dkahjKmwYcFYhjtYv62-5mA"
-	httpBundleIdentity   = "i8b8gekJUm6QgKFC7YyK_zFxzthd61QiAPJloDnVfoU"
-	backendSourceCommit  = "9ee1b0f941aa9d5b3fd0c85f2b1616ee8f24a1ac"
-	deploymentID         = "co-signer-deployment-1"
+	httpBundleIdentity   = "DfiDHjeT5xYiTN7ICY9XDAjHP9XioZYO4N2EAYaH5WQ"
+	backendSourceCommit  = "3932586337691e95ecbe6c6fb09df93babf73784"
 )
 
 var (
@@ -298,11 +297,11 @@ func verifyHTTPFixtures(root string) error {
 		return fmt.Errorf("listing reuses keyId")
 	}
 
-	claim, err := readObject(root, "claim-response.json", []string{"chainCodeBase64", "coSignerDeploymentId", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "httpStatus", "intentId", "keyId", "orgId", "sessionId", "status"})
+	claim, err := readObject(root, "claim-response.json", []string{"chainCodeBase64", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "httpStatus", "intentId", "keyId", "orgId", "sessionId", "status"})
 	if err != nil {
 		return err
 	}
-	if integer(claim, "httpStatus") != 200 || stringMust(claim, "status") != "CLAIMED" || stringMust(claim, "coSignerDeploymentId") != deploymentID {
+	if integer(claim, "httpStatus") != 200 || stringMust(claim, "status") != "CLAIMED" {
 		return fmt.Errorf("invalid claim status")
 	}
 	claimDKG, err := parseClaim(claim)
@@ -317,7 +316,7 @@ func verifyHTTPFixtures(root string) error {
 		return fmt.Errorf("claim chain code does not match descriptor")
 	}
 
-	signClaim, err := readObject(root, "sign-claim-response.json", []string{"coSignerDeploymentId", "deadline", "httpStatus", "intentId", "payload", "sessionId", "status", "type"})
+	signClaim, err := readObject(root, "sign-claim-response.json", []string{"deadline", "httpStatus", "intentId", "payload", "sessionId", "status", "type"})
 	if err != nil {
 		return err
 	}
@@ -390,17 +389,13 @@ func readObject(root, name string, expected []string) (map[string]json.RawMessag
 	return fields, nil
 }
 
-func parseDKG(fields map[string]json.RawMessage, expectedStatus string, owned bool) (dkgFixture, error) {
+func parseDKG(fields map[string]json.RawMessage, expectedStatus string, _ bool) (dkgFixture, error) {
 	expected := []string{"createdAt", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "intentId", "keyId", "orgId", "sessionId", "status", "type"}
-	if owned {
-		expected = append(expected, "coSignerDeploymentId")
-		sort.Strings(expected)
-	}
 	if !sameKeys(fields, expected) {
 		return dkgFixture{}, fmt.Errorf("invalid DKG schema")
 	}
-	if stringMust(fields, "type") != "DKG" || stringMust(fields, "status") != expectedStatus || (owned && stringMust(fields, "coSignerDeploymentId") != deploymentID) {
-		return dkgFixture{}, fmt.Errorf("invalid DKG type, status, or owner")
+	if stringMust(fields, "type") != "DKG" || stringMust(fields, "status") != expectedStatus {
+		return dkgFixture{}, fmt.Errorf("invalid DKG type or status")
 	}
 	createdAt, err := exactUTC(stringMust(fields, "createdAt"))
 	if err != nil {
@@ -468,8 +463,8 @@ type signDiscoveryFixture struct {
 }
 
 func parseOwnedSign(fields map[string]json.RawMessage) (signDiscoveryFixture, error) {
-	expected := []string{"coSignerDeploymentId", "createdAt", "deadline", "intentId", "keyId", "orgId", "sessionId", "status", "type"}
-	if !sameKeys(fields, expected) || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "CLAIMED" || stringMust(fields, "coSignerDeploymentId") != deploymentID {
+	expected := []string{"createdAt", "deadline", "intentId", "keyId", "orgId", "sessionId", "status", "type"}
+	if !sameKeys(fields, expected) || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "CLAIMED" {
 		return signDiscoveryFixture{}, fmt.Errorf("invalid own claimed SIGN schema")
 	}
 	createdAt, err := exactUTC(stringMust(fields, "createdAt"))
@@ -491,7 +486,7 @@ func parseOwnedSign(fields map[string]json.RawMessage) (signDiscoveryFixture, er
 }
 
 func validateSignClaim(fields map[string]json.RawMessage, listed signDiscoveryFixture) error {
-	if integer(fields, "httpStatus") != 200 || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "CLAIMED" || stringMust(fields, "coSignerDeploymentId") != deploymentID {
+	if integer(fields, "httpStatus") != 200 || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "CLAIMED" {
 		return fmt.Errorf("invalid SIGN claim status")
 	}
 	if stringMust(fields, "intentId") != listed.intentID || stringMust(fields, "sessionId") != listed.sessionID || stringMust(fields, "deadline") != listed.deadline {

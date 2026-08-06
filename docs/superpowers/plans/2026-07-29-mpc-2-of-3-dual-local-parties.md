@@ -41,6 +41,12 @@ unconfirmed startup publication closes only DKG admission, not SIGN.
 - Supported runtime topology is Linux, one process, one local-filesystem writer,
   and a lifetime advisory FD lock. Packaging, Kubernetes, image publication, and
   deployment automation are outside this repository plan.
+- Backend HTTP work is scoped by the authenticated organization. Co-signer has
+  no deployment identifier in environment, config, store context, wire types,
+  reconciliation, or worker validation.
+- V1 supports exactly one active co-signer installation per organization. The
+  local lock is not cross-host fencing; concurrent installations using the same
+  credentials are an accepted self-DoS risk.
 - Use TDD and one conventional commit per `PLAN-STEP-*`. Every step and substep
   compiles, has green local tests, introduces no temporary no-op security
   implementation, and names its incoming dependency.
@@ -67,13 +73,13 @@ unconfirmed startup publication closes only DKG admission, not SIGN.
 - Repository: `mpc-signer`
 - Approved DESIGN: `docs/superpowers/specs/2026-07-27-mpc-2-of-3-recovery-design.md`
 - Approved DESIGN Git revision:
-  `8c97ce2e7399e9563d690ab6128d05cc3771477d`.
+  `cd8309c0dc1321776fd1d679d9711443d010405d`.
 - Co-signer PLAN baseline: this document revision.
 - Review decisions: approved D1-D21 engineering review, 2026-07-30
 
-Active requirements are `REQ-001`–`REQ-085` excluding retired `REQ-023`,
+Active requirements are `REQ-001`–`REQ-086` excluding retired `REQ-023`,
 `REQ-028`, `REQ-031`, `REQ-033`, `REQ-040`, `REQ-042`, `REQ-043`, and
-`REQ-045`. Active invariants are `INV-001`–`INV-060` excluding retired
+`REQ-045`. Active invariants are `INV-001`–`INV-061` excluding retired
 `INV-024`, `INV-025`, and `INV-027`.
 
 ### Repository applicability
@@ -83,6 +89,10 @@ Active requirements are `REQ-001`–`REQ-085` excluding retired `REQ-023`,
   `REQ-032`, `REQ-034`, `REQ-036`, `REQ-041`, `REQ-044`, `REQ-046`–`REQ-063`,
   `REQ-065`, `REQ-068`–`REQ-072`, `REQ-076`–`REQ-078`, `REQ-080`,
   `REQ-081`.
+- Deployment-identity removal is directly owned here for `REQ-086` and
+  `INV-061`; revised organization-scoped behavior also affects `REQ-004`,
+  `REQ-036`, `REQ-051`, `REQ-057`, `REQ-082`, `INV-023`, `INV-030`, and
+  `INV-058`.
 - Integration requirements: `REQ-003`, `REQ-015`, `REQ-022`, `REQ-027`,
   `REQ-035`, `REQ-037`–`REQ-039`, `REQ-064`, `REQ-067`, `REQ-073`–`REQ-075`,
   `REQ-079`, `REQ-082`–`REQ-084`.
@@ -113,6 +123,7 @@ Active requirements are `REQ-001`–`REQ-085` excluding retired `REQ-023`,
 | `RISK-020`                    | Cutover is manual. Co-signer provides deterministic version/contract verification and shutdown behavior, while the backend-owned runbook retains the mandatory maintenance barrier.                                   |
 | `RISK-021`                    | Benchmark database safety is backend-owned. Co-signer exposes safe metrics and accepts only the disposable harness workload through normal production protocols; it adds no test provisioning endpoint.                 |
 | `RISK-022`                    | Signer gRPC peer authorization is an integration residual risk owned by signer/Operations; co-signer relies on authenticated backend HTTP and does not implement or verify that network boundary.                       |
+| `ASSUMPTION-009`, `DECISION-050`, `RISK-023` | Remove deployment identity completely, rely on authenticated-organization scope and immutable claim replay, document exactly one active installation, and accept cross-host concurrent-installation self-DoS. |
 
 ## Cross-Repository Dependencies
 
@@ -150,7 +161,7 @@ verification command, and release artifact in this PLAN.
 | `contracts/mpc-2of3/v1/`                    | Vendored signer-owned shared bundle                                                                     | No artifact or backend-only HTTP corpus                          |
 | `testdata/mpc-co-signer-http/v1/`           | Vendored backend-owned HTTP/mailbox fixtures                                                            | Strict tests only; backend remains normative owner               |
 | `internal/contract/mpc2of3/`                | Exact descriptor, terminal, digest, JCS, and bundle verification                                       | Does not create descriptors or rewrite input values              |
-| `internal/config/`                          | Stable deployment ID, B/C bindings, directories, key/keyRef, lock/free-space/preparams profile         | No secret logging                                                |
+| `internal/config/`                          | B/C bindings, directories, key/keyRef, lock/free-space/preparams profile                               | No installation identity or secret logging                        |
 | `internal/sharestore/`                      | Encrypted v1 envelope, Linux publish, inspect, primary load, routing writer, one immutable active pair | Recovery has no production SIGN capability                       |
 | `internal/localrouter/`                     | B↔C validated frames and A/local route split                                                            | Same authenticated envelope checks                               |
 | `internal/worker/dkg_coordinator.go`        | Two handles, pair lease, common start barrier, sibling cancellation, evidence comparison               | One scheduler job and one production core DKG service            |
@@ -174,6 +185,7 @@ verification command, and release artifact in this PLAN.
 | `REQ-068`–`REQ-070`, `REQ-079`, `REQ-080`; `INV-041`, `INV-045`, `INV-054`, `INV-055`                                                                                                                                                | operations and verification   | `PLAN-STEP-CS-009b`                           | `TEST-CS-068`–`072`   | safe metrics/docs/full verify      |
 | `REQ-073`–`REQ-075`; `INV-048`–`INV-050`                                                                                                                                                                                             | upstream state integration    | `PLAN-STEP-CS-007`, `PLAN-STEP-CS-008a`, `PLAN-STEP-CS-009a` | coordinated E2E | A evidence/typed backend outcomes  |
 | `REQ-082`–`REQ-084`; `INV-057`–`INV-059`                                                                                                                                                                                             | normal SIGN HTTP contract     | `PLAN-STEP-CS-009c`                           | `TEST-CS-073`–`077`   | vendored fixtures/client routing   |
+| `REQ-004`, `036`, `051`, `057`, `081`–`084`, `086`; `INV-023`, `030`, `056`, `058`, `061`                                                                                                                                            | config, strict HTTP client, worker, store, reconciliation | `PLAN-STEP-CS-010` | `TEST-CS-078`–`085` | config/client/reconciliation/full verify |
 
 ## Implementation Steps
 
@@ -264,15 +276,15 @@ verification command, and release artifact in this PLAN.
 
 **Interfaces:**
 
-- Config adds stable deployment ID, primary/recovery party IDs and directories,
-  stable state/lock paths, keyRef, free-space threshold, and explicit preparams
-  generation parallelism.
+- Config adds primary/recovery party IDs and directories, stable state/lock
+  paths, keyRef, free-space threshold, and explicit preparams generation
+  parallelism. It has no customer-managed installation identity.
 - Key parser accepts standard base64 decoding to exactly 32 bytes; no hash
   derivation.
 
 - [ ] Add failing tests for hashed passphrases, wrong key lengths, same paths,
-      party/purpose mismatch, changed keyRef, relative/overlapping final paths, and
-      missing stable deployment ID.
+      party/purpose mismatch, changed keyRef, and relative/overlapping final
+      paths.
 - [ ] Run `GOWORK=off go test ./internal/config ./internal/sharestore ./cmd/co-signer -count=1`;
       expect current single-store/passphrase behavior to fail.
 - [ ] Build one immutable primary and one recovery `StoreConfig` using the same
@@ -623,11 +635,11 @@ verification command, and release artifact in this PLAN.
 **Interfaces:**
 
 - Reconciliation accepts only backend-addressed actionable DKG intents:
-  unexpired PENDING and own CLAIMED for the stable deployment ID. The backend
-  listing must not return terminal or foreign-CLAIMED intents. It never scans
+  unexpired PENDING and authenticated-organization CLAIMED. The backend listing
+  must not return terminal or cross-organization intents. It never scans
   directories, inspects SIGN, or classifies files outside exact paths derived
   from actionable intents.
-- For an own CLAIMED intent, matching B+C produces a byte-stable COMPLETED job;
+- For an organization-scoped CLAIMED intent, matching B+C produces a byte-stable COMPLETED job;
   missing/partial/mismatched material produces the minimal canonical FAILED job.
 - If the recovery store or strict inspection capability is unavailable, the
   reconciler returns a typed capability-deferred result before inspecting or
@@ -646,15 +658,16 @@ verification command, and release artifact in this PLAN.
   authoritative FAILED/TIMED_OUT outcome; unclassified files are byte-for-byte
   untouched.
 - The reconciler returns at most one immutable startup publication job and a
-  provisioning disposition. Multiple own CLAIMED DKG, a foreign CLAIMED intent,
-  or an impossible matrix entry is a protocol-integrity result that aborts
+  provisioning disposition. Multiple organization-scoped CLAIMED DKG, a
+  cross-organization intent, or an impossible matrix entry is a
+  protocol-integrity result that aborts
   startup before scheduler/intake/readiness. It keeps both `processReady` and
   `signingReady` false; no SIGN is admitted.
 
-- [ ] Add the full table-driven matrix for PENDING/own CLAIMED with
+- [ ] Add the full table-driven matrix for PENDING/organization-scoped CLAIMED with
       zero/one/two/mismatched B/C, claim conflicts, typed authoritative cleanup
-      evidence, multiple own CLAIMED, and defensive foreign-CLAIMED or terminal
-      listing contract violations. Include restart immediately before/after the
+      evidence, multiple claimed DKG, and defensive cross-organization or
+      terminal listing contract violations. Include restart immediately before/after the
       absolute deadline and prove the deadline never changes or reopens runtime.
 - [ ] Add capability-deferred cases for unavailable recovery store/inspection.
       Prove no claim, publish, cleanup, artifact read, or filesystem mutation,
@@ -713,7 +726,7 @@ verification command, and release artifact in this PLAN.
   scheduler/intake/readiness and keeps `processReady=false` and
   `signingReady=false`. Signing-only startup is allowed for provisioning
   capability failure or a successfully handed-off but unconfirmed terminal job,
-  not for a foreign claim or impossible reconciliation state.
+  not for a cross-organization response or impossible reconciliation state.
 - A capability-deferred startup latches `dkgAdmissionOpen=false` for the process
   lifetime. Capability restoration may improve diagnostics but cannot
   dynamically reopen provisioning: a new process must reacquire the lifetime
@@ -941,13 +954,13 @@ verification command, and release artifact in this PLAN.
   replaces the fixed destination, and verifies the final destination.
 - The production worker continues to use the existing shared claim and result
   routes for DKG and SIGN. The client strictly validates the SIGN claim fixture,
-  preserves the immutable `intentId`, `sessionId`, deadline, deployment owner,
-  and payload, and posts only the existing minimal SIGN `COMPLETED`/`FAILED`
-  result shape.
+  preserves the immutable `intentId`, `sessionId`, deadline, organization
+  binding, and payload, and posts only the existing minimal SIGN
+  `COMPLETED`/`FAILED` result shape.
 - The strict listing exposes discovery-only `ownClaimedSign[]`. Normal intake
   combines those entries with `pending[]` and calls the same claim endpoint, so
-  a restarted stable deployment receives the authoritative same-owner payload
-  and deadline replay. Startup reconciliation continues to consume only
+  a restarted installation receives the authoritative organization-scoped
+  payload and deadline replay. Startup reconciliation continues to consume only
   `ownClaimedDkg[]`.
 - DKG terminal publication remains canonical and fingerprinted. SIGN must never
   enter the DKG terminal publisher, while DKG cannot use the generic SIGN result
@@ -957,7 +970,8 @@ verification command, and release artifact in this PLAN.
 
 - [ ] Vendor the exact `SIGN-CLAIM-HTTP-V1` producer bundle with source commit
       and per-file hashes; prove missing, altered, or unexpected files fail.
-- [ ] Add fixture-driven client tests for SIGN claim success, same-owner replay,
+- [ ] Add fixture-driven client tests for SIGN claim success,
+      organization-scoped replay,
       restart rediscovery through `ownClaimedSign[]`, typed conflict, immutable
       payload/deadline preservation, completed result, failed result, and strict
       unknown-field rejection.
@@ -967,6 +981,67 @@ verification command, and release artifact in this PLAN.
 - [ ] Run contract verification, focused HTTP/worker tests, `go test -race
       ./...`, `go vet ./...`, and `make verify-mpc-2of3` on Linux.
 - [ ] Commit with `test(contract): pin sign claim lifecycle fixtures`.
+
+### PLAN-STEP-CS-010: Remove deployment identity from co-signer runtime
+
+**Depends on:** backend `PLAN-STEP-BE-011` producer fixtures and approved DESIGN
+revision `cd8309c0dc1321776fd1d679d9711443d010405d`
+
+**Produces:** a customer-installable co-signer whose only server identity is its
+authenticated organization credential
+
+**Sources:** `REQ-004`, `REQ-036`, `REQ-051`, `REQ-057`, `REQ-081`–`REQ-084`,
+`REQ-086`, `ASSUMPTION-009`, `DECISION-050`, `INV-023`, `INV-030`, `INV-056`,
+`INV-058`, `INV-061`, `RISK-023`, `AC-004`, `AC-034`, `AC-038`, `AC-040`
+
+**Files:**
+
+- Modify: `internal/config/config.go` and `internal/config/config_test.go`
+- Modify: `internal/sharestore/config.go` and its tests/recovery proof
+- Modify: `internal/monolith/{types,client}.go` and client tests
+- Modify: `internal/reconcile/reconciler.go` and matrix tests
+- Modify: `internal/worker/session_worker.go` and worker tests
+- Modify: `cmd/co-signer/main.go` and startup tests
+- Modify: `internal/contract/bundle/verifier.go`
+- Replace: vendored `testdata/mpc-co-signer-http/v1/` from backend
+- Modify: `README.md` and installation/replacement guidance
+
+**Interfaces:**
+
+- `CO_SIGNER_DEPLOYMENT_ID` is removed. Startup neither reads nor validates it.
+- `sharestore.NewStoreConfig` is bound only to immutable purpose, expected
+  party, directory, and shared key provider. Matching B/C profiles no longer
+  compare an unrelated deployment string.
+- Discovery and claim types omit `CoSignerDeploymentID`; strict decoders reject
+  the legacy JSON field as unknown and require exact new backend fixture keys.
+- Worker and reconciler compare intent/session/key/org/status/deadline/
+  descriptor fields. They do not implement same-host or cross-host installation
+  ownership beyond the existing local lifetime filesystem lock.
+- The customer runbook requires one active installation per organization and
+  stop-old/verify/start-new replacement. It describes accidental dual installs
+  as unsupported self-DoS, not as a protected failover mode.
+
+- [ ] **RED:** Update config, store, strict HTTP, worker, and reconciliation
+      tests to omit deployment identity. Add malformed-response cases with the
+      legacy field and behavior cases proving organization-scoped claimed DKG
+      and SIGN replay remain actionable. Run the focused Go packages and record
+      failures caused by the old required env, struct fields, exact-key lists,
+      and owner comparisons.
+- [ ] **GREEN:** Remove deployment ID from configuration, share-store profiles,
+      recovery-proof input, monolith wire/domain types, worker validation,
+      reconciler config/branches, startup wiring, and documentation. Vendor the
+      exact backend fixture bundle and update its strict verifier.
+- [ ] Run `gofmt` on changed Go files, then focused `GOWORK=off go test` for
+      config/sharestore/contract/monolith/reconcile/worker/cmd packages.
+- [ ] Run `GOWORK=off go test -race ./...`, `GOWORK=off go vet ./...`, contract
+      verification, and the available platform-appropriate release target.
+      Inspect `rg` output so only explicit legacy-rejection/design-history prose
+      mentions the removed identifier.
+- [ ] Review the complete delta for strict-schema drift, organization/session
+      binding, actionable-only reconciliation, local-lock semantics, and
+      accidental recovery-store capability changes. Fix findings through a
+      failing regression test first.
+- [ ] Commit with `refactor(config): remove co-signer deployment identity`.
 
 ## Test Matrix
 
@@ -985,6 +1060,14 @@ verification command, and release artifact in this PLAN.
 | `TEST-CS-061`–`067` | Tagged `_test.go` B+C proof, derivation, negative digest, no prod reader | `PLAN-STEP-CS-009a`     | isolated compiled test binary    |
 | `TEST-CS-068`–`072` | Safe metrics, docs, redaction, production build, full verify target      | `PLAN-STEP-CS-009b`     | Linux release command            |
 | `TEST-CS-073`–`077` | SIGN fixture pin, strict claim/replay/conflict, result-kind separation   | `PLAN-STEP-CS-009c`     | vendored manifest and client tests |
+| `TEST-CS-078` | Startup/config succeeds without deployment ID and ignores no legacy alias | `PLAN-STEP-CS-010` | config/cmd tests |
+| `TEST-CS-079` | Store profiles retain party/purpose/directory/key separation without deployment field | `PLAN-STEP-CS-010` | sharestore tests |
+| `TEST-CS-080` | Strict DKG/SIGN listing and claims omit and reject deployment identity | `PLAN-STEP-CS-010` | bundle/monolith tests |
+| `TEST-CS-081` | Organization-scoped claimed DKG reconciliation replays/fails by artifact evidence | `PLAN-STEP-CS-010` | reconciliation matrix |
+| `TEST-CS-082` | SIGN worker accepts organization-scoped replay and still rejects identity/binding mismatch | `PLAN-STEP-CS-010` | worker tests |
+| `TEST-CS-083` | Backend and vendored HTTP fixture manifests/hashes match | `PLAN-STEP-CS-010` | contract verification |
+| `TEST-CS-084` | Full race/vet/build verification contains no runtime deployment identity | `PLAN-STEP-CS-010` | repository gate |
+| `TEST-CS-085` | README documents one active installation and accidental dual-install self-DoS | `PLAN-STEP-CS-010` | documentation review |
 
 ## Failure and Recovery Matrix
 
@@ -1002,7 +1085,7 @@ verification command, and release artifact in this PLAN.
 | Startup publisher cannot start or accept handoff     | Do not open intake or readiness; retain lifecycle lock until clean shutdown.                                                                                     | `TEST-CS-054` |
 | Startup terminal result is confirmed                 | Record authoritative result, alert on typed conflict, wake scheduler, and consider DKG only after a fresh poll.                                                   | `TEST-CS-056`–`058` |
 | Process crashes before terminal acknowledgement      | If backend still returns the intent, rebuild identical canonical bytes; if already terminal, publish nothing and leave local files unchanged without cleanup evidence. | `TEST-CS-050`, `TEST-CS-059` |
-| Multiple own CLAIMED or foreign CLAIMED is returned  | Treat as protocol-integrity startup failure, leave local artifacts untouched, start no scheduler/intake, keep process/signing/provisioning unready, and admit no SIGN. | `TEST-CS-049`, `TEST-CS-057` |
+| Multiple organization-scoped CLAIMED or a cross-organization intent is returned | Treat as protocol-integrity startup failure, leave local artifacts untouched, start no scheduler/intake, keep process/signing/provisioning unready, and admit no SIGN. | `TEST-CS-049`, `TEST-CS-057` |
 | Lock is already held                                 | Fail fast before stores/backend/intake; lock owner remains sole local-filesystem coordinator.                                                                     | `TEST-CS-053` |
 | Disk/recovery/preparams capability is unavailable    | Close provisioning only; continue SIGN if primary store and common key provider are healthy.                                                                     | `TEST-CS-035`, `TEST-CS-068` |
 | One key's B artifact is corrupt                       | Fail only that key's SIGN with a critical alert; keep unrelated keys and global signing/process readiness healthy.                                               | `TEST-CS-068`–`069` |
@@ -1012,9 +1095,10 @@ verification command, and release artifact in this PLAN.
 ## Migration, Compatibility, and Recovery
 
 - **Configuration migration:** replace single party/share directory and hashed
-  secret behavior with explicit deployment ID, two party/directory bindings,
+  secret behavior with two party/directory bindings,
   strict standard-base64 key, keyRef, state/lock path, free-space threshold,
-  and generation parallelism. Startup fails closed if any mandatory value or
+  and generation parallelism. Remove `CO_SIGNER_DEPLOYMENT_ID` without a
+  compatibility alias. Startup fails closed if any remaining mandatory value or
   capability is absent.
 - **Artifact migration:** N/A — clean cut starts before legacy shares require
   preservation. Existing mutable `.json` shares are not read or converted.
@@ -1028,7 +1112,7 @@ verification command, and release artifact in this PLAN.
   committed. Local workspace development before the tag is not release evidence.
 - **Rollback:** safe only before v1 activation. After activation retain the
   original key/keyRef and perform coordinated forward recovery.
-- **Crash recovery:** no protocol resume. Own actionable intents replay
+- **Crash recovery:** no protocol resume. Organization-scoped actionable intents replay
   completion from exact B/C or publish FAILED; unrelated files remain untouched.
 - **Customer recovery:** backup/restore B, C, original key, and keyRef. V1
   provides format and test proof, not a supported user recovery tool.
@@ -1056,6 +1140,8 @@ verification command, and release artifact in this PLAN.
   production recovery-store SIGN wiring, fixed terminal retry count, artifact
   inventory scan, Docker/Kubernetes deployment implementation, or test reader in
   a non-`_test.go` file.
+- Runtime/config/store/wire code contains no deployment identity. The vendored
+  closed HTTP bundle rejects the removed field and matches backend hashes.
 
 ### Behavioral validation
 
@@ -1069,6 +1155,9 @@ verification command, and release artifact in this PLAN.
   reader and two signing-only core services to prove isolated copied B+C signing.
 - Missing/corrupt C fails recovery proof and does not add C to the production
   signing path.
+- Restart rediscovery and claim replay use authenticated-organization data only.
+  Documentation requires one active installation per organization and explains
+  that concurrent same-credential installations may self-DoS.
 
 ### External rollout
 
@@ -1091,8 +1180,10 @@ All design IDs and residual risks are inventoried; every co-signer-owned
 requirement/invariant maps to files, steps, tests, and evidence. Compatibility,
 configuration migration, crash recovery, startup publication, core/module
 dependency, custody, external deployment ownership, and the absence of a
-user-facing recovery tool are explicit. No durable journal, inventory control
-plane, or deployment subsystem is introduced. Status:
+user-facing recovery tool are explicit. `PLAN-STEP-CS-010` traces `REQ-086`,
+`INV-061`, `DECISION-050`, `ASSUMPTION-009`, and `RISK-023` to executable tests
+and installation guidance. No durable journal, inventory control plane,
+installation fencing, or deployment subsystem is introduced. Status:
 `STRUCTURALLY_READY`.
 
 ## GSTACK REVIEW REPORT

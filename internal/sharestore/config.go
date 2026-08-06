@@ -21,17 +21,13 @@ const (
 
 // StoreConfig is an immutable, purpose-bound filesystem store profile.
 type StoreConfig struct {
-	deploymentID string
-	purpose      StorePurpose
-	partyID      string
-	directory    string
-	keyProvider  *KeyProvider
+	purpose     StorePurpose
+	partyID     string
+	directory   string
+	keyProvider *KeyProvider
 }
 
-func NewStoreConfig(deploymentID string, purpose StorePurpose, partyID, directory string, keyProvider *KeyProvider) (StoreConfig, error) {
-	if err := validateDeploymentID(deploymentID); err != nil {
-		return StoreConfig{}, err
-	}
+func NewStoreConfig(purpose StorePurpose, partyID, directory string, keyProvider *KeyProvider) (StoreConfig, error) {
 	if keyProvider == nil || keyProvider.KeyRef() == "" {
 		return StoreConfig{}, errors.New("share encryption key provider is required")
 	}
@@ -47,20 +43,16 @@ func NewStoreConfig(deploymentID string, purpose StorePurpose, partyID, director
 	}
 
 	return StoreConfig{
-		deploymentID: deploymentID,
-		purpose:      purpose,
-		partyID:      partyID,
-		directory:    directory,
-		keyProvider:  keyProvider,
+		purpose:     purpose,
+		partyID:     partyID,
+		directory:   directory,
+		keyProvider: keyProvider,
 	}, nil
 }
 
 func ValidateStorePair(primary, recovery StoreConfig) error {
 	if primary.purpose != StorePurposePrimary || recovery.purpose != StorePurposeRecovery {
 		return errors.New("store pair must contain primary and recovery profiles")
-	}
-	if primary.deploymentID != recovery.deploymentID {
-		return errors.New("primary and recovery stores must use the same deployment ID")
 	}
 	if primary.keyProvider == nil || recovery.keyProvider == nil || primary.keyProvider != recovery.keyProvider {
 		return errors.New("primary and recovery stores must share one key provider")
@@ -76,8 +68,6 @@ func ValidateStorePair(primary, recovery StoreConfig) error {
 	}
 	return nil
 }
-
-func (c StoreConfig) DeploymentID() string { return c.deploymentID }
 
 func (c StoreConfig) Purpose() StorePurpose { return c.purpose }
 
@@ -110,22 +100,6 @@ func validatePurposeParty(purpose StorePurpose, partyID string) error {
 		return fmt.Errorf("unsupported store purpose %q", purpose)
 	}
 	return nil
-}
-
-func validateDeploymentID(value string) error {
-	if value == "" || len(value) > maxBindingIdentifierBytes || !isAlphaNumeric(value[0]) {
-		return errors.New("co-signer deployment ID must match the bounded backend identifier contract")
-	}
-	for i := 1; i < len(value); i++ {
-		if !isAlphaNumeric(value[i]) && value[i] != '.' && value[i] != '_' && value[i] != ':' && value[i] != '-' {
-			return errors.New("co-signer deployment ID must match the bounded backend identifier contract")
-		}
-	}
-	return nil
-}
-
-func isAlphaNumeric(value byte) bool {
-	return value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z' || value >= '0' && value <= '9'
 }
 
 func validateBindingIdentifier(name, value string) error {

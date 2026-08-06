@@ -18,7 +18,6 @@ type Config struct {
 	APIKeyID                       string
 	APIPrivateKey                  string
 	HTTPAddr                       string
-	DeploymentID                   string
 	PrimaryStore                   sharestore.StoreConfig
 	RecoveryStore                  sharestore.StoreConfig
 	StateDir                       string
@@ -76,16 +75,15 @@ func Load() (Config, error) {
 		return Config{}, errors.New("legacy single-store and CO_SIGNER_SHARE_ENCRYPTION_KEY_REF settings are unsupported; configure explicit stores and CO_SIGNER_SHARE_ENCRYPTION_KEY_ID")
 	}
 
-	deploymentID := os.Getenv("CO_SIGNER_DEPLOYMENT_ID")
 	provider, err := sharestore.NewKeyProvider(os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY"), os.Getenv("CO_SIGNER_SHARE_ENCRYPTION_KEY_ID"))
 	if err != nil {
 		return Config{}, fmt.Errorf("configure share encryption key: %w", err)
 	}
-	primaryStore, err := sharestore.NewStoreConfig(deploymentID, sharestore.StorePurposePrimary, os.Getenv("CO_SIGNER_PRIMARY_PARTY_ID"), os.Getenv("CO_SIGNER_PRIMARY_SHARES_DIR"), provider)
+	primaryStore, err := sharestore.NewStoreConfig(sharestore.StorePurposePrimary, os.Getenv("CO_SIGNER_PRIMARY_PARTY_ID"), os.Getenv("CO_SIGNER_PRIMARY_SHARES_DIR"), provider)
 	if err != nil {
 		return Config{}, fmt.Errorf("configure primary store: %w", err)
 	}
-	recoveryStore, err := sharestore.NewStoreConfig(deploymentID, sharestore.StorePurposeRecovery, os.Getenv("CO_SIGNER_RECOVERY_PARTY_ID"), os.Getenv("CO_SIGNER_RECOVERY_SHARES_DIR"), provider)
+	recoveryStore, err := sharestore.NewStoreConfig(sharestore.StorePurposeRecovery, os.Getenv("CO_SIGNER_RECOVERY_PARTY_ID"), os.Getenv("CO_SIGNER_RECOVERY_SHARES_DIR"), provider)
 	if err != nil {
 		return Config{}, fmt.Errorf("configure recovery store: %w", err)
 	}
@@ -110,7 +108,6 @@ func Load() (Config, error) {
 		APIKeyID:                       os.Getenv("CO_SIGNER_API_KEY_ID"),
 		APIPrivateKey:                  os.Getenv("CO_SIGNER_API_PRIVATE_KEY"),
 		HTTPAddr:                       httpAddr(),
-		DeploymentID:                   deploymentID,
 		PrimaryStore:                   primaryStore,
 		RecoveryStore:                  recoveryStore,
 		StateDir:                       stateDir,

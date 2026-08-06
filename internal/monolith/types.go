@@ -9,22 +9,20 @@ import (
 )
 
 type Intent struct {
-	CreatedAt            time.Time
-	CoSignerDeploymentID string
-	DeadlineRaw          string
-	DiscoveryStatus      string
-	IntentID             string        `json:"intentId"`
-	SessionID            string        `json:"sessionId"`
-	Type                 string        `json:"type"`
-	ExpiresAt            time.Time     `json:"expiresAt"`
-	Payload              IntentPayload `json:"payload"`
+	CreatedAt       time.Time
+	DeadlineRaw     string
+	DiscoveryStatus string
+	IntentID        string        `json:"intentId"`
+	SessionID       string        `json:"sessionId"`
+	Type            string        `json:"type"`
+	ExpiresAt       time.Time     `json:"expiresAt"`
+	Payload         IntentPayload `json:"payload"`
 }
 
 // ActionableIntent is one exact backend-addressed listing item. DeadlineRaw is
 // retained so reconciliation can prove that claim and restart do not replace
 // the backend-created absolute deadline with a fresh TTL.
 type ActionableIntent struct {
-	CoSignerDeploymentID  string
 	CreatedAt             time.Time
 	CreatedAtRaw          string
 	Deadline              time.Time
@@ -114,7 +112,6 @@ type ClaimResult struct {
 	DeadlineRaw           string        `json:"-"`
 	OrgID                 string        `json:"orgId,omitempty"`
 	KeyID                 string        `json:"keyId,omitempty"`
-	CoSignerDeploymentID  string        `json:"coSignerDeploymentId,omitempty"`
 	DescriptorBytes       []byte        `json:"descriptorBytesBase64,omitempty"`
 	DescriptorFingerprint string        `json:"descriptorFingerprint,omitempty"`
 	ChainCode             []byte        `json:"chainCodeBase64,omitempty"`
