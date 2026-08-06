@@ -29,7 +29,7 @@ unconfirmed startup publication closes only DKG admission, not SIGN.
 - Production DKG uses exactly one `mpc-core` `Service`; B and C receive
   per-run party ID, transport, cancellation, and persistence dependencies. The
   service has no mutable global local-party or transport configuration.
-- The committed module graph pins exactly `mpc-core v0.3.0`, contains no
+- The committed module graph pins exactly `mpc-core v0.3.1`, contains no
   `replace`, and every Go verification entrypoint sets `GOWORK=off`.
 - Reconciliation is actionable DKG only and never scans or mutates unrelated
   files. `COMPLETED` artifacts are normal durable state.
@@ -67,13 +67,13 @@ unconfirmed startup publication closes only DKG admission, not SIGN.
 - Repository: `mpc-signer`
 - Approved DESIGN: `docs/superpowers/specs/2026-07-27-mpc-2-of-3-recovery-design.md`
 - Approved DESIGN Git revision:
-  `01928c4e994f5d192cc9db41d19d6de2e9fed652`.
+  `8c97ce2e7399e9563d690ab6128d05cc3771477d`.
 - Co-signer PLAN baseline: this document revision.
 - Review decisions: approved D1-D21 engineering review, 2026-07-30
 
-Active requirements are `REQ-001`–`REQ-081` excluding retired `REQ-023`,
+Active requirements are `REQ-001`–`REQ-085` excluding retired `REQ-023`,
 `REQ-028`, `REQ-031`, `REQ-033`, `REQ-040`, `REQ-042`, `REQ-043`, and
-`REQ-045`. Active invariants are `INV-001`–`INV-056` excluding retired
+`REQ-045`. Active invariants are `INV-001`–`INV-060` excluding retired
 `INV-024`, `INV-025`, and `INV-027`.
 
 ### Repository applicability
@@ -85,13 +85,15 @@ Active requirements are `REQ-001`–`REQ-081` excluding retired `REQ-023`,
   `REQ-081`.
 - Integration requirements: `REQ-003`, `REQ-015`, `REQ-022`, `REQ-027`,
   `REQ-035`, `REQ-037`–`REQ-039`, `REQ-064`, `REQ-067`, `REQ-073`–`REQ-075`,
-  `REQ-079`.
-- No co-signer implementation: `REQ-066` (backend key-row ordering).
+  `REQ-079`, `REQ-082`–`REQ-084`.
+- No co-signer implementation: `REQ-066` (backend key-row ordering) and
+  `REQ-085` (signer gRPC network authorization and cutover evidence).
 - Direct invariants: `INV-001`–`INV-004`, `INV-006`–`INV-019`,
   `INV-023`, `INV-026`, `INV-028`–`INV-041`, `INV-044`–`INV-047`,
-  `INV-051`–`INV-053`, `INV-055`, `INV-056`.
+  `INV-051`–`INV-053`, `INV-055`, `INV-056`, `INV-058`, `INV-059`.
 - Integration invariants: `INV-005`, `INV-020`–`INV-022`, `INV-042`,
-  `INV-043`, `INV-048`–`INV-050`, `INV-054`.
+  `INV-043`, `INV-048`–`INV-050`, `INV-054`, `INV-057`.
+- No co-signer implementation: `INV-060` (signer gRPC reachability boundary).
 
 ### Assumptions, decisions, and risks
 
@@ -103,12 +105,14 @@ Active requirements are `REQ-001`–`REQ-081` excluding retired `REQ-023`,
 | `ASSUMPTION-004`              | Validate key/keyRef/directories and document customer backup responsibility.                                                                                                                                                        |
 | `ASSUMPTION-006`              | Accept authenticated SIGN only; do not add mutable local eligibility.                                                                                                                                                               |
 | `ASSUMPTION-007`              | Document quorum-bearing host risk without inventing an activation ceremony.                                                                                                                                                         |
-| `DECISION-001`–`DECISION-047` | Directly implement `001`–`013`, `015`, `018`–`032`, `034`–`039`, `042`–`044`, `047`; integrate `014`, `016`, `033`, `040`, `041`, `045`, `046`; `DECISION-017` is retired.                              |
+| `ASSUMPTION-008`              | Signer/Operations-owned network authorization; co-signer adds no signer gRPC credential or deployment controls.                                                                                                                     |
+| `DECISION-001`–`DECISION-049` | Directly implement `001`–`013`, `015`, `018`–`032`, `034`–`039`, `042`–`044`, `047`; integrate `014`, `016`, `033`, `040`, `041`, `045`, `046`, `048`; `DECISION-049` is signer/Operations-owned and `DECISION-017` is retired. |
 | `RISK-001`–`RISK-017`         | Mitigate with key custody docs, strict artifacts, fail-closed capabilities, metrics, locks, deterministic restart, benchmarks, and explicit accepted residual risk—not new control planes.                                  |
 | `RISK-018`                    | Signer Vault-write/DB-commit orphaning is integration-only here. Coordinated E2E proves no false product completion; co-signer adds no platform-share reconciliation.                                                    |
 | `RISK-019`                    | Startup publication is memory-owned. Reconstruct identical bytes only while backend still returns an actionable intent; otherwise preserve unclassified files and publish nothing.                                    |
 | `RISK-020`                    | Cutover is manual. Co-signer provides deterministic version/contract verification and shutdown behavior, while the backend-owned runbook retains the mandatory maintenance barrier.                                   |
 | `RISK-021`                    | Benchmark database safety is backend-owned. Co-signer exposes safe metrics and accepts only the disposable harness workload through normal production protocols; it adds no test provisioning endpoint.                 |
+| `RISK-022`                    | Signer gRPC peer authorization is an integration residual risk owned by signer/Operations; co-signer relies on authenticated backend HTTP and does not implement or verify that network boundary.                       |
 
 ## Cross-Repository Dependencies
 
@@ -122,12 +126,16 @@ incoming deliverables it consumes and the outputs it provides.
 | `CONTRACT-BUNDLE-V1`     | `mpc-signer / SIG-001 + SIG-002`              | `CS-001`, then all wire-facing steps            | Whole signer-owned bundle is vendored and hash-verified. It contains shared proto/descriptor/terminal/digest/JCS material, not artifact v1. |
 | `COSIGNER-HTTP-V1`       | `back-end / BE-001`                           | vendored by `CS-001`; used by `CS-004`, `CS-007`, `CS-008a` | Backend-owned strict HTTP/mailbox fixtures and manifest.                                                                                    |
 | `SIGN-CLAIM-HTTP-V1`     | `back-end / BE-008a`                          | `CS-009c`                                      | Strict SIGN claim/result fixture family added to the same backend-owned HTTP bundle.                                                        |
-| `MPC-CORE-V0.3.0`        | `mpc-core / CORE-001`–`CORE-007` release gate | `CS-003`–`CS-005`, `CS-009a`                    | Exact Go module tag after real 2-of-3 DKG/signing, single-use preparams, codec, race, subprocess, and bounded fuzz gates.                    |
+| `MPC-CORE-V0.3.1`        | `mpc-core / CORE-001`–`CORE-007` release gate plus W7 runtime patch | `CS-003`–`CS-005`, `CS-009a`                    | Exact Go module tag after the v0.3.0 base gates and the reviewed signing round-hint runtime patch.                                          |
+
+`MPC-CORE-V0.3.0` is the historical W2 base release only. The W7 runtime patch
+`MPC-CORE-V0.3.1` supersedes it for every consumer dependency, merge gate,
+verification command, and release artifact in this PLAN.
 
 ### Outputs
 
 - A verified co-signer binary compatible with `CONTRACT-BUNDLE-V1`,
-  `COSIGNER-HTTP-V1`, and exactly `mpc-core v0.3.0`.
+  `COSIGNER-HTTP-V1`, and exactly `mpc-core v0.3.1`.
 - Co-signer-owned artifact-v1 documentation and golden vectors. Artifact hashes
   are not added to the signer manifest.
 - A tagged `_test.go` recovery proof executable and invocation contract for the
@@ -280,7 +288,7 @@ incoming deliverables it consumes and the outputs it provides.
 `DECISION-025`, `DECISION-026`, `DECISION-037`, `DECISION-042`, `INV-037`,
 `INV-047`, `INV-053`
 
-**Depends on:** `PLAN-STEP-CS-002`, `MPC-CORE-V0.3.0`
+**Depends on:** `PLAN-STEP-CS-002`, `MPC-CORE-V0.3.1`
 
 **Files:**
 
@@ -314,11 +322,11 @@ incoming deliverables it consumes and the outputs it provides.
 - Produces a separate primary-only SIGN reader; recovery store does not satisfy it.
 - Adapts every current application caller to the released core
   `ShareReader`/`ShareWriter` capabilities in the same commit that pins
-  `mpc-core v0.3.0`; removes `WithShareStore`, mutable status,
+  `mpc-core v0.3.1`; removes `WithShareStore`, mutable status,
   `DisableShare`, `ErrShareDisabled`, and their result mapping without adding a
   no-op or application-local disabler.
 - Keeps exact canonical descriptor bytes inside the encrypted payload and uses the
-  `mpc-core v0.3.0` evidence inspector to validate codec, canonical compressed
+  `mpc-core v0.3.1` evidence inspector to validate codec, canonical compressed
   SEC1 public key, and chain-code hash. Artifact vectors remain co-signer-owned.
 - Centralizes decrypt, descriptor/product binding, evidence inspection, and
   best-effort decrypted-buffer cleanup in non-exported
@@ -345,7 +353,7 @@ incoming deliverables it consumes and the outputs it provides.
       worker error classification to the split core capabilities. Prove an
       unregistered writer fails before filesystem access and normal primary
       reads remain available.
-- [ ] Pin exactly `mpc-core v0.3.0`, remove every committed `replace`, and prove
+- [ ] Pin exactly `mpc-core v0.3.1`, remove every committed `replace`, and prove
       `GOWORK=off go list -m` resolves that tag. Local uncommitted `go.work` or
       `replace` may be used before the tag exists but cannot enter a commit or CI.
 - [ ] Run normal tests, a bounded 10-second fuzz run, and helper-process crash
@@ -355,7 +363,7 @@ incoming deliverables it consumes and the outputs it provides.
       corpus before considering the step complete.
 - [ ] Run `GOWORK=off go test ./... -count=1` before commit; every current
       consumer of the removed core `ShareStore`/status API must compile against
-      `v0.3.0`.
+      `v0.3.1`.
 - [ ] Commit with `feat(store): publish immutable recovery artifacts`.
 
 ### PLAN-STEP-CS-004: Add one-service B/C routing and an immutable active pair
@@ -364,7 +372,7 @@ incoming deliverables it consumes and the outputs it provides.
 `REQ-071`, `REQ-072`, `DECISION-039`, `DECISION-042`, `INV-004`, `INV-015`,
 `INV-039`, `INV-040`, `INV-046`, `INV-047`
 
-**Depends on:** `PLAN-STEP-CS-003`, `MPC-CORE-V0.3.0`,
+**Depends on:** `PLAN-STEP-CS-003`, `MPC-CORE-V0.3.1`,
 `CONTRACT-BUNDLE-V1`, `COSIGNER-HTTP-V1`
 
 **Files:**
@@ -442,7 +450,7 @@ incoming deliverables it consumes and the outputs it provides.
 `INV-032`, `INV-033`, `REQ-071`, `REQ-072`, `DECISION-039`, `DECISION-042`,
 `INV-038`, `INV-041`, `INV-046`, `INV-047`
 
-**Depends on:** `PLAN-STEP-CS-004`, `MPC-CORE-V0.3.0`
+**Depends on:** `PLAN-STEP-CS-004`, `MPC-CORE-V0.3.1`
 
 **Files:**
 
@@ -753,7 +761,7 @@ incoming deliverables it consumes and the outputs it provides.
 `DECISION-004`, `DECISION-031`, `DECISION-044`, `INV-006`, `INV-007`,
 `INV-028`, `INV-036`, `INV-044`, `INV-048`, `INV-052`, `RISK-018`
 
-**Depends on:** `PLAN-STEP-CS-008b`, `MPC-CORE-V0.3.0`
+**Depends on:** `PLAN-STEP-CS-008b`, `MPC-CORE-V0.3.1`
 
 **Files:**
 
@@ -873,7 +881,7 @@ incoming deliverables it consumes and the outputs it provides.
 - `make verify-mpc-2of3` is the single repository release command. It sets
   `GOWORK=off` internally, rejects non-Linux execution for required
   filesystem/lock suites, verifies both vendored bundles and exact
-  `mpc-core v0.3.0` with no `replace`, runs `go test -race ./...`, helper-process
+  `mpc-core v0.3.1` with no `replace`, runs `go test -race ./...`, helper-process
   suites, bounded fuzzing, the tagged recovery proof, and a production build
   without tags. Any missing/skipped mandatory suite is an error.
 
@@ -1011,11 +1019,11 @@ incoming deliverables it consumes and the outputs it provides.
 - **Artifact migration:** N/A — clean cut starts before legacy shares require
   preservation. Existing mutable `.json` shares are not read or converted.
 - **Dependency cut:** implementation may begin independently, but core-dependent
-  co-signer commits cannot merge until `MPC-CORE-V0.3.0` exists.
+  co-signer commits cannot merge until `MPC-CORE-V0.3.1` exists.
   `CONTRACT-BUNDLE-V1` and `COSIGNER-HTTP-V1` are copied only with the explicit
   consumer-local sync command. The canonical implementation graph is in the
   DESIGN; this PLAN does not define a competing forward order.
-- **Module cut:** committed `go.mod/go.sum` pin exactly `mpc-core v0.3.0`.
+- **Module cut:** committed `go.mod/go.sum` pin exactly `mpc-core v0.3.1`.
   Consumer CI and release verification use `GOWORK=off`; no `replace` is
   committed. Local workspace development before the tag is not release evidence.
 - **Rollback:** safe only before v1 activation. After activation retain the
@@ -1043,7 +1051,7 @@ incoming deliverables it consumes and the outputs it provides.
   proof, and untagged production build suites all execute rather than skip.
 - Shared contract and backend HTTP fixture manifests equal their producer
   versions. Artifact-v1 vectors remain local.
-- `go.mod/go.sum` resolve exactly `mpc-core v0.3.0` without `replace`.
+- `go.mod/go.sum` resolve exactly `mpc-core v0.3.1` without `replace`.
 - `rg` finds no share-status mutation, passphrase hashing, overwrite rename,
   production recovery-store SIGN wiring, fixed terminal retry count, artifact
   inventory scan, Docker/Kubernetes deployment implementation, or test reader in
