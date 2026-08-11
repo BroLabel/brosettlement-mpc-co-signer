@@ -260,8 +260,12 @@ func decodeActionableIntent(wire actionableIntentWire, collection string) (Actio
 	return item, nil
 }
 
-func (c *Client) ClaimIntent(ctx context.Context, intentID string) (ClaimResult, error) {
-	path := "/api/v1/co-signer/intents/" + url.PathEscape(intentID) + "/claim"
+func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (ClaimResult, error) {
+	pathType, err := intentTypePath(intentType)
+	if err != nil {
+		return ClaimResult{}, err
+	}
+	path := "/api/v1/co-signer/intents/" + pathType + "/" + url.PathEscape(intentID) + "/claim"
 	var out ClaimResult
 	if err := c.doJSON(ctx, http.MethodPost, path, nil, intentID, &out, http.StatusOK); err != nil {
 		switch {
@@ -278,20 +282,24 @@ func (c *Client) ClaimIntent(ctx context.Context, intentID string) (ClaimResult,
 	if out.HTTPStatus != http.StatusOK {
 		return ClaimResult{}, errors.New("claim response body HTTP status mismatch")
 	}
-	if err := validateClaimResult(out); err != nil {
+	if err := validateClaimResult(out, intentType); err != nil {
 		return ClaimResult{}, err
 	}
 	return out, nil
 }
 
-func validateClaimResult(claim ClaimResult) error {
+func validateClaimResult(claim ClaimResult, expectedType string) error {
 	if claim.Status != "CLAIMED" {
 		return errors.New("claim response status is invalid")
 	}
-	if claim.Type == "SIGN" {
+	actualType := claim.Intent().Type
+	if !strings.EqualFold(actualType, expectedType) {
+		return errors.New("claim response kind does not match requested intent type")
+	}
+	if actualType == "SIGN" {
 		return validateSignClaimResult(claim)
 	}
-	if claim.Type == "DKG" {
+	if actualType == "DKG" {
 		if claim.Payload.Type != "" && claim.Payload.Type != "DKG" {
 			return errors.New("DKG claim payload kind mismatch")
 		}
@@ -349,7 +357,7 @@ func (c *Client) PostResult(ctx context.Context, intentID string, result IntentR
 	if err != nil {
 		return err
 	}
-	path := "/api/v1/co-signer/intents/" + url.PathEscape(intentID) + "/result"
+	path := "/api/v1/co-signer/intents/sign/" + url.PathEscape(intentID) + "/result"
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		req, err := c.newRequest(ctx, http.MethodPost, path, body)
@@ -454,7 +462,7 @@ func parseSignResultOutcome(statusCode int, body []byte, submittedStatus string)
 // supplied by the lifecycle terminal publisher. Generic bounded retries remain
 // in doJSON for non-terminal operations.
 func (c *Client) PostTerminalResult(ctx context.Context, intentID string, body []byte) (TerminalHTTPResponse, error) {
-	path := "/api/v1/co-signer/intents/" + url.PathEscape(intentID) + "/result"
+	path := "/api/v1/co-signer/intents/dkg/" + url.PathEscape(intentID) + "/result"
 	req, err := c.newRequest(ctx, http.MethodPost, path, body)
 	if err != nil {
 		return TerminalHTTPResponse{}, err
@@ -477,6 +485,17 @@ func (c *Client) PostTerminalResult(ctx context.Context, intentID string, body [
 		}, nil
 	}
 	return TerminalHTTPResponse{StatusCode: resp.StatusCode, Body: responseBody}, nil
+}
+
+func intentTypePath(intentType string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(intentType)) {
+	case "DKG":
+		return "dkg", nil
+	case "SIGN":
+		return "sign", nil
+	default:
+		return "", errors.New("unsupported intent type")
+	}
 }
 
 func (c *Client) doJSON(

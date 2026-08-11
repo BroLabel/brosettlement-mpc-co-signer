@@ -35,7 +35,7 @@ var (
 )
 
 type sessionClient interface {
-	ClaimIntent(ctx context.Context, intentID string) (monolith.ClaimResult, error)
+	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
 	PostResult(ctx context.Context, intentID string, result monolith.IntentResult) error
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
 	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)
@@ -136,7 +136,7 @@ func runSessionWithPermits(
 		metrics.ObserveSessionDuration(metricKind, time.Since(started).Seconds())
 	}()
 
-	claim, err := client.ClaimIntent(ctx, intent.IntentID)
+	claim, err := client.ClaimIntent(ctx, intent.Type, intent.IntentID)
 	if err != nil {
 		outcome := "failed"
 		if errors.Is(err, monolith.ErrAlreadyClaimed) {

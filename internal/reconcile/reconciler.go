@@ -61,7 +61,7 @@ func (e *CapabilityDeferredError) Unwrap() error {
 
 type Backend interface {
 	ListActionableIntents(context.Context) (monolith.ActionableListing, error)
-	ClaimIntent(context.Context, string) (monolith.ClaimResult, error)
+	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
 }
 
 // InspectionPreflight validates the recovery-store and strict inspection
@@ -195,7 +195,7 @@ func (r *Reconciler) Reconcile(ctx context.Context) (result Result, returnErr er
 		if !item.primaryExists && !item.recoveryExists {
 			continue
 		}
-		claim, err := r.backend.ClaimIntent(ctx, item.intent.IntentID)
+		claim, err := r.backend.ClaimIntent(ctx, "DKG", item.intent.IntentID)
 		if err != nil {
 			switch {
 			case errors.Is(err, monolith.ErrAlreadyClaimed),

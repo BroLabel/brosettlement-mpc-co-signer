@@ -60,7 +60,7 @@ func (s *stubPendingClient) GetPendingIntents(context.Context) ([]monolith.Inten
 	return append([]monolith.Intent(nil), s.intents...), nil
 }
 
-func (s *stubPendingClient) ClaimIntent(_ context.Context, intentID string) (monolith.ClaimResult, error) {
+func (s *stubPendingClient) ClaimIntent(_ context.Context, _ string, intentID string) (monolith.ClaimResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.claimCalls = append(s.claimCalls, intentID)

@@ -13,7 +13,7 @@ import (
 
 type pendingClient interface {
 	GetPendingIntents(ctx context.Context) ([]monolith.Intent, error)
-	ClaimIntent(ctx context.Context, intentID string) (monolith.ClaimResult, error)
+	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
 	PostResult(ctx context.Context, intentID string, result monolith.IntentResult) error
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
 	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)

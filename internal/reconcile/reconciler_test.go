@@ -693,7 +693,7 @@ func (b *recordingBackend) ListActionableIntents(context.Context) (monolith.Acti
 	return b.listing, b.listErr
 }
 
-func (b *recordingBackend) ClaimIntent(_ context.Context, _ string) (monolith.ClaimResult, error) {
+func (b *recordingBackend) ClaimIntent(_ context.Context, _ string, _ string) (monolith.ClaimResult, error) {
 	b.claimCalls++
 	appendEvent(b.events, "claim")
 	return b.claim, b.claimErr

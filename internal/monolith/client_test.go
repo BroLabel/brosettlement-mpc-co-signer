@@ -29,7 +29,7 @@ func TestClaimIntentReturnsAlreadyClaimed(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	_, err := client.ClaimIntent(context.Background(), "intent-1")
+	_, err := client.ClaimIntent(context.Background(), "DKG", "intent-1")
 	if !errors.Is(err, ErrAlreadyClaimed) {
 		t.Fatalf("expected ErrAlreadyClaimed, got %v", err)
 	}
@@ -51,7 +51,7 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 	defer srv.Close()
 
 	client, pub := newTestClient(t, srv.URL)
-	if _, err := client.ClaimIntent(context.Background(), "intent-1"); err != nil {
+	if _, err := client.ClaimIntent(context.Background(), "DKG", "intent-1"); err != nil {
 		t.Fatalf("ClaimIntent() error = %v", err)
 	}
 	if gotContentLength > 0 {
@@ -65,6 +65,13 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 	}
 	if !signatureIsValid {
 		t.Fatal("bodyless claim signature validation failed")
+	}
+}
+
+func TestClaimIntentRejectsUnsupportedTypeBeforeHTTP(t *testing.T) {
+	client, _ := newTestClient(t, "https://example.invalid")
+	if _, err := client.ClaimIntent(context.Background(), "UNKNOWN", "intent-1"); err == nil {
+		t.Fatal("ClaimIntent() error = nil")
 	}
 }
 
@@ -94,7 +101,7 @@ func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	claim, err := client.ClaimIntent(context.Background(), "intent-1")
+	claim, err := client.ClaimIntent(context.Background(), "DKG", "intent-1")
 	if err != nil {
 		t.Fatalf("ClaimIntent() error = %v", err)
 	}
@@ -121,7 +128,7 @@ func TestClaimIntentDecodesDualPartyContractFixture(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	claim, err := client.ClaimIntent(context.Background(), "intent-123")
+	claim, err := client.ClaimIntent(context.Background(), "DKG", "intent-123")
 	if err != nil {
 		t.Fatalf("ClaimIntent() error = %v", err)
 	}
@@ -150,7 +157,7 @@ func TestClaimIntentPreservesSignClaimReplayPayloadAndDeadline(t *testing.T) {
 	requests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if r.URL.Path != "/api/v1/co-signer/intents/intent-125/claim" {
+		if r.URL.Path != "/api/v1/co-signer/intents/sign/intent-125/claim" {
 			t.Fatalf("request path = %q", r.URL.Path)
 		}
 		_, _ = w.Write(fixture)
@@ -158,11 +165,11 @@ func TestClaimIntentPreservesSignClaimReplayPayloadAndDeadline(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	first, err := client.ClaimIntent(context.Background(), "intent-125")
+	first, err := client.ClaimIntent(context.Background(), "SIGN", "intent-125")
 	if err != nil {
 		t.Fatalf("first ClaimIntent() error = %v", err)
 	}
-	second, err := client.ClaimIntent(context.Background(), "intent-125")
+	second, err := client.ClaimIntent(context.Background(), "SIGN", "intent-125")
 	if err != nil {
 		t.Fatalf("replay ClaimIntent() error = %v", err)
 	}
@@ -189,7 +196,7 @@ func TestClaimIntentRejectsWrongKindSignClaim(t *testing.T) {
 	}))
 	defer srv.Close()
 	client, _ := newTestClient(t, srv.URL)
-	if _, err := client.ClaimIntent(context.Background(), "intent-125"); err == nil {
+	if _, err := client.ClaimIntent(context.Background(), "SIGN", "intent-125"); err == nil {
 		t.Fatal("ClaimIntent() error = nil")
 	}
 }
@@ -203,7 +210,7 @@ func TestClaimIntentRejectsUnknownSignClaimPayloadField(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(malformed) }))
 	defer srv.Close()
 	client, _ := newTestClient(t, srv.URL)
-	if _, err := client.ClaimIntent(context.Background(), "intent-125"); err == nil {
+	if _, err := client.ClaimIntent(context.Background(), "SIGN", "intent-125"); err == nil {
 		t.Fatal("ClaimIntent() error = nil")
 	}
 }
@@ -215,7 +222,7 @@ func TestClaimIntentClassifiesTypedForeignConflict(t *testing.T) {
 	}))
 	defer srv.Close()
 	client, _ := newTestClient(t, srv.URL)
-	_, err := client.ClaimIntent(context.Background(), "intent-125")
+	_, err := client.ClaimIntent(context.Background(), "DKG", "intent-125")
 	if !errors.Is(err, ErrAlreadyClaimed) {
 		t.Fatalf("ClaimIntent() error = %v, want ErrAlreadyClaimed", err)
 	}
@@ -403,7 +410,7 @@ func TestClaimIntentRejectsUnknownBackendFixtureField(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	if _, err := client.ClaimIntent(context.Background(), "intent-1"); err == nil {
+	if _, err := client.ClaimIntent(context.Background(), "DKG", "intent-1"); err == nil {
 		t.Fatal("ClaimIntent() error = nil")
 	}
 }
@@ -439,7 +446,7 @@ func TestClaimIntentRequiresMatchingHTTPStatusContract(t *testing.T) {
 			defer srv.Close()
 
 			client, _ := newTestClient(t, srv.URL)
-			if _, err := client.ClaimIntent(context.Background(), "intent-1"); err == nil {
+			if _, err := client.ClaimIntent(context.Background(), "DKG", "intent-1"); err == nil {
 				t.Fatal("ClaimIntent() error = nil")
 			}
 		})
@@ -553,6 +560,9 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 func TestPostResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
 	var gotIdempotency string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/co-signer/intents/sign/intent-42/result" {
+			t.Fatalf("request path = %q", r.URL.Path)
+		}
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
 		_, _ = w.Write([]byte(`{"authoritativeStatus":"COMPLETED","httpStatus":200,"outcome":"ACCEPTED"}`))
 	}))
@@ -649,6 +659,9 @@ func TestPostTerminalResultPerformsOneExactAttemptWithoutGenericRetry(t *testing
 	var gotBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
+		if r.URL.Path != "/api/v1/co-signer/intents/dkg/intent-42/result" {
+			t.Fatalf("request path = %q", r.URL.Path)
+		}
 		gotBody, _ = io.ReadAll(r.Body)
 		if got := r.Header.Get("X-Idempotency-Key"); got != "intent-42" {
 			t.Errorf("X-Idempotency-Key = %q", got)
@@ -816,7 +829,7 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	claim, err := client.ClaimIntent(context.Background(), "intent-1")
+	claim, err := client.ClaimIntent(context.Background(), "SIGN", "intent-1")
 	if err != nil {
 		t.Fatalf("ClaimIntent() error = %v", err)
 	}
@@ -884,7 +897,7 @@ func TestClaimIntentReturnsOutcomeUnknownAfterAmbiguousRetries(t *testing.T) {
 		return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection reset")}
 	})
 
-	_, err := client.ClaimIntent(context.Background(), "intent-1")
+	_, err := client.ClaimIntent(context.Background(), "DKG", "intent-1")
 	if !errors.Is(err, ErrClaimOutcomeUnknown) {
 		t.Fatalf("expected ErrClaimOutcomeUnknown, got %v", err)
 	}

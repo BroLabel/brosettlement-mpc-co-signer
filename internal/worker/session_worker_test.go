@@ -32,7 +32,7 @@ type stubClient struct {
 	lastFrame   monolith.OutboundFrame
 }
 
-func (s *stubClient) ClaimIntent(_ context.Context, _ string) (monolith.ClaimResult, error) {
+func (s *stubClient) ClaimIntent(_ context.Context, _ string, _ string) (monolith.ClaimResult, error) {
 	if s.claimResult.ExpiresAt.IsZero() {
 		s.claimResult.ExpiresAt = time.Now().Add(time.Minute)
 	}
