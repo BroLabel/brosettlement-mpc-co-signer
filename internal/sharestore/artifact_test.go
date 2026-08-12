@@ -396,8 +396,8 @@ func testCodecBlob(t fixtureT) []byte {
 	blob, err := coretss.MarshalKeyMaterial(coretss.ECDSAKeyMaterial{
 		Share:            ecdsakeygen.LocalPartySaveData{ECDSAPub: point},
 		ChainCode:        bytes.Repeat([]byte{0x42}, 32),
-		PublicKeyFormat:  "compressed_sec1",
-		DerivationScheme: "bip32_secp256k1",
+		PublicKeyFormat:  coretss.PublicKeyFormatUncompressedHex,
+		DerivationScheme: coretss.DerivationSchemeBIP32Secp256k1,
 	})
 	if err != nil {
 		t.Fatalf("MarshalKeyMaterial() error = %v", err)

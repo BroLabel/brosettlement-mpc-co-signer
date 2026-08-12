@@ -434,11 +434,15 @@ func (s *cancelingCompositionService) RunDKGSessionWithPreParams(
 	if request.LocalPartyID == coordinatorRecoveryParty {
 		<-ctx.Done()
 		close(s.recoveryCanceled)
+	} else {
+		canceledCtx, cancel := context.WithCancel(ctx)
+		cancel()
+		ctx = canceledCtx
 	}
-	// Keep the public request valid while forcing a deterministic runner error
-	// after core has taken ownership of the handle.
-	request.Session.Algorithm = "unsupported-test-algorithm"
-	request.Session.Curve = ""
+	// EdDSA keeps the public request valid across core versions and lets the
+	// canceled runtime fail after core has taken ownership of the generic handle.
+	request.Session.Algorithm = coretss.AlgorithmEdDSA
+	request.Session.Curve = coretss.CurveEd25519
 	request.DerivationMaterial = nil
 	return s.controller.RunDKGSessionWithPreParams(ctx, request, handle)
 }
