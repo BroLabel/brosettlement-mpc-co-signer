@@ -28,10 +28,35 @@ func TestDKGCoordinatorControllerCoreConsumesBothHandlesOnSiblingCancellation(t 
 	service := newCancelingCompositionService(controller)
 	coordinator := mustNewCompositionCoordinator(t, service)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, err := coordinator.Run(ctx, intent, &blockingTransport{}); err == nil {
+	runResult := make(chan error, 1)
+	go func() {
+		_, runErr := coordinator.Run(ctx, intent, &blockingTransport{})
+		runResult <- runErr
+	}()
+
+	watchdog := time.NewTimer(2 * time.Second)
+	defer watchdog.Stop()
+	var runErr error
+	select {
+	case runErr = <-runResult:
+	case <-watchdog.C:
+		cancel()
+		select {
+		case <-runResult:
+		case <-time.After(time.Second):
+			t.Fatal("coordinator remained blocked after watchdog cancellation")
+		}
+		t.Fatal("coordinator required watchdog cancellation instead of canceling the sibling runtime")
+	}
+	if runErr == nil {
 		t.Fatal("Run() error = nil, want post-start failure")
+	}
+	select {
+	case <-service.RecoveryCanceled():
+	default:
+		t.Fatal("coordinator returned before recovery observed sibling context cancellation")
 	}
 	if got := coreService.Snapshot().PreParamsConsumedCount; got != 2 {
 		t.Fatalf("core consumed handles = %d, want both coordinator handles", got)
@@ -374,12 +399,16 @@ func assertPairAvailable(t *testing.T, activePair *sharestore.ActivePair, intent
 type cancelingCompositionService struct {
 	controller *preparams.Controller
 
-	mu      sync.Mutex
-	handles []coretss.DKGPreParamsHandle
+	mu               sync.Mutex
+	handles          []coretss.DKGPreParamsHandle
+	recoveryCanceled chan struct{}
 }
 
 func newCancelingCompositionService(controller *preparams.Controller) *cancelingCompositionService {
-	return &cancelingCompositionService{controller: controller}
+	return &cancelingCompositionService{
+		controller:       controller,
+		recoveryCanceled: make(chan struct{}),
+	}
 }
 
 func (s *cancelingCompositionService) BeginJob(ctx context.Context) (func(), error) {
@@ -404,6 +433,7 @@ func (s *cancelingCompositionService) RunDKGSessionWithPreParams(
 ) (coretss.DKGOutput, error) {
 	if request.LocalPartyID == coordinatorRecoveryParty {
 		<-ctx.Done()
+		close(s.recoveryCanceled)
 	}
 	// Keep the public request valid while forcing a deterministic runner error
 	// after core has taken ownership of the handle.
@@ -417,6 +447,10 @@ func (s *cancelingCompositionService) Handles() []coretss.DKGPreParamsHandle {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]coretss.DKGPreParamsHandle(nil), s.handles...)
+}
+
+func (s *cancelingCompositionService) RecoveryCanceled() <-chan struct{} {
+	return s.recoveryCanceled
 }
 
 func mustNewCompositionCoordinator(t *testing.T, service dkgService) *DKGCoordinator {
