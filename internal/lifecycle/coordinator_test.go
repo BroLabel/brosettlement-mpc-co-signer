@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
@@ -13,9 +14,16 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
 )
 
-func TestCoordinatorStartsLockFirstAndPublishesReadinessLast(t *testing.T) {
+func TestCoordinatorStartsLockFirstAndPublishesReadinessAfterIntake(t *testing.T) {
 	var events eventLog
 	deps := successfulDependencies(&events, reconcile.Result{Disposition: reconcile.DispositionEligible})
+	deps.StartIntake = func(context.Context) error {
+		if got := deps.Readiness.Snapshot(); got != (health.Snapshot{}) {
+			t.Fatalf("readiness before intake = %#v, want closed", got)
+		}
+		events.Add("intake-start")
+		return nil
+	}
 	coordinator := mustCoordinator(t, deps)
 
 	if err := coordinator.Start(context.Background()); err != nil {
@@ -24,8 +32,8 @@ func TestCoordinatorStartsLockFirstAndPublishesReadinessLast(t *testing.T) {
 	t.Cleanup(func() { _ = coordinator.Shutdown(context.Background()) })
 
 	events.Require(t, []string{
-		"validate", "lock", "open", "publisher-start", "reconcile",
-		"dkg-open:true", "scheduler-start", "intake-start", "readiness",
+		"lock", "open", "publisher-start", "reconcile",
+		"dkg-open:true", "scheduler-start", "intake-start",
 	})
 	got := deps.Readiness.Snapshot()
 	if !got.ProcessReady || !got.SigningReady || !got.ProvisioningReady {
@@ -270,7 +278,7 @@ func TestCoordinatorImmediatePublicationConfirmationStillHonorsLiveCapabilities(
 	}
 }
 
-func TestCoordinatorCapabilityDeferredGateIsLatchedUntilRestart(t *testing.T) {
+func TestCoordinatorCapabilityDeferredGateIsLatchedAtStartup(t *testing.T) {
 	var events eventLog
 	deferred := &reconcile.CapabilityDeferredError{Cause: errors.New("recovery unavailable")}
 	deps := successfulDependencies(&events, reconcile.Result{
@@ -283,9 +291,8 @@ func TestCoordinatorCapabilityDeferredGateIsLatchedUntilRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = coordinator.Shutdown(context.Background()) })
 
-	coordinator.CapabilitiesRestored()
-	if coordinator.DKGAdmissionOpen() {
-		t.Fatal("capability restoration dynamically reopened DKG admission")
+	if events.Contains("dkg-open:true") {
+		t.Fatalf("capability-deferred startup opened DKG admission: %v", events.Copy())
 	}
 	got := deps.Readiness.Snapshot()
 	if !got.ProcessReady || !got.SigningReady || got.ProvisioningReady ||
@@ -309,7 +316,7 @@ func TestCoordinatorSeparatesEligibleReconciliationFromDynamicProvisioningReadin
 		got.ProvisioningReason != health.ReasonProvisioningUnavailable {
 		t.Fatalf("dynamic provisioning readiness = %#v", got)
 	}
-	if !coordinator.DKGAdmissionOpen() {
+	if !events.Contains("dkg-open:true") {
 		t.Fatal("eligible reconciliation gate closed instead of deferring to scheduler capability hint")
 	}
 }
@@ -341,12 +348,19 @@ func TestCoordinatorShutdownCancelsAndDrainsBeforeReleasingLock(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	events.Reset()
+	deps.StopIntake = func(context.Context) error {
+		if got := deps.Readiness.Snapshot(); got != (health.Snapshot{}) {
+			t.Fatalf("readiness during intake stop = %#v, want closed", got)
+		}
+		events.Add("intake-stop")
+		return nil
+	}
 
 	if err := coordinator.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown() error = %v", err)
 	}
 	events.Require(t, []string{
-		"dkg-open:false", "readiness-closed", "intake-stop", "cancel", "drain",
+		"dkg-open:false", "intake-stop", "drain",
 		"publisher-wait", "capabilities-close", "lock-close",
 	})
 }
@@ -398,7 +412,9 @@ func TestCoordinatorConcurrentConfirmationCannotReopenReadinessDuringShutdown(t 
 	confirmationEntered := make(chan struct{})
 	releaseConfirmation := make(chan struct{})
 	blockConfirmation := false
+	var admission atomic.Bool
 	deps.SetDKGAdmissionOpen = func(open bool) {
+		admission.Store(open)
 		if open && blockConfirmation {
 			close(confirmationEntered)
 			<-releaseConfirmation
@@ -429,7 +445,7 @@ func TestCoordinatorConcurrentConfirmationCannotReopenReadinessDuringShutdown(t 
 	if got := deps.Readiness.Snapshot(); got != (health.Snapshot{}) {
 		t.Fatalf("post-shutdown readiness reopened: %#v", got)
 	}
-	if coordinator.DKGAdmissionOpen() {
+	if admission.Load() {
 		t.Fatal("post-shutdown DKG admission reopened")
 	}
 }
@@ -469,7 +485,6 @@ func successfulDependencies(events *eventLog, result reconcile.Result) Dependenc
 	readiness := health.NewReadiness()
 	deps := Dependencies{Readiness: readiness}
 	deps.ProvisioningReady = func() bool { return true }
-	deps.Validate = func(context.Context) error { events.Add("validate"); return nil }
 	deps.AcquireLock = func() (io.Closer, error) {
 		events.Add("lock")
 		return closeFunc(func() error { events.Add("lock-close"); return nil }), nil
@@ -494,14 +509,6 @@ func successfulDependencies(events *eventLog, result reconcile.Result) Dependenc
 	deps.StopIntake = func(context.Context) error { events.Add("intake-stop"); return nil }
 	deps.Drain = func(context.Context) error { events.Add("drain"); return nil }
 	deps.WaitPublisher = func() { events.Add("publisher-wait") }
-	deps.OnCancel = func() { events.Add("cancel") }
-	deps.OnReadiness = func(ready bool) {
-		if ready {
-			events.Add("readiness")
-		} else {
-			events.Add("readiness-closed")
-		}
-	}
 	return deps
 }
 

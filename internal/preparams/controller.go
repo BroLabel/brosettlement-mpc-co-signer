@@ -17,7 +17,6 @@ const (
 
 var (
 	ErrInvalidHandle    = errors.New("invalid co-signer preparams handle")
-	ErrForeignHandle    = errors.New("preparams handle belongs to another controller")
 	ErrJobAlreadyActive = errors.New("preparams-controlled dkg job is already active")
 )
 
@@ -44,21 +43,6 @@ type Controller struct {
 	startedAt  time.Time
 	wakeups    chan struct{}
 }
-
-type serviceHandle struct {
-	owner *Controller
-	core  coretss.DKGPreParamsHandle
-	mu    sync.Mutex
-	state handleState
-}
-
-type handleState uint8
-
-const (
-	handleAcquired handleState = iota
-	handleConsumed
-	handleDiscarded
-)
 
 func NewController(service coreService) (*Controller, error) {
 	if service == nil {
@@ -111,6 +95,13 @@ func (c *Controller) AdmissionHint() bool {
 func (c *Controller) observe() bool {
 	snapshot := c.service.Snapshot()
 	metrics.ObservePreparams(float64(snapshot.PreParamsPoolSize), float64(snapshot.PreParamsGenerationInFlight))
+	metrics.ObservePreparamsTransitions(
+		float64(snapshot.PreParamsAcquiredCount),
+		float64(snapshot.PreParamsConsumedCount),
+		float64(snapshot.PreParamsDiscardedBeforeStartCount),
+		float64(snapshot.PreParamsAcquireFailedCount),
+		float64(snapshot.PreParamsConsumeConflictCount),
+	)
 	ready := snapshot.PreParamsPoolSize >= 2 && snapshot.PreParamsGenerationInFlight == 0
 
 	c.mu.Lock()
@@ -165,7 +156,6 @@ func (c *Controller) BeginJob(ctx context.Context) (func(), error) {
 		c.jobActive = false
 		c.mu.Unlock()
 		c.observe()
-		metrics.ObservePreparamsTransition("discarded_before_start")
 		return nil, err
 	}
 	var once sync.Once
@@ -204,15 +194,15 @@ func (c *Controller) AcquireDKGPreParams(ctx context.Context) (Handle, error) {
 	}
 	handle, err := c.service.AcquireDKGPreParams(ctx)
 	if err != nil {
-		metrics.ObservePreparamsTransition("acquire_failed")
+		c.observe()
 		return nil, err
 	}
 	if handle == nil {
-		metrics.ObservePreparamsTransition("acquire_failed")
+		c.observe()
 		return nil, ErrInvalidHandle
 	}
-	metrics.ObservePreparamsTransition("acquired")
-	return &serviceHandle{owner: c, core: handle, state: handleAcquired}, nil
+	c.observe()
+	return handle, nil
 }
 
 func (c *Controller) RunDKGSessionWithPreParams(
@@ -220,55 +210,14 @@ func (c *Controller) RunDKGSessionWithPreParams(
 	request coretss.DKGSessionRequest,
 	handle Handle,
 ) (coretss.DKGOutput, error) {
-	owned, ok := handle.(*serviceHandle)
-	if !ok || owned == nil || owned.core == nil {
+	coreHandle, ok := handle.(coretss.DKGPreParamsHandle)
+	if !ok || coreHandle == nil {
 		return coretss.DKGOutput{}, ErrInvalidHandle
-	}
-	if owned.owner != c {
-		return coretss.DKGOutput{}, ErrForeignHandle
 	}
 	if err := request.Validate(); err != nil {
 		return coretss.DKGOutput{}, err
 	}
-	owned.mu.Lock()
-	if owned.state != handleAcquired {
-		state := owned.state
-		owned.mu.Unlock()
-		metrics.ObservePreparamsTransition("consume_conflict")
-		if state == handleConsumed {
-			return coretss.DKGOutput{}, coretss.ErrPreParamsConsumed
-		}
-		return coretss.DKGOutput{}, coretss.ErrPreParamsDiscarded
-	}
-	// The core atomically consumes before constructing a party. Once this
-	// invocation is accepted, later protocol/runtime failure cannot unconsume it.
-	owned.state = handleConsumed
-	owned.mu.Unlock()
-	metrics.ObservePreparamsTransition("consumed")
-	output, err := c.service.RunDKGSessionWithPreParams(ctx, request, owned.core)
+	output, err := c.service.RunDKGSessionWithPreParams(ctx, request, coreHandle)
+	c.observe()
 	return output, err
 }
-
-func (h *serviceHandle) Discard() error {
-	if h == nil || h.core == nil {
-		return ErrInvalidHandle
-	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.state != handleAcquired {
-		if h.state == handleConsumed {
-			metrics.ObservePreparamsTransition("consume_conflict")
-			return coretss.ErrPreParamsConsumed
-		}
-		return nil
-	}
-	err := h.core.Discard()
-	if err != nil {
-		return err
-	}
-	h.state = handleDiscarded
-	metrics.ObservePreparamsTransition("discarded_before_start")
-	return err
-}
-
-var _ Handle = (*serviceHandle)(nil)

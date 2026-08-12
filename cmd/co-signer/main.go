@@ -54,7 +54,6 @@ func main() {
 	var resources *applicationResources
 	var healthListener net.Listener
 	coordinator, err := lifecycle.NewCoordinator(lifecycle.Dependencies{
-		Validate: func(context.Context) error { return nil },
 		AcquireLock: func() (io.Closer, error) {
 			return lifecycle.AcquireLifetimeLock(cfg.LockPath)
 		},

@@ -182,7 +182,7 @@ func (e *capturingDKGExecutor) Run(_ context.Context, intent monolith.Intent, _ 
 	return e.result, e.err
 }
 
-func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
+func TestRunSessionRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 	intent := authoritativeDKGIntent()
 	client := &stubClient{claimResult: claimResultForIntent(intent)}
 	signRunner := &capturingRunner{}
@@ -192,7 +192,7 @@ func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(
+	runSessionWithExecutorsForTest(
 		context.Background(),
 		intent,
 		client,
@@ -217,6 +217,38 @@ func TestRunSessionWithExecutorsRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 	}
 }
 
+func runSessionWithExecutorsForTest(
+	ctx context.Context,
+	intent monolith.Intent,
+	client sessionClient,
+	signRunner signSessionRunner,
+	dkgRunner dkgExecutor,
+	terminalPublisher DKGTerminalPublisher,
+	localPartyID string,
+	framePollInterval time.Duration,
+	sem chan struct{},
+	repollCh chan struct{},
+	log *slog.Logger,
+) {
+	lease := &jobPermitLease{wakeups: repollCh}
+	if sem != nil {
+		lease.general = &permitToken{owner: &permitPool{slots: sem}}
+	}
+	runSessionWithPermits(
+		ctx,
+		intent,
+		client,
+		signRunner,
+		dkgRunner,
+		terminalPublisher,
+		localPartyID,
+		framePollInterval,
+		lease,
+		log,
+		nil,
+	)
+}
+
 func TestRunSessionPassesClaimedMailboxContextToDKGTransport(t *testing.T) {
 	intent := authoritativeDKGIntent()
 	intent.SessionID = "123e4567-e89b-42d3-a456-426614174123"
@@ -226,7 +258,7 @@ func TestRunSessionPassesClaimedMailboxContextToDKGTransport(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), intent, client, &stubRunner{}, executor, acceptingTerminalPublisher(nil), "co-signer", time.Millisecond, sem, nil, slog.Default())
+	runSessionWithExecutorsForTest(context.Background(), intent, client, &stubRunner{}, executor, acceptingTerminalPublisher(nil), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	client.mu.Lock()
 	defer client.mu.Unlock()
@@ -244,7 +276,7 @@ func TestRunSessionRediscoveredSignClaimsReplayBeforeRuntime(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), discovery, client, runner, &capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil, slog.Default())
+	runSessionWithExecutorsForTest(context.Background(), discovery, client, runner, &capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil, slog.Default())
 
 	if runner.calls != 1 {
 		t.Fatalf("SIGN runtime calls = %d, want 1 after organization-scoped claim replay", runner.calls)
@@ -273,7 +305,7 @@ func TestRunSessionRejectsRediscoveredSignClaimIdentityOrDeadlineMismatch(t *tes
 			runner := &countingSignRunner{}
 			sem := make(chan struct{}, 1)
 			sem <- struct{}{}
-			RunSessionWithExecutors(context.Background(), discovery, &stubClient{claimResult: claim}, runner, &capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
+			runSessionWithExecutorsForTest(context.Background(), discovery, &stubClient{claimResult: claim}, runner, &capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
 			if runner.calls != 0 {
 				t.Fatalf("SIGN runtime calls = %d, want 0", runner.calls)
 			}
@@ -619,7 +651,7 @@ func TestRunSessionRejectsInvalidIntent(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(
+	runSessionWithExecutorsForTest(
 		context.Background(),
 		intent,
 		client,
@@ -672,7 +704,7 @@ func TestPrimarySigningArtifactFailuresEmitRedactedCriticalAlertAndDoNotDegradeR
 			initial := health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true}
 			readiness.Set(initial)
 
-			RunSessionWithExecutors(
+			runSessionWithExecutorsForTest(
 				context.Background(), intent, client, &errorSignRunner{err: tt.err},
 				&capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil,
 				slog.New(handler),
@@ -725,7 +757,7 @@ func TestPrimarySigningArtifactFailuresEmitRedactedCriticalAlertAndDoNotDegradeR
 			nextClient := &stubClient{claimResult: claimResultForIntent(next)}
 			nextSem := make(chan struct{}, 1)
 			nextSem <- struct{}{}
-			RunSessionWithExecutors(
+			runSessionWithExecutorsForTest(
 				context.Background(), next, nextClient, &stubRunner{}, &capturingDKGExecutor{}, nil,
 				coordinatorPrimaryParty, time.Millisecond, nextSem, nil, slog.New(handler),
 			)
@@ -952,7 +984,7 @@ func TestRunSessionPublishesCanonicalCompletedDKG(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), intent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
+	runSessionWithExecutorsForTest(context.Background(), intent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	if published.Status() != mpc2of3.TerminalStatusCompleted {
 		t.Fatalf("terminal status = %q", published.Status())
@@ -983,7 +1015,7 @@ func TestRunSessionUsesClaimedPayloadForDkgExecution(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), pendingIntent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
+	runSessionWithExecutorsForTest(context.Background(), pendingIntent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	if published.Status() != mpc2of3.TerminalStatusCompleted {
 		t.Fatalf("terminal status = %q", published.Status())
@@ -1010,7 +1042,7 @@ func TestRunSessionRejectsIncompleteClaimResponse(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	RunSessionWithExecutors(ctx, pendingIntent, client, runner, dkgExecutor, acceptingTerminalPublisher(nil), "co-signer", time.Millisecond, sem, nil, slog.Default())
+	runSessionWithExecutorsForTest(ctx, pendingIntent, client, runner, dkgExecutor, acceptingTerminalPublisher(nil), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	if client.lastResult.Status != "" {
 		t.Fatalf("malformed DKG claim used legacy result endpoint: %+v", client.lastResult)
@@ -1029,7 +1061,7 @@ func TestRunSessionPublishesMinimalFailedDKG(t *testing.T) {
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
-	RunSessionWithExecutors(context.Background(), intent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
+	runSessionWithExecutorsForTest(context.Background(), intent, client, runner, dkgExecutor, acceptingTerminalPublisher(&published), "co-signer", time.Millisecond, sem, nil, slog.Default())
 
 	if published.Status() != mpc2of3.TerminalStatusFailed {
 		t.Fatalf("terminal status = %q", published.Status())

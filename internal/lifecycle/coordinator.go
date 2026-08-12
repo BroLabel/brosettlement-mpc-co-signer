@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
@@ -15,7 +14,6 @@ import (
 )
 
 type Dependencies struct {
-	Validate            func(context.Context) error
 	AcquireLock         func() (io.Closer, error)
 	OpenCapabilities    func(context.Context) (io.Closer, error)
 	StartPublisher      func(context.Context) error
@@ -33,8 +31,6 @@ type Dependencies struct {
 	Drain             func(context.Context) error
 	WaitPublisher     func()
 	Readiness         *health.Readiness
-	OnReadiness       func(bool)
-	OnCancel          func()
 }
 
 type Coordinator struct {
@@ -48,13 +44,10 @@ type Coordinator struct {
 	stopping     bool
 	latched      bool
 	confirmed    bool
-	admission    atomic.Bool
 }
 
 func NewCoordinator(deps Dependencies) (*Coordinator, error) {
 	switch {
-	case deps.Validate == nil:
-		return nil, errors.New("lifecycle config validator is required")
 	case deps.AcquireLock == nil:
 		return nil, errors.New("lifecycle lock acquisition is required")
 	case deps.OpenCapabilities == nil:
@@ -92,9 +85,6 @@ func (c *Coordinator) Start(parent context.Context) (err error) {
 			err = errors.Join(err, c.abortStartup(context.Background()))
 		}
 	}()
-	if err = c.deps.Validate(ctx); err != nil {
-		return fmt.Errorf("validate lifecycle configuration: %w", err)
-	}
 	c.lock, err = c.deps.AcquireLock()
 	if err != nil {
 		return fmt.Errorf("acquire lifetime lock: %w", err)
@@ -179,9 +169,6 @@ func (c *Coordinator) Start(parent context.Context) (err error) {
 		}
 	}
 	c.deps.Readiness.Set(snapshot)
-	if c.deps.OnReadiness != nil {
-		c.deps.OnReadiness(true)
-	}
 
 	c.mu.Lock()
 	c.started = true
@@ -220,23 +207,7 @@ func (c *Coordinator) publicationDone(result terminal.PublishResult) {
 	c.mu.Unlock()
 }
 
-func (c *Coordinator) CapabilitiesRestored() {
-	c.mu.Lock()
-	latched := c.latched
-	stopping := c.stopping
-	c.mu.Unlock()
-	if latched || stopping {
-		return
-	}
-	c.deps.WakeScheduler()
-}
-
-func (c *Coordinator) DKGAdmissionOpen() bool {
-	return c != nil && c.admission.Load()
-}
-
 func (c *Coordinator) setAdmission(open bool) {
-	c.admission.Store(open)
 	c.deps.SetDKGAdmissionOpen(open)
 }
 
@@ -269,9 +240,6 @@ func (c *Coordinator) shutdown(ctx context.Context, stopIntake bool) error {
 	}
 	c.deps.Readiness.Set(health.Snapshot{})
 	metrics.SetTerminalUnconfirmed(false)
-	if c.deps.OnReadiness != nil {
-		c.deps.OnReadiness(false)
-	}
 
 	var errs []error
 	if stopIntake {
@@ -279,9 +247,6 @@ func (c *Coordinator) shutdown(ctx context.Context, stopIntake bool) error {
 	}
 	if c.cancel != nil {
 		c.cancel()
-		if c.deps.OnCancel != nil {
-			c.deps.OnCancel()
-		}
 	}
 	errs = appendError(errs, c.deps.Drain(ctx))
 	c.deps.WaitPublisher()

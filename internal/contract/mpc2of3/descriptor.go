@@ -28,10 +28,6 @@ type KeyDescriptorV1 struct {
 	Threshold         int       `json:"threshold"`
 }
 
-func (d KeyDescriptorV1) NormalSignParties() [2]string {
-	return [2]string{"mpc-signer", "co-signer-primary"}
-}
-
 func ParseCanonicalDescriptor(raw []byte) (KeyDescriptorV1, DescriptorFingerprint, error) {
 	var descriptor KeyDescriptorV1
 	if len(raw) > maxCanonicalDescriptorBytesV1 || !printableASCII(raw) {

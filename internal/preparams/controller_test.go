@@ -40,6 +40,37 @@ func TestProductionPreParamsProfileIsStaticAndUsesExplicitParallelism(t *testing
 	}
 }
 
+func TestPreParamsControllerExportsCoreTransitionCounters(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	service := &recordingCoreService{snapshot: coretss.Snapshot{
+		PreParamsAcquiredCount:             5,
+		PreParamsConsumedCount:             4,
+		PreParamsDiscardedBeforeStartCount: 3,
+		PreParamsAcquireFailedCount:        2,
+		PreParamsConsumeConflictCount:      1,
+	}}
+	controller, err := NewController(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	controller.AdmissionHint()
+
+	got := metrics.Default.Snapshot()
+	want := map[string]float64{
+		"preparams_acquired_total":               5,
+		"preparams_consumed_total":               4,
+		"preparams_discarded_before_start_total": 3,
+		"preparams_acquire_failed_total":         2,
+		"preparams_consume_conflict_total":       1,
+	}
+	for name, value := range want {
+		if got[name][""] != value {
+			t.Fatalf("%s = %v, want %v", name, got[name][""], value)
+		}
+	}
+}
+
 func TestPreparamsMetricsCountConsumedBeforeRuntimeFailureAndConflictsOnce(t *testing.T) {
 	metrics.Default = metrics.NewRegistry()
 	owner := coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(staticPreParamsSource{}))
@@ -71,11 +102,7 @@ func TestPreparamsMetricsCountConsumedBeforeRuntimeFailureAndConflictsOnce(t *te
 func TestPreparamsMetricsCountDiscardOnlyOnceUnderConcurrentRepeats(t *testing.T) {
 	metrics.Default = metrics.NewRegistry()
 	owner := coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(staticPreParamsSource{}))
-	coreHandle, err := owner.AcquireDKGPreParams(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	controller, err := NewController(&recordingCoreService{acquired: coreHandle})
+	controller, err := NewController(owner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +116,7 @@ func TestPreparamsMetricsCountDiscardOnlyOnceUnderConcurrentRepeats(t *testing.T
 		go func() { defer wg.Done(); _ = handle.Discard() }()
 	}
 	wg.Wait()
+	controller.AdmissionHint()
 	got := metrics.Default.Snapshot()
 	if got["preparams_discarded_before_start_total"][""] != 1 || got["preparams_consume_conflict_total"][""] != 0 {
 		t.Fatalf("transitions=%#v", got)
@@ -271,12 +299,13 @@ func TestPreParamsControllerKeepsCoreHandleOpaqueUntilRunOrDiscard(t *testing.T)
 		t.Fatal("controller did not return the same service-bound core handle at consume")
 	}
 
-	otherController, err := NewController(service)
+	otherOwner := coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(staticPreParamsSource{}))
+	otherController, err := NewController(otherOwner)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := otherController.RunDKGSessionWithPreParams(context.Background(), request, handle); !errors.Is(err, ErrForeignHandle) {
-		t.Fatalf("foreign controller run error = %v, want ErrForeignHandle", err)
+	if _, err := otherController.RunDKGSessionWithPreParams(context.Background(), request, handle); !errors.Is(err, coretss.ErrForeignPreParamsHandle) {
+		t.Fatalf("foreign service run error = %v, want ErrForeignPreParamsHandle", err)
 	}
 }
 
@@ -307,11 +336,15 @@ type recordingCoreService struct {
 	resumes     int
 	pauseSignal chan struct{}
 	pauseOnce   sync.Once
+	consumed    map[coretss.DKGPreParamsHandle]struct{}
 }
 
 func (s *recordingCoreService) AcquireDKGPreParams(context.Context) (coretss.DKGPreParamsHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.acquired != nil {
+		s.snapshot.PreParamsAcquiredCount++
+	}
 	return s.acquired, nil
 }
 
@@ -323,6 +356,15 @@ func (s *recordingCoreService) RunDKGSessionWithPreParams(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.run = handle
+	if s.consumed == nil {
+		s.consumed = make(map[coretss.DKGPreParamsHandle]struct{})
+	}
+	if _, exists := s.consumed[handle]; exists {
+		s.snapshot.PreParamsConsumeConflictCount++
+		return coretss.DKGOutput{}, coretss.ErrPreParamsConsumed
+	}
+	s.consumed[handle] = struct{}{}
+	s.snapshot.PreParamsConsumedCount++
 	if s.runErr != nil {
 		return coretss.DKGOutput{}, s.runErr
 	}

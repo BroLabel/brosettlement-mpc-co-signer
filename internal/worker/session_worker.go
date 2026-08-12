@@ -71,34 +71,6 @@ func classifyIntentKind(raw string) (intentKind, bool) {
 	}
 }
 
-func RunSessionWithExecutors(
-	ctx context.Context,
-	intent monolith.Intent,
-	client sessionClient,
-	signRunner signSessionRunner,
-	dkgRunner dkgExecutor,
-	terminalPublisher DKGTerminalPublisher,
-	localPartyID string,
-	framePollInterval time.Duration,
-	sem chan struct{},
-	repollCh chan struct{},
-	log *slog.Logger,
-) {
-	runSessionWithPermits(
-		ctx,
-		intent,
-		client,
-		signRunner,
-		dkgRunner,
-		terminalPublisher,
-		localPartyID,
-		framePollInterval,
-		newLegacyGeneralLease(sem, repollCh),
-		log,
-		nil,
-	)
-}
-
 func runSessionWithPermits(
 	ctx context.Context,
 	intent monolith.Intent,

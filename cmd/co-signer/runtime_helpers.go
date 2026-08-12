@@ -151,13 +151,6 @@ func normalizePEMEnv(raw string) string {
 	return raw
 }
 
-func serveHealth(log *slog.Logger, srv *http.Server) {
-	log.Info("health server listening", "addr", srv.Addr)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Error("health server stopped", "err", err)
-	}
-}
-
 func serveHealthListener(log *slog.Logger, srv *http.Server, listener net.Listener) {
 	log.Info("health server listening", "addr", listener.Addr().String())
 	if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {

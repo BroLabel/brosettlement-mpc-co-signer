@@ -43,26 +43,6 @@ func (p *permitToken) release() {
 	})
 }
 
-type generalPermitToken struct {
-	token *permitToken
-}
-
-func (p *generalPermitToken) release() {
-	if p != nil {
-		p.token.release()
-	}
-}
-
-type dkgGuardPermitToken struct {
-	token *permitToken
-}
-
-func (p *dkgGuardPermitToken) release() {
-	if p != nil {
-		p.token.release()
-	}
-}
-
 type schedulerPermits struct {
 	general *permitPool
 	dkg     *permitPool
@@ -86,7 +66,7 @@ func (p *schedulerPermits) tryAcquireSIGN() *jobPermitLease {
 		return nil
 	}
 	return &jobPermitLease{
-		general: &generalPermitToken{token: general},
+		general: general,
 		wakeups: p.wakeups,
 	}
 }
@@ -106,8 +86,8 @@ func (p *schedulerPermits) tryAcquireDKG() *jobPermitLease {
 	}
 	metrics.SetDKGGuard(true)
 	return &jobPermitLease{
-		general: &generalPermitToken{token: general},
-		dkg:     &dkgGuardPermitToken{token: guard},
+		general: general,
+		dkg:     guard,
 		wakeups: p.wakeups,
 	}
 }
@@ -116,8 +96,8 @@ func (p *schedulerPermits) tryAcquireDKG() *jobPermitLease {
 // scheduler job. A normal DKG owns both typed tokens until the terminal owner
 // releases the lease; SIGN owns only the general token.
 type jobPermitLease struct {
-	general *generalPermitToken
-	dkg     *dkgGuardPermitToken
+	general *permitToken
+	dkg     *permitToken
 	wakeups chan<- struct{}
 	once    sync.Once
 }
@@ -139,14 +119,4 @@ func (p *jobPermitLease) Release() {
 			}
 		}
 	})
-}
-
-func newLegacyGeneralLease(sem chan struct{}, wakeups chan<- struct{}) *jobPermitLease {
-	if sem == nil {
-		return &jobPermitLease{wakeups: wakeups}
-	}
-	return &jobPermitLease{
-		general: &generalPermitToken{token: &permitToken{owner: &permitPool{slots: sem}}},
-		wakeups: wakeups,
-	}
 }

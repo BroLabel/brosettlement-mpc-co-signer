@@ -168,10 +168,7 @@ func (c *DKGCoordinator) Run(ctx context.Context, intent monolith.Intent, networ
 		return DKGResult{}, releaseBeforeStart(err)
 	}
 	if err := validatePartyStart(runtimeContext); err != nil {
-		return DKGResult{}, releaseBeforeStart(fmt.Errorf("validate primary runtime binding: %w", err))
-	}
-	if err := validatePartyStart(runtimeContext); err != nil {
-		return DKGResult{}, releaseBeforeStart(fmt.Errorf("validate recovery runtime binding: %w", err))
+		return DKGResult{}, releaseBeforeStart(fmt.Errorf("validate runtime binding: %w", err))
 	}
 	primaryRequest := buildPartyDKGRequest(runtimeContext, c.config.PrimaryPartyID, primaryTransport)
 	if err := primaryRequest.Validate(); err != nil {

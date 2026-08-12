@@ -27,7 +27,7 @@ require (
 	github.com/pkg/errors v0.8.1 // indirect
 	github.com/whyrusleeping/go-logging v0.0.0-20170515211332-0457bb6b88fc // indirect
 	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.41.0
 	google.golang.org/protobuf v1.36.5 // indirect
 )
