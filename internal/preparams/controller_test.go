@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -288,6 +289,9 @@ func TestPreParamsControllerKeepsCoreHandleOpaqueUntilRunOrDiscard(t *testing.T)
 		t.Fatal("controller returned nil opaque handle")
 	}
 	request := validDKGRequest()
+	if err := request.Validate(); err != nil {
+		t.Fatalf("validDKGRequest() error = %v", err)
+	}
 	if _, err := controller.RunDKGSessionWithPreParams(context.Background(), request, handle); err != nil {
 		t.Fatalf("RunDKGSessionWithPreParams() error = %v", err)
 	}
@@ -315,7 +319,23 @@ func (validatingTransport) RecvFrame(context.Context) (protocol.Frame, error) {
 }
 
 func validDKGRequest() coretss.DKGSessionRequest {
-	return coretss.DKGSessionRequest{Session: coretss.DKGSessionDescriptor{SessionID: "dkg-1", OrgID: "org-1", Parties: []string{"a", "b"}, Threshold: 2, Algorithm: "TEST"}, LocalPartyID: "b", Transport: validatingTransport{}}
+	return coretss.DKGSessionRequest{
+		Session: coretss.DKGSessionDescriptor{
+			SessionID: "dkg-1",
+			OrgID:     "org-1",
+			KeyID:     "key-1",
+			Parties:   []string{"a", "b", "c"},
+			Threshold: 2,
+			Algorithm: coretss.AlgorithmECDSA,
+			Curve:     coretss.CurveSecp256k1,
+		},
+		LocalPartyID: "b",
+		DerivationMaterial: &coretss.DKGDerivationMaterial{
+			ChainCode:        strings.Repeat("11", 32),
+			DerivationScheme: coretss.DerivationSchemeBIP32Secp256k1,
+		},
+		Transport: validatingTransport{},
+	}
 }
 
 func (staticPreParamsSource) Acquire(context.Context) (*ecdsakeygen.LocalPreParams, error) {

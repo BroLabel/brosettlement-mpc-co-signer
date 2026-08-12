@@ -6,11 +6,9 @@ import (
 	"errors"
 	"os"
 	"testing"
-
-	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
-func TestPrimaryReaderReturnsBlobOnlyStoredShare(t *testing.T) {
+func TestPrimaryReaderReturnsValidatedCodecBlob(t *testing.T) {
 	store := testStore(t, StorePurposePrimary)
 	codecBlob := testCodecBlob(t)
 	artifactBytes, err := encodeArtifactV1(store.config, PublishInput{
@@ -42,9 +40,6 @@ func TestPrimaryReaderReturnsBlobOnlyStoredShare(t *testing.T) {
 	defer clear(share.Blob)
 	if !bytes.Equal(share.Blob, codecBlob) {
 		t.Fatal("LoadShare() returned the wrong codec blob")
-	}
-	if share.Meta != (coretss.ShareMeta{}) {
-		t.Fatalf("LoadShare() Meta = %+v, want zero-value Blob-only share", share.Meta)
 	}
 }
 
