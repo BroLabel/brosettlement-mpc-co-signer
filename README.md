@@ -34,29 +34,19 @@ configuration object. Configure and back up the original key and its key
 reference for the lifetime of every v1 artifact; there is no passphrase hashing
 or automatic key rotation.
 
-## Operating the recovery artifacts
+## Recovery artifacts
 
 Run exactly one active co-signer installation per organization. A second
 installation using the same organization credentials may claim or replay the
-same work and cause a self-inflicted availability failure; v1 does not arbitrate
-between installations. During upgrades, stop the old process and
-prove it has exited before starting the new process: overlapping writers are
-unsupported. Both B and C directories and the stable lock path must be on one
-writable local state filesystem. The advisory lifetime lock is local-filesystem
-fencing only; it is not a distributed lease and does not coordinate another
-host or shared-NFS writer.
+same work and cause a self-inflicted availability failure. During upgrades,
+ensure the old process has exited before starting the new one.
 
-Artifact v1 has one encryption-key lifetime. Keep the original encryption key
-and `CO_SIGNER_SHARE_ENCRYPTION_KEY_ID` with backups until every v1 B and C
-artifact has left service. Replacing either value fails closed; rotation,
-re-encryption, and old-key lookup are unsupported.
-
-Customers retain custody of their recovery artifact and matching key material.
-After activation, the service deliberately does not monitor C or make A+B
-signing depend on C remaining present. There is no supported recovery CLI or
-SDK in this release; `FUTURE-001` remains a DESIGN-only item. See
+For filesystem topology, key custody, backup, restore, and failure handling,
+see
 [`docs/artifact-format-v1.md`](docs/artifact-format-v1.md) and
-[`docs/runbooks/recovery-artifact.md`](docs/runbooks/recovery-artifact.md).
+[`docs/runbooks/recovery-artifact.md`](docs/runbooks/recovery-artifact.md), as
+well as the [Security Policy](SECURITY.md). V1 does not include a recovery CLI
+or SDK.
 
 ## Client API request signing
 
