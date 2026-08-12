@@ -143,7 +143,6 @@ vite.config.ts.timestamp-*
 
 # Local assistant config
 .claude/
-.superpowers/
 data/
 worktrees/
 .worktrees/

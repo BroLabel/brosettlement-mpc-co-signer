@@ -23,12 +23,6 @@ func TestLoadBuildsBoundPrimaryAndRecoveryStores(t *testing.T) {
 	if got, want := cfg.RecoveryStore.PartyID(), "co-signer-recovery"; got != want {
 		t.Errorf("recovery PartyID() = %q, want %q", got, want)
 	}
-	if got, want := cfg.PrimaryStore.FinalPath("key-1"), "/var/lib/co-signer/primary/key-1.primary.json"; got != want {
-		t.Errorf("primary FinalPath() = %q, want %q", got, want)
-	}
-	if got, want := cfg.RecoveryStore.FinalPath("key-1"), "/var/lib/co-signer/recovery/key-1.recovery.json"; got != want {
-		t.Errorf("recovery FinalPath() = %q, want %q", got, want)
-	}
 	if got, want := cfg.PrimaryStore.KeyRef(), "keyref-1"; got != want {
 		t.Errorf("primary KeyRef() = %q, want %q", got, want)
 	}

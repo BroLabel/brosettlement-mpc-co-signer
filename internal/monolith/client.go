@@ -401,9 +401,6 @@ func (c *Client) PostResult(ctx context.Context, intentID string, result IntentR
 }
 
 func marshalSignResult(result IntentResult) ([]byte, error) {
-	if result.DkgMaterial != nil {
-		return nil, errors.New("DKG result material is not valid for generic SIGN results")
-	}
 	fields := make(map[string]string)
 	switch result.Status {
 	case "COMPLETED":

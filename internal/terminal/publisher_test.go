@@ -69,27 +69,7 @@ func (r *alertRecorder) count() int {
 }
 
 func TestCanonicalJobsMatchBackendOwnedFixturesAndOmitDiagnostics(t *testing.T) {
-	completed, err := NewCompletedJob(CompletedInput{
-		IntentID:              fixtureIntentID,
-		SessionID:             fixtureSessionID,
-		KeyID:                 fixtureKeyID,
-		DescriptorFingerprint: mustDescriptorFingerprint(t, "owXeRUkKctags_JkTP2Xq7uiGEFz6riO1ZhW5jsg9tQ"),
-		AccountPublicKey:      mustHex(t, "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"),
-		ChainCodeHash:         mustChainCodeHash(t, "Zmh6rfhivXdsj8GLjp-OIAiXFIVu4jOzkCpZHQ1fKSU"),
-		Primary: ArtifactInput{
-			PartyID:     "co-signer-primary",
-			Purpose:     "primary",
-			Fingerprint: mustArtifactFingerprint(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-		},
-		Recovery: ArtifactInput{
-			PartyID:     "co-signer-recovery",
-			Purpose:     "recovery",
-			Fingerprint: mustArtifactFingerprint(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-		},
-	})
-	if err != nil {
-		t.Fatalf("NewCompletedJob() error = %v", err)
-	}
+	completed := fixtureCompletedJob(t)
 	failed, err := NewFailedJob(fixtureIntentID, fixtureSessionID, fixtureKeyID)
 	if err != nil {
 		t.Fatalf("NewFailedJob() error = %v", err)
@@ -484,27 +464,6 @@ func TestSingleSlotWithoutHandoffDoesNotPublishAlreadyTerminalIntent(t *testing.
 	}
 }
 
-func TestParseJobRejectsUnknownRequestFields(t *testing.T) {
-	raw := readFixture(t, "terminal-failed-request.json")
-	raw = append(raw[:len(raw)-1], []byte(`,"diagnostic":"must-not-be-on-wire"}`)...)
-	if _, err := ParseJob(raw); err == nil {
-		t.Fatal("ParseJob() accepted unknown diagnostic field")
-	}
-}
-
-func TestParseJobRejectsDuplicateWrapperFields(t *testing.T) {
-	fixture := string(readFixture(t, "terminal-failed-request.json"))
-	for _, field := range []string{
-		`"terminalResultFingerprint":"iFdDYnsaTdf44zp0M55qfYVIu_R2J7JhNVNfFWa0RbI"`,
-		`"terminalResult":{"intentId":"intent-123","keyId":"mpc_key_123e4567-e89b-42d3-a456-426614174002","resultKind":"mpc-dkg-terminal-result","resultVersion":1,"sessionId":"123e4567-e89b-42d3-a456-426614174123","status":"FAILED"}`,
-	} {
-		duplicate := strings.Replace(fixture, field, field+","+field, 1)
-		if _, err := ParseJob([]byte(duplicate)); err == nil {
-			t.Fatalf("ParseJob() accepted duplicate wrapper field %s", field)
-		}
-	}
-}
-
 func TestDecodeStrictRejectsDuplicateObjectKeys(t *testing.T) {
 	var target struct {
 		Outer map[string]int `json:"outer"`
@@ -549,8 +508,24 @@ func fixtureFailedJob(t *testing.T) Job {
 
 func fixtureCompletedJob(t *testing.T) Job {
 	t.Helper()
-	body := readFixture(t, "terminal-completed-request.json")
-	job, err := ParseJob(body)
+	job, err := NewCompletedJob(CompletedInput{
+		IntentID:              fixtureIntentID,
+		SessionID:             fixtureSessionID,
+		KeyID:                 fixtureKeyID,
+		DescriptorFingerprint: mustDescriptorFingerprint(t, "owXeRUkKctags_JkTP2Xq7uiGEFz6riO1ZhW5jsg9tQ"),
+		AccountPublicKey:      mustHex(t, "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"),
+		ChainCodeHash:         mustChainCodeHash(t, "Zmh6rfhivXdsj8GLjp-OIAiXFIVu4jOzkCpZHQ1fKSU"),
+		Primary: ArtifactInput{
+			PartyID:     "co-signer-primary",
+			Purpose:     "primary",
+			Fingerprint: mustArtifactFingerprint(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		},
+		Recovery: ArtifactInput{
+			PartyID:     "co-signer-recovery",
+			Purpose:     "recovery",
+			Fingerprint: mustArtifactFingerprint(t, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -170,10 +170,9 @@ func (r ClaimResult) Intent() Intent {
 }
 
 type IntentResult struct {
-	Status       string                `json:"status"`
-	ErrorCode    string                `json:"errorCode,omitempty"`
-	ErrorMessage string                `json:"errorMessage,omitempty"`
-	DkgMaterial  *DkgParticipantResult `json:"material,omitempty"`
+	Status       string `json:"status"`
+	ErrorCode    string `json:"errorCode,omitempty"`
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 // TerminalHTTPResponse is the raw result of exactly one DKG terminal HTTP
@@ -182,16 +181,6 @@ type TerminalHTTPResponse struct {
 	StatusCode        int
 	Body              []byte
 	ProtocolViolation string
-}
-
-type DkgParticipantResult struct {
-	PartyID          string `json:"partyId"`
-	KeyID            string `json:"keyId"`
-	AccountPublicKey string `json:"accountPublicKey"`
-	ChainCodeHash    string `json:"chainCodeHash"`
-	ChainCodePresent bool   `json:"chainCodePresent"`
-	PublicKeyFormat  string `json:"publicKeyFormat"`
-	DerivationScheme string `json:"derivationScheme"`
 }
 
 type DerivationContext struct {

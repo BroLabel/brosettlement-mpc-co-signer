@@ -645,14 +645,6 @@ func TestPostResultRejectsMalformedAuthoritativeOutcome(t *testing.T) {
 	}
 }
 
-func TestPostResultRejectsDKGResultFamily(t *testing.T) {
-	client, _ := newTestClient(t, "https://example.invalid")
-	err := client.PostResult(context.Background(), "intent-123", IntentResult{Status: "COMPLETED", DkgMaterial: &DkgParticipantResult{PartyID: "co-signer-primary"}})
-	if err == nil {
-		t.Fatal("PostResult() accepted DKG result material")
-	}
-}
-
 func TestPostTerminalResultPerformsOneExactAttemptWithoutGenericRetry(t *testing.T) {
 	body := []byte(`{"terminalResult":{"status":"FAILED"},"terminalResultFingerprint":"fingerprint"}`)
 	var attempts int

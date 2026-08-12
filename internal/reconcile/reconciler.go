@@ -25,13 +25,6 @@ const (
 	DispositionProtocolIntegrity           Disposition = "protocol_integrity"
 )
 
-type CleanupDecision string
-
-const (
-	CleanupPreserve           CleanupDecision = "preserve"
-	CleanupAddressedArtifacts CleanupDecision = "cleanup_addressed_artifacts"
-)
-
 type Result struct {
 	Disposition Disposition
 	Job         *terminal.Job
@@ -439,24 +432,4 @@ func protocolIntegrity(reason string) Result {
 		Disposition: DispositionProtocolIntegrity,
 		Cause:       &ProtocolIntegrityError{Reason: reason},
 	}
-}
-
-// DecideCleanup exposes only the post-confirmation authorization boundary. The
-// reconciler never executes cleanup and never mutates artifact bytes.
-func DecideCleanup(outcome terminal.Outcome) CleanupDecision {
-	if outcome.AuthoritativeFingerprint == (mpc2of3.TerminalResultFingerprint{}) {
-		return CleanupPreserve
-	}
-	switch outcome.AuthoritativeStatus {
-	case mpc2of3.TerminalStatusFailed:
-		switch outcome.Kind {
-		case terminal.OutcomeAccepted, terminal.OutcomeExactReplay, terminal.OutcomeTerminalConflict:
-			return CleanupAddressedArtifacts
-		}
-	case mpc2of3.TerminalStatusTimedOut:
-		if outcome.Kind == terminal.OutcomeTerminalConflict {
-			return CleanupAddressedArtifacts
-		}
-	}
-	return CleanupPreserve
 }

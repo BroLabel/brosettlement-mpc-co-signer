@@ -104,31 +104,6 @@ func newJob(result mpc2of3.TerminalResultV1) (Job, error) {
 	}, nil
 }
 
-func ParseJob(body []byte) (Job, error) {
-	var request terminalRequestV1
-	if err := decodeStrict(body, &request); err != nil {
-		return Job{}, fmt.Errorf("decode terminal request: %w", err)
-	}
-	result, fingerprint, err := mpc2of3.ParseCanonicalTerminalResult(request.TerminalResult)
-	if err != nil {
-		return Job{}, err
-	}
-	submittedFingerprint, err := mpc2of3.ParseTerminalResultFingerprint(request.TerminalResultFingerprint)
-	if err != nil || submittedFingerprint != fingerprint {
-		return Job{}, errors.New("terminal request fingerprint mismatch")
-	}
-	canonical, err := json.Marshal(request)
-	if err != nil || !bytes.Equal(canonical, body) {
-		return Job{}, errors.New("terminal request is not canonical")
-	}
-	return Job{
-		intentID:    result.IntentID,
-		body:        append([]byte(nil), body...),
-		status:      result.Status,
-		fingerprint: fingerprint,
-	}, nil
-}
-
 func (j Job) Body() []byte {
 	return append([]byte(nil), j.body...)
 }

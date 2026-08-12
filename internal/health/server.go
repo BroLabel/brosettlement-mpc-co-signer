@@ -78,20 +78,6 @@ type Handler struct {
 	provisioningProbe func() bool
 }
 
-func NewHandler(version, sharesDir string) http.Handler {
-	readiness := NewReadiness()
-	readiness.Set(Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
-	return NewLifecycleHandler(version, sharesDir, readiness)
-}
-
-func NewLifecycleHandler(version, sharesDir string, readiness *Readiness) http.Handler {
-	return NewLifecycleHandlerWithSigningProbe(version, sharesDir, readiness, nil)
-}
-
-func NewLifecycleHandlerWithSigningProbe(version, sharesDir string, readiness *Readiness, signingProbe func() bool) http.Handler {
-	return NewLifecycleHandlerWithReadinessProbes(version, sharesDir, readiness, signingProbe, nil)
-}
-
 func NewLifecycleHandlerWithReadinessProbes(
 	version,
 	sharesDir string,

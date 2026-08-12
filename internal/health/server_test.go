@@ -13,7 +13,7 @@ import (
 
 func TestHealthOK(t *testing.T) {
 	dir := t.TempDir()
-	h := health.NewHandler("0.1.0", dir)
+	h := newReadyHandler("0.1.0", dir)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
@@ -45,7 +45,7 @@ func TestReadinessPublishesOnlyCapabilityGauges(t *testing.T) {
 
 func TestHealthFailMissingDir(t *testing.T) {
 	metrics.Default = metrics.NewRegistry()
-	h := health.NewHandler("0.1.0", "/nonexistent/path/shares")
+	h := newReadyHandler("0.1.0", "/nonexistent/path/shares")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
@@ -68,7 +68,7 @@ func TestHealthFailMissingDir(t *testing.T) {
 
 func TestHealthOnlyGetAllowed(t *testing.T) {
 	dir := t.TempDir()
-	h := health.NewHandler("0.1.0", dir)
+	h := newReadyHandler("0.1.0", dir)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/health", nil))
 
@@ -81,7 +81,7 @@ func TestMetricsEndpointRendersOnlySafeRegistryValues(t *testing.T) {
 	metrics.Default = metrics.NewRegistry()
 	metrics.Default.Inc("intent_claims_total", metrics.Labels{"type": "DKG", "outcome": "accepted"})
 	rec := httptest.NewRecorder()
-	health.NewHandler("0.1.0", t.TempDir()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	newReadyHandler("0.1.0", t.TempDir()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "intent_claims_total") || strings.Contains(rec.Body.String(), "mpc_key_") {
 		t.Fatalf("metrics response = status:%d body:%q", rec.Code, rec.Body.String())
 	}
@@ -96,7 +96,7 @@ func TestHealthReportsSplitLifecycleReadiness(t *testing.T) {
 		ProvisioningReady:  false,
 		ProvisioningReason: health.ReasonDKGTerminalUnconfirmed,
 	})
-	h := health.NewLifecycleHandler("0.1.0", dir, state)
+	h := health.NewLifecycleHandlerWithReadinessProbes("0.1.0", dir, state, nil, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
@@ -129,7 +129,7 @@ func TestHealthClosesProcessAndSigningForSystemicPrimaryProbeLoss(t *testing.T) 
 	state := health.NewReadiness()
 	state.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
 	available := true
-	h := health.NewLifecycleHandlerWithSigningProbe("0.1.0", t.TempDir(), state, func() bool { return available })
+	h := health.NewLifecycleHandlerWithReadinessProbes("0.1.0", t.TempDir(), state, func() bool { return available }, nil)
 	available = false
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
@@ -348,7 +348,7 @@ func TestHealthProcessReadinessClosesDuringShutdown(t *testing.T) {
 	state.Set(health.Snapshot{})
 
 	rec := httptest.NewRecorder()
-	health.NewLifecycleHandler("0.1.0", dir, state).
+	health.NewLifecycleHandlerWithReadinessProbes("0.1.0", dir, state, nil, nil).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -361,4 +361,10 @@ func TestHealthProcessReadinessClosesDuringShutdown(t *testing.T) {
 	if body["status"] != "fail" {
 		t.Fatalf("status = %q, want fail", body["status"])
 	}
+}
+
+func newReadyHandler(version, sharesDir string) http.Handler {
+	readiness := health.NewReadiness()
+	readiness.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
+	return health.NewLifecycleHandlerWithReadinessProbes(version, sharesDir, readiness, nil, nil)
 }

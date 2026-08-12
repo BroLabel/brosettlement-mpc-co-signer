@@ -63,9 +63,6 @@ func ValidateStorePair(primary, recovery StoreConfig) error {
 	if pathsOverlap(primary.directory, recovery.directory) {
 		return errors.New("primary and recovery store directories must be distinct and non-overlapping")
 	}
-	if primary.FinalPath("key") == recovery.FinalPath("key") {
-		return errors.New("primary and recovery store final paths must be distinct")
-	}
 	return nil
 }
 
@@ -80,10 +77,6 @@ func (c StoreConfig) KeyRef() string {
 		return ""
 	}
 	return c.keyProvider.KeyRef()
-}
-
-func (c StoreConfig) FinalPath(keyID string) string {
-	return filepath.Join(c.directory, keyID+"."+string(c.purpose)+".json")
 }
 
 func validatePurposeParty(purpose StorePurpose, partyID string) error {

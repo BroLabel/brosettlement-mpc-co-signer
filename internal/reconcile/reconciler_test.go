@@ -603,82 +603,6 @@ func TestReconcilerIgnoresPendingSIGNArtifactInventory(t *testing.T) {
 	}
 }
 
-func TestCleanupDecisionRequiresTypedAuthoritativeFailedOrTimedOutEvidence(t *testing.T) {
-	failedFingerprint := mustTerminalFingerprint(t, "xx0XKjmRzBHaiRDVPNRz6qA07rRLru9u0PPoqd9GMSo")
-	completedFingerprint := mustTerminalFingerprint(t, "ofDGx6fYlS706EETY7HPJYE1XqXCk2qwwdpkGpz5-JU")
-	tests := []struct {
-		name    string
-		outcome terminal.Outcome
-		want    CleanupDecision
-	}{
-		{
-			name: "accepted failed",
-			outcome: terminal.Outcome{
-				Kind:                     terminal.OutcomeAccepted,
-				AuthoritativeStatus:      mpc2of3.TerminalStatusFailed,
-				AuthoritativeFingerprint: failedFingerprint,
-			},
-			want: CleanupAddressedArtifacts,
-		},
-		{
-			name: "exact replay failed",
-			outcome: terminal.Outcome{
-				Kind:                     terminal.OutcomeExactReplay,
-				AuthoritativeStatus:      mpc2of3.TerminalStatusFailed,
-				AuthoritativeFingerprint: failedFingerprint,
-			},
-			want: CleanupAddressedArtifacts,
-		},
-		{
-			name: "conflict authoritative failed",
-			outcome: terminal.Outcome{
-				Kind:                     terminal.OutcomeTerminalConflict,
-				AuthoritativeStatus:      mpc2of3.TerminalStatusFailed,
-				AuthoritativeFingerprint: failedFingerprint,
-			},
-			want: CleanupAddressedArtifacts,
-		},
-		{
-			name: "conflict authoritative timed out",
-			outcome: terminal.Outcome{
-				Kind:                     terminal.OutcomeTerminalConflict,
-				AuthoritativeStatus:      mpc2of3.TerminalStatusTimedOut,
-				AuthoritativeFingerprint: failedFingerprint,
-			},
-			want: CleanupAddressedArtifacts,
-		},
-		{
-			name: "accepted completed preserves",
-			outcome: terminal.Outcome{
-				Kind:                     terminal.OutcomeAccepted,
-				AuthoritativeStatus:      mpc2of3.TerminalStatusCompleted,
-				AuthoritativeFingerprint: completedFingerprint,
-			},
-			want: CleanupPreserve,
-		},
-		{
-			name: "conflict authoritative completed preserves",
-			outcome: terminal.Outcome{
-				Kind:                     terminal.OutcomeTerminalConflict,
-				AuthoritativeStatus:      mpc2of3.TerminalStatusCompleted,
-				AuthoritativeFingerprint: completedFingerprint,
-			},
-			want: CleanupPreserve,
-		},
-		{
-			name: "untyped zero outcome preserves",
-			want: CleanupPreserve,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := DecideCleanup(tt.outcome); got != tt.want {
-				t.Fatalf("DecideCleanup() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 type recordingBackend struct {
 	listing    monolith.ActionableListing
 	listErr    error
@@ -988,13 +912,4 @@ func withSessionID(intent monolith.ActionableIntent, sessionID string) monolith.
 func withDeadlineRaw(intent monolith.ActionableIntent, deadlineRaw string) monolith.ActionableIntent {
 	intent.DeadlineRaw = deadlineRaw
 	return intent
-}
-
-func mustTerminalFingerprint(t *testing.T, raw string) mpc2of3.TerminalResultFingerprint {
-	t.Helper()
-	fingerprint, err := mpc2of3.ParseTerminalResultFingerprint(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return fingerprint
 }
