@@ -118,17 +118,7 @@ func loadValidatedRuntimeShare(config StoreConfig, expected *ExpectedArtifactCon
 		return nil, ArtifactEvidence{}, fmt.Errorf("%w: descriptor product contract", ErrArtifactBinding)
 	}
 
-	stored := &coretss.StoredShare{
-		Blob: shareBlob,
-		Meta: coretss.ShareMeta{
-			Algorithm:        descriptor.Algorithm,
-			Curve:            descriptor.Curve,
-			Version:          inspected.CodecVersion,
-			ChainCodePresent: true,
-			PublicKeyFormat:  descriptor.PublicKeyFormat,
-			DerivationScheme: descriptor.DerivationScheme,
-		},
-	}
+	stored := &coretss.StoredShare{Blob: shareBlob}
 	return stored, ArtifactEvidence{
 		SessionID:             payload.SessionID,
 		KeyID:                 descriptor.KeyID,

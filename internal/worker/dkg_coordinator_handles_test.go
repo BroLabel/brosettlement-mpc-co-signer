@@ -3,12 +3,12 @@ package worker
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
-	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/preparams"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
@@ -27,8 +27,8 @@ func TestDKGCoordinatorDiscardsFirstPreParamsHandleWhenSecondAcquireFails(t *tes
 	if got := service.AcquireOrder(); len(got) != 2 || got[0] != 1 || got[1] != 2 {
 		t.Fatalf("acquisition order = %v, want B then C", got)
 	}
-	if got := service.Handle(1).State(); got != handleDiscarded {
-		t.Fatalf("B handle state = %s, want discarded", got)
+	if got := service.DiscardedCount(); got != 1 {
+		t.Fatalf("discarded handles = %d, want B discarded", got)
 	}
 	if service.HandleRunCount() != 0 {
 		t.Fatalf("handle-aware runtime calls = %d, want zero", service.HandleRunCount())
@@ -74,8 +74,8 @@ func TestDKGCoordinatorDiscardsBothPreParamsHandlesWhenPairRegistrationFails(t *
 	if got := service.AcquireOrder(); len(got) != 2 {
 		t.Fatalf("acquisitions = %v, want two before registration", got)
 	}
-	if service.Handle(1).State() != handleDiscarded || service.Handle(2).State() != handleDiscarded {
-		t.Fatalf("handle states = B:%s C:%s, want both discarded", service.Handle(1).State(), service.Handle(2).State())
+	if got := service.DiscardedCount(); got != 2 {
+		t.Fatalf("discarded handles = %d, want both discarded", got)
 	}
 	if service.HandleRunCount() != 0 {
 		t.Fatalf("handle-aware runtime calls = %d, want zero", service.HandleRunCount())
@@ -108,9 +108,6 @@ func TestDKGCoordinatorKeepsStartBarrierClosedUntilBothHandlesAndPairExist(t *te
 	close(secondAcquireGate)
 	if err := <-result; err != nil {
 		t.Fatalf("Run() error = %v", err)
-	}
-	if service.Handle(1).State() != handleConsumed || service.Handle(2).State() != handleConsumed {
-		t.Fatalf("handle states = B:%s C:%s, want exactly consumed", service.Handle(1).State(), service.Handle(2).State())
 	}
 	if service.RunHandleForParty(coordinatorPrimaryParty) != 1 ||
 		service.RunHandleForParty(coordinatorRecoveryParty) != 2 {
@@ -191,8 +188,8 @@ func TestDKGCoordinatorKeepsPreParamsBarrierWithinIntentDeadline(t *testing.T) {
 			t.Fatalf("acquire %d deadline = %s, want %s", acquire, deadline, intent.ExpiresAt)
 		}
 	}
-	if service.Handle(1).State() != handleDiscarded {
-		t.Fatalf("B handle state = %s, want discarded after deadline", service.Handle(1).State())
+	if got := service.DiscardedCount(); got != 1 {
+		t.Fatalf("discarded handles = %d, want B discarded after deadline", got)
 	}
 	if service.HandleRunCount() != 0 {
 		t.Fatalf("runtime calls after deadline = %d, want zero", service.HandleRunCount())
@@ -340,53 +337,11 @@ func assertPairAvailable(t *testing.T, activePair *sharestore.ActivePair, intent
 	}
 }
 
-type handleState string
-
-const (
-	handleAcquired  handleState = "acquired"
-	handleConsumed  handleState = "consumed"
-	handleDiscarded handleState = "discarded"
-)
-
-type scriptedHandle struct {
-	mu    sync.Mutex
-	id    int
-	state handleState
-}
-
-func (h *scriptedHandle) Discard() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	switch h.state {
-	case handleAcquired:
-		h.state = handleDiscarded
-		return nil
-	case handleDiscarded:
-		return nil
-	default:
-		return coretss.ErrPreParamsConsumed
-	}
-}
-
-func (h *scriptedHandle) consume() error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.state != handleAcquired {
-		return errors.New("test handle was not acquired")
-	}
-	h.state = handleConsumed
-	return nil
-}
-
-func (h *scriptedHandle) State() handleState {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.state
-}
-
 type scriptedCoordinatorService struct {
 	mu                    sync.Mutex
-	handles               map[int]*scriptedHandle
+	owner                 *coretss.Service
+	handles               map[int]coretss.DKGPreParamsHandle
+	handleIndexes         map[coretss.DKGPreParamsHandle]int
 	acquireErrors         map[int]error
 	acquireGates          map[int]<-chan struct{}
 	acquireWaitForContext map[int]bool
@@ -405,7 +360,9 @@ type scriptedCoordinatorService struct {
 
 func newScriptedCoordinatorService() *scriptedCoordinatorService {
 	return &scriptedCoordinatorService{
-		handles:               make(map[int]*scriptedHandle),
+		owner:                 coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(workerPreParamsSource{})),
+		handles:               make(map[int]coretss.DKGPreParamsHandle),
+		handleIndexes:         make(map[coretss.DKGPreParamsHandle]int),
 		acquireErrors:         make(map[int]error),
 		acquireGates:          make(map[int]<-chan struct{}),
 		acquireWaitForContext: make(map[int]bool),
@@ -430,7 +387,7 @@ func (s *scriptedCoordinatorService) BeginJob(context.Context) (func(), error) {
 	}, nil
 }
 
-func (s *scriptedCoordinatorService) AcquireDKGPreParams(ctx context.Context) (preparams.Handle, error) {
+func (s *scriptedCoordinatorService) AcquireDKGPreParams(ctx context.Context) (coretss.DKGPreParamsHandle, error) {
 	s.mu.Lock()
 	index := len(s.acquireOrder) + 1
 	s.acquireOrder = append(s.acquireOrder, index)
@@ -457,9 +414,13 @@ func (s *scriptedCoordinatorService) AcquireDKGPreParams(ctx context.Context) (p
 	if acquireErr != nil {
 		return nil, acquireErr
 	}
-	handle := &scriptedHandle{id: index, state: handleAcquired}
+	handle, err := s.owner.AcquireDKGPreParams(ctx)
+	if err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
 	s.handles[index] = handle
+	s.handleIndexes[handle] = index
 	s.mu.Unlock()
 	return handle, nil
 }
@@ -467,19 +428,17 @@ func (s *scriptedCoordinatorService) AcquireDKGPreParams(ctx context.Context) (p
 func (s *scriptedCoordinatorService) RunDKGSessionWithPreParams(
 	ctx context.Context,
 	request coretss.DKGSessionRequest,
-	handle preparams.Handle,
+	handle coretss.DKGPreParamsHandle,
 ) (coretss.DKGOutput, error) {
-	owned, ok := handle.(*scriptedHandle)
+	s.mu.Lock()
+	index, ok := s.handleIndexes[handle]
 	if !ok {
+		s.mu.Unlock()
 		return coretss.DKGOutput{}, errors.New("unexpected test handle")
 	}
-	if err := owned.consume(); err != nil {
-		return coretss.DKGOutput{}, err
-	}
-	s.mu.Lock()
 	s.handleRuns++
 	s.activeRuns++
-	s.runHandlesByParty[request.LocalPartyID] = owned.id
+	s.runHandlesByParty[request.LocalPartyID] = index
 	run := s.run
 	s.mu.Unlock()
 	defer func() {
@@ -516,19 +475,14 @@ func (s *scriptedCoordinatorService) WaitForAcquire(t *testing.T, want int) {
 	}
 }
 
-func (s *scriptedCoordinatorService) Handle(index int) *scriptedHandle {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if handle := s.handles[index]; handle != nil {
-		return handle
-	}
-	return &scriptedHandle{}
-}
-
 func (s *scriptedCoordinatorService) AcquireOrder() []int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]int(nil), s.acquireOrder...)
+}
+
+func (s *scriptedCoordinatorService) DiscardedCount() uint64 {
+	return s.owner.Snapshot().PreParamsDiscardedBeforeStartCount
 }
 
 func (s *scriptedCoordinatorService) AcquireDeadlines() map[int]time.Time {

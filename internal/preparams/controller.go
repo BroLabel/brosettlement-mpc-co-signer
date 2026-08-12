@@ -16,14 +16,8 @@ const (
 )
 
 var (
-	ErrInvalidHandle    = errors.New("invalid co-signer preparams handle")
 	ErrJobAlreadyActive = errors.New("preparams-controlled dkg job is already active")
 )
-
-// Handle deliberately exposes no pre-parameter material or party binding.
-type Handle interface {
-	Discard() error
-}
 
 type coreService interface {
 	AcquireDKGPreParams(context.Context) (coretss.DKGPreParamsHandle, error)
@@ -188,18 +182,14 @@ func (c *Controller) waitForGenerationIdle(ctx context.Context) error {
 	}
 }
 
-func (c *Controller) AcquireDKGPreParams(ctx context.Context) (Handle, error) {
+func (c *Controller) AcquireDKGPreParams(ctx context.Context) (coretss.DKGPreParamsHandle, error) {
 	if c == nil {
-		return nil, ErrInvalidHandle
+		return nil, errors.New("preparams controller is nil")
 	}
 	handle, err := c.service.AcquireDKGPreParams(ctx)
 	if err != nil {
 		c.observe()
 		return nil, err
-	}
-	if handle == nil {
-		c.observe()
-		return nil, ErrInvalidHandle
 	}
 	c.observe()
 	return handle, nil
@@ -208,16 +198,9 @@ func (c *Controller) AcquireDKGPreParams(ctx context.Context) (Handle, error) {
 func (c *Controller) RunDKGSessionWithPreParams(
 	ctx context.Context,
 	request coretss.DKGSessionRequest,
-	handle Handle,
+	handle coretss.DKGPreParamsHandle,
 ) (coretss.DKGOutput, error) {
-	coreHandle, ok := handle.(coretss.DKGPreParamsHandle)
-	if !ok || coreHandle == nil {
-		return coretss.DKGOutput{}, ErrInvalidHandle
-	}
-	if err := request.Validate(); err != nil {
-		return coretss.DKGOutput{}, err
-	}
-	output, err := c.service.RunDKGSessionWithPreParams(ctx, request, coreHandle)
+	output, err := c.service.RunDKGSessionWithPreParams(ctx, request, handle)
 	c.observe()
 	return output, err
 }

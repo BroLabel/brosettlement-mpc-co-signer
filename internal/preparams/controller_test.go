@@ -125,11 +125,7 @@ func TestPreparamsMetricsCountDiscardOnlyOnceUnderConcurrentRepeats(t *testing.T
 
 func TestInvalidPreparamsRequestLeavesHandleAcquiredForDiscard(t *testing.T) {
 	owner := coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(staticPreParamsSource{}))
-	coreHandle, err := owner.AcquireDKGPreParams(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	controller, err := NewController(&recordingCoreService{acquired: coreHandle})
+	controller, err := NewController(owner)
 	if err != nil {
 		t.Fatal(err)
 	}

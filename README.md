@@ -12,8 +12,7 @@ Runtime model:
 ## 2-of-3 co-signer configuration
 
 The co-signer has two fixed local store profiles and is scoped by the
-authenticated organization on every backend request. It does not accept the legacy `CO_SIGNER_PARTY_ID` or
-`CO_SIGNER_SHARES_DIR` settings.
+authenticated organization on every backend request.
 
 | Variable | Required value |
 | --- | --- |

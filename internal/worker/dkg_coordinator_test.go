@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -12,10 +13,10 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/localrouter"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
-	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/preparams"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
+	ecdsakeygen "github.com/bnb-chain/tss-lib/ecdsa/keygen"
 )
 
 const (
@@ -470,9 +471,9 @@ func TestDKGCoordinatorRejectsCallerSuppliedLibraryThresholdOne(t *testing.T) {
 		[]byte(`"threshold":1`),
 		1,
 	)
-	runner := newConcurrentDKGRunner()
+	service := newScriptedCoordinatorService()
 	coordinator, err := NewDKGCoordinator(
-		serviceForRunner(runner),
+		service,
 		sharestore.NewActivePair(),
 		&recordingArtifactInspector{},
 		&recordingArtifactInspector{},
@@ -489,8 +490,11 @@ func TestDKGCoordinatorRejectsCallerSuppliedLibraryThresholdOne(t *testing.T) {
 	if _, err := coordinator.Run(context.Background(), intent, &blockingTransport{}); !errors.Is(err, ErrInvalidDKGContext) {
 		t.Fatalf("Run() error = %v, want ErrInvalidDKGContext", err)
 	}
-	if got := len(runner.Requests()); got != 0 {
-		t.Fatalf("RunDKGSession() calls = %d, want 0", got)
+	if got := len(service.AcquireOrder()); got != 0 {
+		t.Fatalf("preparams acquisitions after mismatched descriptor = %d, want 0", got)
+	}
+	if service.BeginCount() != 0 {
+		t.Fatal("preparams refill paused before descriptor validation boundary")
 	}
 }
 
@@ -542,40 +546,41 @@ type concurrentDKGRunner struct {
 	onRunOnce sync.Once
 }
 
-type testPreParamsHandle struct{}
-
-func (*testPreParamsHandle) Discard() error { return nil }
-
 type testSessionRunner interface {
 	RunDKGSession(context.Context, coretss.DKGSessionRequest) (coretss.DKGOutput, error)
 }
 
 type runnerBackedDKGService struct {
 	runner testSessionRunner
+	owner  *coretss.Service
 }
 
 func serviceForRunner(runner testSessionRunner) *runnerBackedDKGService {
-	return &runnerBackedDKGService{runner: runner}
+	return &runnerBackedDKGService{
+		runner: runner,
+		owner:  coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(workerPreParamsSource{})),
+	}
 }
 
 func (*runnerBackedDKGService) BeginJob(context.Context) (func(), error) {
 	return func() {}, nil
 }
 
-func (*runnerBackedDKGService) AcquireDKGPreParams(context.Context) (preparams.Handle, error) {
-	return &testPreParamsHandle{}, nil
+func (s *runnerBackedDKGService) AcquireDKGPreParams(ctx context.Context) (coretss.DKGPreParamsHandle, error) {
+	return s.owner.AcquireDKGPreParams(ctx)
 }
 
 func (s *runnerBackedDKGService) RunDKGSessionWithPreParams(
 	ctx context.Context,
 	request coretss.DKGSessionRequest,
-	_ preparams.Handle,
+	_ coretss.DKGPreParamsHandle,
 ) (coretss.DKGOutput, error) {
 	return s.runner.RunDKGSession(ctx, request)
 }
 
 type handleAwareDKGService struct {
 	*concurrentDKGRunner
+	owner *coretss.Service
 
 	mu               sync.Mutex
 	acquireCount     int
@@ -585,25 +590,28 @@ type handleAwareDKGService struct {
 }
 
 func newHandleAwareDKGService() *handleAwareDKGService {
-	return &handleAwareDKGService{concurrentDKGRunner: newConcurrentDKGRunner()}
+	return &handleAwareDKGService{
+		concurrentDKGRunner: newConcurrentDKGRunner(),
+		owner:               coretss.NewBnbService(slog.Default(), coretss.WithPreParamsSource(workerPreParamsSource{})),
+	}
 }
 
 func (*handleAwareDKGService) BeginJob(context.Context) (func(), error) {
 	return func() {}, nil
 }
 
-func (s *handleAwareDKGService) AcquireDKGPreParams(context.Context) (preparams.Handle, error) {
+func (s *handleAwareDKGService) AcquireDKGPreParams(ctx context.Context) (coretss.DKGPreParamsHandle, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.acquireCount++
 	s.acquisitionOrder = append(s.acquisitionOrder, s.acquireCount)
-	return &testPreParamsHandle{}, nil
+	s.mu.Unlock()
+	return s.owner.AcquireDKGPreParams(ctx)
 }
 
 func (s *handleAwareDKGService) RunDKGSessionWithPreParams(
 	ctx context.Context,
 	request coretss.DKGSessionRequest,
-	_ preparams.Handle,
+	_ coretss.DKGPreParamsHandle,
 ) (coretss.DKGOutput, error) {
 	s.mu.Lock()
 	s.handleRunCount++
@@ -637,6 +645,12 @@ func (s *handleAwareDKGService) LegacyRunCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.legacyRunCount
+}
+
+type workerPreParamsSource struct{}
+
+func (workerPreParamsSource) Acquire(context.Context) (*ecdsakeygen.LocalPreParams, error) {
+	return &ecdsakeygen.LocalPreParams{}, nil
 }
 
 func newConcurrentDKGRunner() *concurrentDKGRunner {
