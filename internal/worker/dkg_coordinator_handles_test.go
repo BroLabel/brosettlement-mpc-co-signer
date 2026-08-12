@@ -3,15 +3,49 @@ package worker
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/preparams"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
+
+func TestDKGCoordinatorControllerCoreConsumesBothHandlesOnSiblingCancellation(t *testing.T) {
+	intent := coordinatorIntent(t)
+	coreService := coretss.NewBnbService(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		coretss.WithPreParamsSource(workerPreParamsSource{}),
+	)
+	controller, err := preparams.NewController(coreService)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := newCancelingCompositionService(controller)
+	coordinator := mustNewCompositionCoordinator(t, service)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, err := coordinator.Run(ctx, intent, &blockingTransport{}); err == nil {
+		t.Fatal("Run() error = nil, want post-start failure")
+	}
+	if got := coreService.Snapshot().PreParamsConsumedCount; got != 2 {
+		t.Fatalf("core consumed handles = %d, want both coordinator handles", got)
+	}
+	handles := service.Handles()
+	if len(handles) != 2 {
+		t.Fatalf("coordinator handles = %d, want 2", len(handles))
+	}
+	for index, handle := range handles {
+		if err := handle.Discard(); !errors.Is(err, coretss.ErrPreParamsConsumed) {
+			t.Fatalf("handle %d discard after coordinator run = %v, want ErrPreParamsConsumed", index+1, err)
+		}
+	}
+}
 
 func TestDKGCoordinatorDiscardsFirstPreParamsHandleWhenSecondAcquireFails(t *testing.T) {
 	intent := coordinatorIntent(t)
@@ -335,6 +369,73 @@ func assertPairAvailable(t *testing.T, activePair *sharestore.ActivePair, intent
 	if err := lease.Release(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+type cancelingCompositionService struct {
+	controller *preparams.Controller
+
+	mu      sync.Mutex
+	handles []coretss.DKGPreParamsHandle
+}
+
+func newCancelingCompositionService(controller *preparams.Controller) *cancelingCompositionService {
+	return &cancelingCompositionService{controller: controller}
+}
+
+func (s *cancelingCompositionService) BeginJob(ctx context.Context) (func(), error) {
+	return s.controller.BeginJob(ctx)
+}
+
+func (s *cancelingCompositionService) AcquireDKGPreParams(ctx context.Context) (coretss.DKGPreParamsHandle, error) {
+	handle, err := s.controller.AcquireDKGPreParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.handles = append(s.handles, handle)
+	s.mu.Unlock()
+	return handle, nil
+}
+
+func (s *cancelingCompositionService) RunDKGSessionWithPreParams(
+	ctx context.Context,
+	request coretss.DKGSessionRequest,
+	handle coretss.DKGPreParamsHandle,
+) (coretss.DKGOutput, error) {
+	if request.LocalPartyID == coordinatorRecoveryParty {
+		<-ctx.Done()
+	}
+	// Keep the public request valid while forcing a deterministic runner error
+	// after core has taken ownership of the handle.
+	request.Session.Algorithm = "unsupported-test-algorithm"
+	request.Session.Curve = ""
+	request.DerivationMaterial = nil
+	return s.controller.RunDKGSessionWithPreParams(ctx, request, handle)
+}
+
+func (s *cancelingCompositionService) Handles() []coretss.DKGPreParamsHandle {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]coretss.DKGPreParamsHandle(nil), s.handles...)
+}
+
+func mustNewCompositionCoordinator(t *testing.T, service dkgService) *DKGCoordinator {
+	t.Helper()
+	coordinator, err := NewDKGCoordinator(
+		service,
+		sharestore.NewActivePair(),
+		&recordingArtifactInspector{},
+		&recordingArtifactInspector{},
+		DKGCoordinatorConfig{
+			PlatformPartyID: coordinatorPlatformParty,
+			PrimaryPartyID:  coordinatorPrimaryParty,
+			RecoveryPartyID: coordinatorRecoveryParty,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return coordinator
 }
 
 type scriptedCoordinatorService struct {
