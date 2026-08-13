@@ -1,7 +1,6 @@
 package sharestore
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -94,55 +93,30 @@ type Store struct {
 	readFile         func(string) ([]byte, error)
 }
 
-func NewStore(config StoreConfig) (*Store, error) {
-	if !publishPlatformSupported() {
-		return nil, ErrUnsupportedPublishPlatform
-	}
-	return newStore(config)
-}
-
 // OpenStore retains the immutable purpose/key binding when only the
 // provisioning filesystem capability is unavailable. Callers must keep DKG
 // admission closed for the process lifetime when the returned error is non-nil.
 func OpenStore(config StoreConfig) (*Store, error) {
-	store, err := configuredStore(config)
-	if err != nil {
-		return nil, err
-	}
-	if !publishPlatformSupported() {
-		return store, ErrUnsupportedPublishPlatform
-	}
-	if err := ensurePrivateStoreDirectory(config.Directory()); err != nil {
-		return store, err
-	}
-	return store, nil
-}
-
-func newStore(config StoreConfig) (*Store, error) {
-	store, err := configuredStore(config)
-	if err != nil {
-		return nil, err
-	}
-	if err := ensurePrivateStoreDirectory(config.Directory()); err != nil {
-		return nil, err
-	}
-	return store, nil
-}
-
-func configuredStore(config StoreConfig) (*Store, error) {
 	if config.keyProvider == nil {
 		return nil, errors.New("artifact key provider is required")
 	}
-	if err := validatePurposeParty(config.Purpose(), config.PartyID()); err != nil {
+	if _, err := partyIDForPurpose(config.Purpose()); err != nil {
 		return nil, err
 	}
-	return &Store{
+	store := &Store{
 		config:           config,
 		nonceSource:      rand.Reader,
 		publishSupported: publishPlatformSupported,
 		publishFile:      publishArtifactFile,
 		readFile:         readArtifactFile,
-	}, nil
+	}
+	if err := ensurePrivateStoreDirectory(config.Directory()); err != nil {
+		return store, err
+	}
+	if !publishPlatformSupported() {
+		return store, ErrUnsupportedPublishPlatform
+	}
+	return store, nil
 }
 
 func ensurePrivateStoreDirectory(directory string) error {
@@ -172,12 +146,7 @@ func (s *Store) finalPath(keyID string) (string, error) {
 	if !canonicalKeyIDPattern.MatchString(keyID) {
 		return "", errors.New("artifact key ID is not canonical")
 	}
-	path := filepath.Join(s.config.Directory(), keyID+"."+string(s.config.Purpose())+".json")
-	relative, err := filepath.Rel(s.config.Directory(), path)
-	if err != nil || relative == "." || filepath.IsAbs(relative) || relative == ".." || len(relative) >= 3 && relative[:3] == ".."+string(filepath.Separator) {
-		return "", errors.New("artifact path escapes configured destination")
-	}
-	return path, nil
+	return filepath.Join(s.config.Directory(), keyID+"."+string(s.config.Purpose())+".json"), nil
 }
 
 func encodeArtifactV1(config StoreConfig, input PublishInput, nonce []byte) ([]byte, error) {
@@ -269,86 +238,4 @@ func strictBase64(field string, encoded string, maximum int) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %s must be canonical padded base64", coretss.ErrInvalidSharePayload, field)
 	}
 	return decoded, nil
-}
-
-func decodeClosedJSON(raw []byte, destination any) error {
-	if err := rejectDuplicateJSONKeys(raw); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return errors.New("JSON contains trailing data")
-	}
-	canonical, err := json.Marshal(destination)
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(raw, canonical) {
-		return errors.New("JSON does not use the exact compact field representation")
-	}
-	return nil
-}
-
-func rejectDuplicateJSONKeys(raw []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	if err := walkJSONValue(decoder); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("JSON contains trailing data")
-	}
-	return nil
-}
-
-func walkJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delim, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delim {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return errors.New("JSON object key is not a string")
-			}
-			if _, duplicate := seen[key]; duplicate {
-				return fmt.Errorf("duplicate JSON key %q", key)
-			}
-			seen[key] = struct{}{}
-			if err := walkJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		end, err := decoder.Token()
-		if err != nil || end != json.Delim('}') {
-			return errors.New("unterminated JSON object")
-		}
-	case '[':
-		for decoder.More() {
-			if err := walkJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		end, err := decoder.Token()
-		if err != nil || end != json.Delim(']') {
-			return errors.New("unterminated JSON array")
-		}
-	default:
-		return errors.New("unexpected JSON delimiter")
-	}
-	return nil
 }

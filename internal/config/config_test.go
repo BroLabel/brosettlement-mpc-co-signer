@@ -184,8 +184,6 @@ func setRequiredEnv(t *testing.T) {
 		"CO_SIGNER_MONOLITH_URL":                     "https://monolith.test",
 		"CO_SIGNER_API_KEY_ID":                       "key-1",
 		"CO_SIGNER_API_PRIVATE_KEY":                  "cHJpdmF0ZS1rZXk=",
-		"CO_SIGNER_PRIMARY_PARTY_ID":                 "co-signer-primary",
-		"CO_SIGNER_RECOVERY_PARTY_ID":                "co-signer-recovery",
 		"CO_SIGNER_PRIMARY_SHARES_DIR":               "/var/lib/co-signer/primary",
 		"CO_SIGNER_RECOVERY_SHARES_DIR":              "/var/lib/co-signer/recovery",
 		"CO_SIGNER_STATE_DIR":                        "/var/lib/co-signer/state",

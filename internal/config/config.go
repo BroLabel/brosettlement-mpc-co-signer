@@ -79,11 +79,11 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("configure share encryption key: %w", err)
 	}
-	primaryStore, err := sharestore.NewStoreConfig(sharestore.StorePurposePrimary, os.Getenv("CO_SIGNER_PRIMARY_PARTY_ID"), os.Getenv("CO_SIGNER_PRIMARY_SHARES_DIR"), provider)
+	primaryStore, err := sharestore.NewStoreConfig(sharestore.StorePurposePrimary, os.Getenv("CO_SIGNER_PRIMARY_SHARES_DIR"), provider)
 	if err != nil {
 		return Config{}, fmt.Errorf("configure primary store: %w", err)
 	}
-	recoveryStore, err := sharestore.NewStoreConfig(sharestore.StorePurposeRecovery, os.Getenv("CO_SIGNER_RECOVERY_PARTY_ID"), os.Getenv("CO_SIGNER_RECOVERY_SHARES_DIR"), provider)
+	recoveryStore, err := sharestore.NewStoreConfig(sharestore.StorePurposeRecovery, os.Getenv("CO_SIGNER_RECOVERY_SHARES_DIR"), provider)
 	if err != nil {
 		return Config{}, fmt.Errorf("configure recovery store: %w", err)
 	}

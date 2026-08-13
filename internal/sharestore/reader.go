@@ -48,7 +48,7 @@ func (s *Store) InspectExisting(ctx context.Context, expected ExpectedArtifactCo
 		}
 		return ArtifactEvidence{}, fmt.Errorf("read immutable artifact: %w", err)
 	}
-	stored, evidence, err := inspectArtifactBytes(s.config, expected, finalBytes)
+	stored, evidence, err := loadValidatedRuntimeShare(s.config, &expected, finalBytes)
 	if stored != nil {
 		clear(stored.Blob)
 	}

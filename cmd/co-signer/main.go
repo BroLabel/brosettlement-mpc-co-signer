@@ -186,7 +186,7 @@ func openApplicationResources(
 	privateKey ed25519.PrivateKey,
 	readiness *health.Readiness,
 ) (_ *applicationResources, returnErr error) {
-	primaryStore, err := sharestore.NewStore(cfg.PrimaryStore)
+	primaryStore, err := sharestore.OpenStore(cfg.PrimaryStore)
 	if err != nil {
 		return nil, fmt.Errorf("initialize primary artifact store: %w", err)
 	}

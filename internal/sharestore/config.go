@@ -22,16 +22,15 @@ const (
 // StoreConfig is an immutable, purpose-bound filesystem store profile.
 type StoreConfig struct {
 	purpose     StorePurpose
-	partyID     string
 	directory   string
 	keyProvider *KeyProvider
 }
 
-func NewStoreConfig(purpose StorePurpose, partyID, directory string, keyProvider *KeyProvider) (StoreConfig, error) {
+func NewStoreConfig(purpose StorePurpose, directory string, keyProvider *KeyProvider) (StoreConfig, error) {
 	if keyProvider == nil || keyProvider.KeyRef() == "" {
 		return StoreConfig{}, errors.New("share encryption key provider is required")
 	}
-	if err := validatePurposeParty(purpose, partyID); err != nil {
+	if _, err := partyIDForPurpose(purpose); err != nil {
 		return StoreConfig{}, err
 	}
 	directory = filepath.Clean(strings.TrimSpace(directory))
@@ -44,7 +43,6 @@ func NewStoreConfig(purpose StorePurpose, partyID, directory string, keyProvider
 
 	return StoreConfig{
 		purpose:     purpose,
-		partyID:     partyID,
 		directory:   directory,
 		keyProvider: keyProvider,
 	}, nil
@@ -57,9 +55,6 @@ func ValidateStorePair(primary, recovery StoreConfig) error {
 	if primary.keyProvider == nil || recovery.keyProvider == nil || primary.keyProvider != recovery.keyProvider {
 		return errors.New("primary and recovery stores must share one key provider")
 	}
-	if primary.keyProvider.KeyRef() != recovery.keyProvider.KeyRef() {
-		return errors.New("primary and recovery stores must share one key reference")
-	}
 	if pathsOverlap(primary.directory, recovery.directory) {
 		return errors.New("primary and recovery store directories must be distinct and non-overlapping")
 	}
@@ -68,7 +63,10 @@ func ValidateStorePair(primary, recovery StoreConfig) error {
 
 func (c StoreConfig) Purpose() StorePurpose { return c.purpose }
 
-func (c StoreConfig) PartyID() string { return c.partyID }
+func (c StoreConfig) PartyID() string {
+	partyID, _ := partyIDForPurpose(c.purpose)
+	return partyID
+}
 
 func (c StoreConfig) Directory() string { return c.directory }
 
@@ -79,20 +77,15 @@ func (c StoreConfig) KeyRef() string {
 	return c.keyProvider.KeyRef()
 }
 
-func validatePurposeParty(purpose StorePurpose, partyID string) error {
+func partyIDForPurpose(purpose StorePurpose) (string, error) {
 	switch purpose {
 	case StorePurposePrimary:
-		if partyID != primaryPartyID {
-			return fmt.Errorf("primary store party ID must be %q", primaryPartyID)
-		}
+		return primaryPartyID, nil
 	case StorePurposeRecovery:
-		if partyID != recoveryPartyID {
-			return fmt.Errorf("recovery store party ID must be %q", recoveryPartyID)
-		}
+		return recoveryPartyID, nil
 	default:
-		return fmt.Errorf("unsupported store purpose %q", purpose)
+		return "", fmt.Errorf("unsupported store purpose %q", purpose)
 	}
-	return nil
 }
 
 func validateBindingIdentifier(name, value string) error {

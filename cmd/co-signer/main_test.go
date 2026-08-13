@@ -63,8 +63,6 @@ func TestCoSignerStartupPreservesEarlyCapabilityErrorWithoutPanic(t *testing.T) 
 		"CO_SIGNER_MONOLITH_URL=https://monolith.test",
 		"CO_SIGNER_API_KEY_ID=key-1",
 		"CO_SIGNER_API_PRIVATE_KEY=" + privateKey,
-		"CO_SIGNER_PRIMARY_PARTY_ID=co-signer-primary",
-		"CO_SIGNER_RECOVERY_PARTY_ID=co-signer-recovery",
 		"CO_SIGNER_PRIMARY_SHARES_DIR=" + primaryStore,
 		"CO_SIGNER_RECOVERY_SHARES_DIR=" + filepath.Join(root, "recovery"),
 		"CO_SIGNER_STATE_DIR=" + stateDir,

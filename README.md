@@ -14,13 +14,12 @@ Runtime model:
 The co-signer has two fixed local store profiles and is scoped by the
 authenticated organization on every backend request. Legacy
 `CO_SIGNER_PARTY_ID` and `CO_SIGNER_SHARES_DIR` settings are unsupported; if
-either is set, configuration validation rejects startup. Configure the explicit
-primary and recovery settings below instead.
+either is set, configuration validation rejects startup. The primary and
+recovery party IDs are fixed by the store purpose; configure their directories
+below.
 
 | Variable | Required value |
 | --- | --- |
-| `CO_SIGNER_PRIMARY_PARTY_ID` | Exactly `co-signer-primary`. |
-| `CO_SIGNER_RECOVERY_PARTY_ID` | Exactly `co-signer-recovery`. |
 | `CO_SIGNER_PRIMARY_SHARES_DIR` | Absolute pre-existing private primary-store directory. |
 | `CO_SIGNER_RECOVERY_SHARES_DIR` | Absolute pre-existing private recovery-store directory that does not equal or overlap the primary directory. |
 | `CO_SIGNER_STATE_DIR` | Absolute persistent state directory. |

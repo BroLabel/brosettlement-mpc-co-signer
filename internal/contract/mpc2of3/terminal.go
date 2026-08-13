@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 	"github.com/btcsuite/btcd/btcec"
 )
 
@@ -52,7 +53,7 @@ func ParseCanonicalTerminalResult(raw []byte) (TerminalResultV1, TerminalResultF
 	if err := requireCanonicalJCS(raw); err != nil {
 		return result, TerminalResultFingerprint{}, err
 	}
-	if err := decodeClosed(raw, &result); err != nil {
+	if err := strictjson.DecodeClosed(raw, &result); err != nil {
 		return result, TerminalResultFingerprint{}, fmt.Errorf("decode terminal result: %w", err)
 	}
 	var fields map[string]json.RawMessage

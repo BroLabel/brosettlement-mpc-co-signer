@@ -377,20 +377,20 @@ func runIsolatedRecoveryProof(inputPath string) error {
 	if err != nil {
 		return errors.New("validate recovery proof key")
 	}
-	primaryConfig, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, input.PrimaryDirectory, provider)
+	primaryConfig, err := NewStoreConfig(StorePurposePrimary, input.PrimaryDirectory, provider)
 	if err != nil {
 		return errors.New("validate recovery proof primary binding")
 	}
-	recoveryConfig, err := NewStoreConfig(StorePurposeRecovery, recoveryPartyID, input.RecoveryDirectory, provider)
+	recoveryConfig, err := NewStoreConfig(StorePurposeRecovery, input.RecoveryDirectory, provider)
 	if err != nil || ValidateStorePair(primaryConfig, recoveryConfig) != nil {
 		return errors.New("validate recovery proof store pair")
 	}
-	primaryStore, err := configuredStore(primaryConfig)
-	if err != nil {
+	primaryStore, err := OpenStore(primaryConfig)
+	if err != nil && !errors.Is(err, ErrUnsupportedPublishPlatform) {
 		return errors.New("open recovery proof primary store")
 	}
-	recoveryStore, err := configuredStore(recoveryConfig)
-	if err != nil {
+	recoveryStore, err := OpenStore(recoveryConfig)
+	if err != nil && !errors.Is(err, ErrUnsupportedPublishPlatform) {
 		return errors.New("open recovery proof recovery store")
 	}
 	expected := ExpectedArtifactContext{SessionID: input.SessionID, KeyID: input.KeyID, DescriptorBytes: descriptor}
@@ -613,11 +613,7 @@ func recoveryProofDescriptor(t *testing.T, keyID string, chainCode []byte) []byt
 
 func recoveryProofStoreConfig(t *testing.T, purpose StorePurpose, directory string, provider *KeyProvider) StoreConfig {
 	t.Helper()
-	partyID := primaryPartyID
-	if purpose == StorePurposeRecovery {
-		partyID = recoveryPartyID
-	}
-	config, err := NewStoreConfig(purpose, partyID, directory, provider)
+	config, err := NewStoreConfig(purpose, directory, provider)
 	if err != nil {
 		t.Fatal("construct recovery proof store binding")
 	}

@@ -3,6 +3,8 @@ package mpc2of3
 import (
 	"fmt"
 	"regexp"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
 const maxCanonicalDescriptorBytesV1 = 2048
@@ -36,7 +38,7 @@ func ParseCanonicalDescriptor(raw []byte) (KeyDescriptorV1, DescriptorFingerprin
 	if err := requireCanonicalJCS(raw); err != nil {
 		return descriptor, DescriptorFingerprint{}, err
 	}
-	if err := decodeClosed(raw, &descriptor); err != nil {
+	if err := strictjson.DecodeClosed(raw, &descriptor); err != nil {
 		return descriptor, DescriptorFingerprint{}, fmt.Errorf("decode descriptor: %w", err)
 	}
 	if err := descriptor.validate(); err != nil {

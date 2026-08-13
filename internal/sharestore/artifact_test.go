@@ -69,13 +69,13 @@ func TestArtifactV1GoldenEnvelopeAndEvidence(t *testing.T) {
 		t.Fatalf("nonce = %q", encryption["nonce"])
 	}
 
-	loaded, evidence, err := inspectArtifactBytes(store.config, ExpectedArtifactContext{
+	loaded, evidence, err := loadValidatedRuntimeShare(store.config, &ExpectedArtifactContext{
 		SessionID:       testSessionID,
 		KeyID:           testKeyID,
 		DescriptorBytes: descriptor,
 	}, finalBytes)
 	if err != nil {
-		t.Fatalf("inspectArtifactBytes() error = %v", err)
+		t.Fatalf("loadValidatedRuntimeShare() error = %v", err)
 	}
 	defer clear(loaded.Blob)
 	if !bytes.Equal(loaded.Blob, blob) {
@@ -157,12 +157,12 @@ func TestArtifactV1RejectsCorruptionAndBindingMismatch(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loaded, _, err := inspectArtifactBytes(tt.config, tt.expected, tt.artifact)
+			loaded, _, err := loadValidatedRuntimeShare(tt.config, &tt.expected, tt.artifact)
 			if loaded != nil {
 				clear(loaded.Blob)
 			}
 			if !errors.Is(err, tt.wantErr) {
-				t.Fatalf("inspectArtifactBytes() error = %v, want %v", err, tt.wantErr)
+				t.Fatalf("loadValidatedRuntimeShare() error = %v, want %v", err, tt.wantErr)
 			}
 		})
 	}
@@ -201,12 +201,12 @@ func TestArtifactV1StrictClosedJSONAndPaddedBase64(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			loaded, _, err := inspectArtifactBytes(store.config, expected, tt.raw)
+			loaded, _, err := loadValidatedRuntimeShare(store.config, &expected, tt.raw)
 			if loaded != nil {
 				clear(loaded.Blob)
 			}
 			if err == nil {
-				t.Fatal("inspectArtifactBytes() error = nil")
+				t.Fatal("loadValidatedRuntimeShare() error = nil")
 			}
 		})
 	}
@@ -235,12 +235,12 @@ func TestStoreRejectsUnsafeExistingArtifactDirectoryWithoutChangingIt(t *testing
 	if err := os.Chmod(directory, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	config, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, directory, provider)
+	config, err := NewStoreConfig(StorePurposePrimary, directory, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newStore(config); err == nil {
-		t.Fatal("newStore() accepted group-readable artifact directory")
+	if _, err := OpenStore(config); err == nil {
+		t.Fatal("OpenStore() accepted group-readable artifact directory")
 	}
 	info, err := os.Stat(directory)
 	if err != nil {
@@ -257,12 +257,12 @@ func TestStoreRejectsMissingArtifactDirectoryWithoutCreatingIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	directory := filepath.Join(t.TempDir(), "primary")
-	config, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, directory, provider)
+	config, err := NewStoreConfig(StorePurposePrimary, directory, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newStore(config); err == nil {
-		t.Fatal("newStore() created a missing artifact directory")
+	if _, err := OpenStore(config); err == nil {
+		t.Fatal("OpenStore() created a missing artifact directory")
 	}
 	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("missing artifact directory changed, Lstat() error = %v", err)
@@ -288,12 +288,12 @@ func TestStoreRejectsSymlinkAndNonDirectoryArtifactDestination(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, destination := range []string{symlink, regular} {
-		config, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, destination, provider)
+		config, err := NewStoreConfig(StorePurposePrimary, destination, provider)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := newStore(config); err == nil {
-			t.Fatalf("newStore(%q) error = nil", destination)
+		if _, err := OpenStore(config); err == nil {
+			t.Fatalf("OpenStore(%q) error = nil", destination)
 		}
 	}
 }
@@ -361,21 +361,20 @@ func testStore(t fixtureT, purpose StorePurpose) *Store {
 
 func testStoreWithProvider(t fixtureT, purpose StorePurpose, provider *KeyProvider) *Store {
 	t.Helper()
-	partyID := primaryPartyID
-	if purpose == StorePurposeRecovery {
-		partyID = recoveryPartyID
-	}
 	directory := t.TempDir()
 	if err := os.Chmod(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	config, err := NewStoreConfig(purpose, partyID, directory, provider)
+	config, err := NewStoreConfig(purpose, directory, provider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := newStore(config)
-	if err != nil {
+	store, err := OpenStore(config)
+	if err != nil && !errors.Is(err, ErrUnsupportedPublishPlatform) {
 		t.Fatal(err)
+	}
+	if store == nil {
+		t.Fatal("OpenStore() store = nil")
 	}
 	return store
 }
@@ -471,7 +470,6 @@ func TestOpenStoreRetainsPurposeBoundCapabilityWhenProvisioningProbeFails(t *tes
 	}
 	config, err := NewStoreConfig(
 		StorePurposeRecovery,
-		recoveryPartyID,
 		blockedPath,
 		provider,
 	)

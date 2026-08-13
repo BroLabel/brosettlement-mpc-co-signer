@@ -71,50 +71,30 @@ func TestKeyProviderDoesNotExposeKeyBytesWhenFormatted(t *testing.T) {
 	}
 }
 
-func TestStoreConfigsRequireFixedPartyPurposePairAndSharedProvider(t *testing.T) {
+func TestStoreConfigsDeriveFixedPartyFromPurposeAndRequireSharedProvider(t *testing.T) {
 	provider := testKeyProvider(t, "keyref-1")
-	primary, err := NewStoreConfig(StorePurposePrimary, "co-signer-primary", "/var/lib/co-signer/primary", provider)
+	primary, err := NewStoreConfig(StorePurposePrimary, "/var/lib/co-signer/primary", provider)
 	if err != nil {
 		t.Fatalf("NewStoreConfig(primary) error = %v", err)
 	}
-	recovery, err := NewStoreConfig(StorePurposeRecovery, "co-signer-recovery", "/var/lib/co-signer/recovery", provider)
+	recovery, err := NewStoreConfig(StorePurposeRecovery, "/var/lib/co-signer/recovery", provider)
 	if err != nil {
 		t.Fatalf("NewStoreConfig(recovery) error = %v", err)
+	}
+	if primary.PartyID() != "co-signer-primary" || recovery.PartyID() != "co-signer-recovery" {
+		t.Fatalf("derived parties = %q, %q", primary.PartyID(), recovery.PartyID())
 	}
 	if err := ValidateStorePair(primary, recovery); err != nil {
 		t.Fatalf("ValidateStorePair() error = %v", err)
 	}
 
-	if _, err := NewStoreConfig(StorePurposePrimary, "co-signer-recovery", "/var/lib/co-signer/invalid", provider); err == nil {
-		t.Fatal("NewStoreConfig() error = nil, want party/purpose mismatch")
-	}
 	changedProvider := testKeyProvider(t, "keyref-2")
-	changedRef, err := NewStoreConfig(StorePurposeRecovery, "co-signer-recovery", "/var/lib/co-signer/recovery-2", changedProvider)
+	changedRef, err := NewStoreConfig(StorePurposeRecovery, "/var/lib/co-signer/recovery-2", changedProvider)
 	if err != nil {
 		t.Fatalf("NewStoreConfig(changed keyRef) error = %v", err)
 	}
 	if err := ValidateStorePair(primary, changedRef); err == nil {
 		t.Fatal("ValidateStorePair() error = nil, want changed keyRef rejection")
-	}
-}
-
-func TestNewStoreConfigRejectsBothWrongPartyBindings(t *testing.T) {
-	provider := testKeyProvider(t, "keyref-1")
-	for _, tc := range []struct {
-		name    string
-		purpose StorePurpose
-		partyID string
-	}{
-		{name: "primary given recovery party", purpose: StorePurposePrimary, partyID: "co-signer-recovery"},
-		{name: "recovery given primary party", purpose: StorePurposeRecovery, partyID: "co-signer-primary"},
-		{name: "primary padded with whitespace", purpose: StorePurposePrimary, partyID: " co-signer-primary "},
-		{name: "recovery padded with whitespace", purpose: StorePurposeRecovery, partyID: " co-signer-recovery "},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewStoreConfig(tc.purpose, tc.partyID, "/var/lib/co-signer/store", provider); err == nil {
-				t.Fatal("NewStoreConfig() error = nil, want party binding rejection")
-			}
-		})
 	}
 }
 
@@ -124,7 +104,7 @@ func TestStoreConfigDoesNotExposeProviderKeyBytesWhenFormatted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKeyProvider() error = %v", err)
 	}
-	store, err := NewStoreConfig(StorePurposePrimary, "co-signer-primary", "/var/lib/co-signer/primary", provider)
+	store, err := NewStoreConfig(StorePurposePrimary, "/var/lib/co-signer/primary", provider)
 	if err != nil {
 		t.Fatalf("NewStoreConfig() error = %v", err)
 	}
@@ -135,14 +115,14 @@ func TestStoreConfigDoesNotExposeProviderKeyBytesWhenFormatted(t *testing.T) {
 
 func TestStoreConfigsRejectRelativeOrOverlappingDirectories(t *testing.T) {
 	provider := testKeyProvider(t, "keyref-1")
-	if _, err := NewStoreConfig(StorePurposePrimary, "co-signer-primary", "relative", provider); err == nil {
+	if _, err := NewStoreConfig(StorePurposePrimary, "relative", provider); err == nil {
 		t.Fatal("NewStoreConfig() error = nil, want relative directory rejection")
 	}
-	primary, err := NewStoreConfig(StorePurposePrimary, "co-signer-primary", "/var/lib/co-signer/stores", provider)
+	primary, err := NewStoreConfig(StorePurposePrimary, "/var/lib/co-signer/stores", provider)
 	if err != nil {
 		t.Fatalf("NewStoreConfig(primary) error = %v", err)
 	}
-	recovery, err := NewStoreConfig(StorePurposeRecovery, "co-signer-recovery", "/var/lib/co-signer/stores/recovery", provider)
+	recovery, err := NewStoreConfig(StorePurposeRecovery, "/var/lib/co-signer/stores/recovery", provider)
 	if err != nil {
 		t.Fatalf("NewStoreConfig(recovery) error = %v", err)
 	}

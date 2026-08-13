@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
 const (
@@ -430,7 +432,7 @@ type signResultOutcomeWire struct {
 
 func parseSignResultOutcome(statusCode int, body []byte, submittedStatus string) error {
 	var outcome signResultOutcomeWire
-	if err := decodeStrictJSON(body, &outcome); err != nil {
+	if err := strictjson.DecodeClosed(body, &outcome); err != nil {
 		return fmt.Errorf("decode SIGN result outcome: %w", err)
 	}
 	if outcome.HTTPStatus != statusCode {
@@ -563,7 +565,7 @@ func (c *Client) doJSON(
 		if out == nil || len(respBody) == 0 {
 			return nil
 		}
-		if err := decodeStrictJSON(respBody, out); err != nil {
+		if err := strictjson.DecodeClosed(respBody, out); err != nil {
 			return err
 		}
 		if observer, ok := out.(interface {
@@ -683,79 +685,4 @@ func backoff(attempt int) time.Duration {
 		return 0
 	}
 	return time.Duration(1<<(attempt-1)) * 10 * time.Millisecond
-}
-
-func decodeStrictJSON(raw []byte, target any) error {
-	if err := rejectDuplicateJSONKeys(raw); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
-	}
-	return nil
-}
-
-func rejectDuplicateJSONKeys(raw []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := walkJSONValue(decoder); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
-	}
-	return nil
-}
-
-func walkJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			nameToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			name, ok := nameToken.(string)
-			if !ok {
-				return errors.New("JSON object name is not a string")
-			}
-			if _, exists := seen[name]; exists {
-				return fmt.Errorf("duplicate JSON field %q", name)
-			}
-			seen[name] = struct{}{}
-			if err := walkJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-	case '[':
-		for decoder.More() {
-			if err := walkJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-	default:
-		return errors.New("invalid JSON delimiter")
-	}
-	_, err = decoder.Token()
-	return err
 }

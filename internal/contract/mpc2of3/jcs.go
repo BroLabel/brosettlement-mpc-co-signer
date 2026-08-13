@@ -102,18 +102,6 @@ func scanJSONValue(decoder *json.Decoder) error {
 	return nil
 }
 
-func decodeClosed(raw []byte, target any) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		return fmt.Errorf("JSON has trailing data")
-	}
-	return nil
-}
-
 func ascii(value string) bool {
 	if value == "" {
 		return false

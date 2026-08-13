@@ -1,7 +1,6 @@
 package bundle
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
 const (
@@ -203,12 +203,7 @@ func decodeClosed(raw []byte, target any, expected []string) error {
 	if !sameKeys(fields, expected) {
 		return fmt.Errorf("invalid closed schema")
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	return nil
+	return strictjson.DecodeClosed(raw, target)
 }
 
 func digest(raw []byte) string {

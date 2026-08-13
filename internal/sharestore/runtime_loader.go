@@ -7,19 +7,16 @@ import (
 	"fmt"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
-
-func inspectArtifactBytes(config StoreConfig, expected ExpectedArtifactContext, finalBytes []byte) (*coretss.StoredShare, ArtifactEvidence, error) {
-	return loadValidatedRuntimeShare(config, &expected, finalBytes)
-}
 
 func loadValidatedRuntimeShare(config StoreConfig, expected *ExpectedArtifactContext, finalBytes []byte) (*coretss.StoredShare, ArtifactEvidence, error) {
 	if len(finalBytes) == 0 || len(finalBytes) > maxArtifactEnvelopeBytes {
 		return nil, ArtifactEvidence{}, fmt.Errorf("%w: artifact envelope size", coretss.ErrInvalidSharePayload)
 	}
 	var envelope artifactEnvelopeV1
-	if err := decodeClosedJSON(finalBytes, &envelope); err != nil {
+	if err := strictjson.DecodeCanonical(finalBytes, &envelope); err != nil {
 		return nil, ArtifactEvidence{}, fmt.Errorf("%w: decode artifact envelope: %v", coretss.ErrInvalidSharePayload, err)
 	}
 	if envelope.Version != artifactVersion ||
@@ -70,7 +67,7 @@ func loadValidatedRuntimeShare(config StoreConfig, expected *ExpectedArtifactCon
 		return nil, ArtifactEvidence{}, fmt.Errorf("%w: artifact payload size", coretss.ErrInvalidSharePayload)
 	}
 	var payload artifactPayloadV1
-	if err := decodeClosedJSON(payloadBytes, &payload); err != nil {
+	if err := strictjson.DecodeCanonical(payloadBytes, &payload); err != nil {
 		return nil, ArtifactEvidence{}, fmt.Errorf("%w: decode artifact payload: %v", coretss.ErrInvalidSharePayload, err)
 	}
 	if payload.ArtifactPayloadVersion != artifactPayloadVersion || payload.SessionID == "" || payload.PartyID != config.PartyID() {
@@ -92,9 +89,6 @@ func loadValidatedRuntimeShare(config StoreConfig, expected *ExpectedArtifactCon
 		if expected.SessionID == "" || expected.KeyID != descriptor.KeyID || payload.SessionID != expected.SessionID ||
 			!bytes.Equal(descriptorBytes, expected.DescriptorBytes) {
 			return nil, ArtifactEvidence{}, fmt.Errorf("%w: expected artifact context", ErrArtifactBinding)
-		}
-		if _, expectedFingerprint, parseErr := mpc2of3.ParseCanonicalDescriptor(expected.DescriptorBytes); parseErr != nil || expectedFingerprint != descriptorFingerprint {
-			return nil, ArtifactEvidence{}, fmt.Errorf("%w: expected descriptor", ErrArtifactBinding)
 		}
 	}
 

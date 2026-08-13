@@ -464,20 +464,6 @@ func TestSingleSlotWithoutHandoffDoesNotPublishAlreadyTerminalIntent(t *testing.
 	}
 }
 
-func TestDecodeStrictRejectsDuplicateObjectKeys(t *testing.T) {
-	var target struct {
-		Outer map[string]int `json:"outer"`
-	}
-	for _, raw := range []string{
-		`{"outer":{"value":1},"outer":{"value":1}}`,
-		`{"outer":{"value":1,"value":1}}`,
-	} {
-		if err := decodeStrict([]byte(raw), &target); err == nil {
-			t.Fatalf("decodeStrict(%s) accepted duplicate key", raw)
-		}
-	}
-}
-
 type sleeperFunc func(context.Context, time.Duration) error
 
 func (f sleeperFunc) Sleep(ctx context.Context, delay time.Duration) error {

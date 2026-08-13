@@ -31,7 +31,7 @@ func FuzzInspectArtifactV1(f *testing.F) {
 		if len(raw) > maxArtifactEnvelopeBytes+1 {
 			return
 		}
-		stored, _, _ := inspectArtifactBytes(store.config, expected, raw)
+		stored, _, _ := loadValidatedRuntimeShare(store.config, &expected, raw)
 		if stored != nil {
 			clear(stored.Blob)
 		}

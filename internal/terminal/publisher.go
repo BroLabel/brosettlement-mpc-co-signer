@@ -1,18 +1,17 @@
 package terminal
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
 type ArtifactInput struct {
@@ -252,7 +251,7 @@ type terminalResponseV1 struct {
 
 func validateResponse(response monolith.TerminalHTTPResponse, job Job) (Outcome, error) {
 	var wire terminalResponseV1
-	if err := decodeStrict(response.Body, &wire); err != nil {
+	if err := strictjson.DecodeClosed(response.Body, &wire); err != nil {
 		return Outcome{}, err
 	}
 	if wire.HTTPStatus != response.StatusCode {
@@ -289,92 +288,4 @@ func validateResponse(response monolith.TerminalHTTPResponse, job Job) (Outcome,
 		return Outcome{}, errors.New("terminal response status is not authoritative")
 	}
 	return outcome, nil
-}
-
-func decodeStrict(raw []byte, target any) error {
-	if err := rejectDuplicateJSONKeys(raw); err != nil {
-		return err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
-	}
-	return nil
-}
-
-func rejectDuplicateJSONKeys(raw []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := walkJSONValue(decoder); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
-	}
-	return nil
-}
-
-func walkJSONValue(decoder *json.Decoder) error {
-	token, err := decoder.Token()
-	if err != nil {
-		return err
-	}
-	delimiter, ok := token.(json.Delim)
-	if !ok {
-		return nil
-	}
-	switch delimiter {
-	case '{':
-		seen := make(map[string]struct{})
-		for decoder.More() {
-			keyToken, err := decoder.Token()
-			if err != nil {
-				return err
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return errors.New("JSON object key is not a string")
-			}
-			if _, duplicate := seen[key]; duplicate {
-				return fmt.Errorf("duplicate JSON object key %q", key)
-			}
-			seen[key] = struct{}{}
-			if err := walkJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		end, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if end != json.Delim('}') {
-			return errors.New("JSON object is not closed")
-		}
-	case '[':
-		for decoder.More() {
-			if err := walkJSONValue(decoder); err != nil {
-				return err
-			}
-		}
-		end, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		if end != json.Delim(']') {
-			return errors.New("JSON array is not closed")
-		}
-	default:
-		return errors.New("invalid JSON delimiter")
-	}
-	return nil
 }

@@ -157,11 +157,11 @@ func TestLinuxWrongKeyAndKeyRefFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongConfig, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, store.config.Directory(), wrongProvider)
+	wrongConfig, err := NewStoreConfig(StorePurposePrimary, store.config.Directory(), wrongProvider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongStore, err := NewStore(wrongConfig)
+	wrongStore, err := OpenStore(wrongConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,11 +175,11 @@ func TestLinuxWrongKeyAndKeyRefFailClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherRefConfig, err := NewStoreConfig(StorePurposePrimary, primaryPartyID, store.config.Directory(), otherRefProvider)
+	otherRefConfig, err := NewStoreConfig(StorePurposePrimary, store.config.Directory(), otherRefProvider)
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherRefStore, err := NewStore(otherRefConfig)
+	otherRefStore, err := OpenStore(otherRefConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
