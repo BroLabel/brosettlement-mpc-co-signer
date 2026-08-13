@@ -146,9 +146,6 @@ func TestDKGCoordinatorAcquiresTwoPreParamsHandlesAndUsesOnlyHandleAwareRuns(t *
 	if got := service.HandleRunCount(); got != 2 {
 		t.Fatalf("RunDKGSessionWithPreParams() calls = %d, want 2", got)
 	}
-	if got := service.LegacyRunCount(); got != 0 {
-		t.Fatalf("RunDKGSession() calls = %d, want 0", got)
-	}
 }
 
 func TestDKGCoordinatorCancelsSiblingAndJoinsBothParties(t *testing.T) {
@@ -585,7 +582,6 @@ type handleAwareDKGService struct {
 	mu               sync.Mutex
 	acquireCount     int
 	handleRunCount   int
-	legacyRunCount   int
 	acquisitionOrder []int
 }
 
@@ -619,16 +615,6 @@ func (s *handleAwareDKGService) RunDKGSessionWithPreParams(
 	return s.concurrentDKGRunner.RunDKGSession(ctx, request)
 }
 
-func (s *handleAwareDKGService) RunDKGSession(
-	ctx context.Context,
-	request coretss.DKGSessionRequest,
-) (coretss.DKGOutput, error) {
-	s.mu.Lock()
-	s.legacyRunCount++
-	s.mu.Unlock()
-	return s.concurrentDKGRunner.RunDKGSession(ctx, request)
-}
-
 func (s *handleAwareDKGService) AcquireCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -639,12 +625,6 @@ func (s *handleAwareDKGService) HandleRunCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.handleRunCount
-}
-
-func (s *handleAwareDKGService) LegacyRunCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.legacyRunCount
 }
 
 type workerPreParamsSource struct{}

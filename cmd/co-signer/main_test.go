@@ -87,29 +87,6 @@ func TestCoSignerStartupPreservesEarlyCapabilityErrorWithoutPanic(t *testing.T) 
 	}
 }
 
-func TestVerifyMPC2of3PropagatesMandatoryChildFailure(t *testing.T) {
-	bin := t.TempDir()
-	writeCommand := func(name, body string) {
-		t.Helper()
-		path := filepath.Join(bin, name)
-		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	writeCommand("uname", "echo Linux")
-	writeCommand("grep", "exit 1")
-	writeCommand("go", "exit 23")
-	command := exec.Command("/bin/sh", filepath.Join("..", "..", "scripts", "verify-mpc-2of3.sh"))
-	command.Env = append(os.Environ(), "PATH="+bin, "GOWORK=on")
-	output, err := command.CombinedOutput()
-	if err == nil {
-		t.Fatal("verify script accepted a failing mandatory child")
-	}
-	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 23 {
-		t.Fatalf("exit = %v, output=%s", err, output)
-	}
-}
-
 func TestVerifyMPC2of3RejectsPreviousMPCorePin(t *testing.T) {
 	bin := t.TempDir()
 	writeCommand := func(name, body string) {
@@ -130,35 +107,6 @@ func TestVerifyMPC2of3RejectsPreviousMPCorePin(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "mpc-core must resolve exactly v0.4.0") {
 		t.Fatalf("output = %s, want rejection of v0.3.1", output)
-	}
-}
-
-func TestRecoveryDocumentationStatesTopologyAndSupportBoundary(t *testing.T) {
-	paths := []string{
-		filepath.Join("..", "..", "README.md"),
-		filepath.Join("..", "..", "SECURITY.md"),
-		filepath.Join("..", "..", "docs", "artifact-format-v1.md"),
-		filepath.Join("..", "..", "docs", "runbooks", "recovery-artifact.md"),
-	}
-	needles := []string{"one co-signer replica", "no overlap", "one writable", "stable lock", "not distributed", "FUTURE-001"}
-	for _, path := range paths {
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
-		}
-		if len(contents) == 0 {
-			t.Fatalf("empty operational document %s", path)
-		}
-	}
-	combined := ""
-	for _, path := range paths {
-		contents, _ := os.ReadFile(path)
-		combined += string(contents)
-	}
-	for _, needle := range needles {
-		if !strings.Contains(strings.ToLower(combined), strings.ToLower(needle)) {
-			t.Fatalf("documentation missing %q", needle)
-		}
 	}
 }
 

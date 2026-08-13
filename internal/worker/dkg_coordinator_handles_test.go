@@ -488,7 +488,6 @@ type scriptedCoordinatorService struct {
 	acquireDeadlines      map[int]time.Time
 	acquireStarted        chan int
 	handleRuns            int
-	legacyRuns            int
 	activeRuns            int
 	runHandlesByParty     map[string]int
 	beginCount            int
@@ -591,13 +590,6 @@ func (s *scriptedCoordinatorService) RunDKGSessionWithPreParams(
 		}
 	}
 	return coretss.DKGOutput{KeyID: request.Session.KeyID}, nil
-}
-
-func (s *scriptedCoordinatorService) RunDKGSession(context.Context, coretss.DKGSessionRequest) (coretss.DKGOutput, error) {
-	s.mu.Lock()
-	s.legacyRuns++
-	s.mu.Unlock()
-	return coretss.DKGOutput{}, errors.New("legacy dkg path used")
 }
 
 func (s *scriptedCoordinatorService) WaitForAcquire(t *testing.T, want int) {
