@@ -1,7 +1,4 @@
-.PHONY: sync-contracts verify-contracts build-recovery-proof verify-recovery-proof verify-mpc-2of3
-
-sync-contracts:
-	./scripts/sync-contracts.sh
+.PHONY: verify-contracts build-recovery-proof verify-recovery-proof verify-mpc-2of3
 
 verify-contracts:
 	GOWORK=off go run ./cmd/mpc-contracts verify

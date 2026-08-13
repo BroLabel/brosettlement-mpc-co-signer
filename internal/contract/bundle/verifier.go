@@ -19,7 +19,6 @@ import (
 const (
 	signerBundleIdentity = "dRgKBw7Y392uHY7AkBj5dkahjKmwYcFYhjtYv62-5mA"
 	httpBundleIdentity   = "DfiDHjeT5xYiTN7ICY9XDAjHP9XioZYO4N2EAYaH5WQ"
-	backendSourceCommit  = "3932586337691e95ecbe6c6fb09df93babf73784"
 )
 
 var (
@@ -33,6 +32,7 @@ var (
 		"sign-terminal-failed-request.json", "terminal-completed-request.json", "terminal-failed-request.json",
 	}
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+	gitCommitPattern  = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	keyIDPattern      = regexp.MustCompile(`^mpc_key_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	messageIDPattern  = regexp.MustCompile(`^msg_[0-9a-f]{16}$`)
 	utcPattern        = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`)
@@ -87,7 +87,7 @@ func VerifyHTTPBundle(root string) (string, error) {
 		if err := decodeClosed(raw, &manifest, []string{"backendSourceCommit", "bundleVersion", "files"}); err != nil {
 			return err
 		}
-		if manifest.BundleVersion != 1 || manifest.BackendSourceCommit != backendSourceCommit {
+		if manifest.BundleVersion != 1 || !gitCommitPattern.MatchString(manifest.BackendSourceCommit) {
 			return fmt.Errorf("invalid HTTP manifest schema")
 		}
 		return verifyManifestEntries(root, manifest.Files, httpPaths)
