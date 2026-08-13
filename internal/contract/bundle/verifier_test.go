@@ -20,7 +20,7 @@ func TestVerifierAcceptsClosedProducerBundles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyHTTPBundle() error = %v", err)
 	}
-	if httpID != "DfiDHjeT5xYiTN7ICY9XDAjHP9XioZYO4N2EAYaH5WQ" {
+	if httpID != "On6HEeLx2VhbeA6d5070_gopkJdgDkdfwYSlrg1RLFY" {
 		t.Fatalf("HTTP identity = %q", httpID)
 	}
 }
@@ -131,6 +131,21 @@ func TestHTTPFixtureValidatorRejectsBadShapesAndStatuses(t *testing.T) {
 		"type-invalid SIGN claim threshold": func(t *testing.T, root string) {
 			mutateJSONFixture(t, root, "sign-claim-response.json", func(value map[string]any) {
 				value["payload"].(map[string]any)["threshold"] = "2"
+			})
+		},
+		"unbound SIGN policy context": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "sign-claim-response.json", func(value map[string]any) {
+				value["payload"].(map[string]any)["policyContext"].(map[string]any)["chain"] = "tron:nile"
+			})
+		},
+		"unknown SIGN policy context field": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "sign-claim-response.json", func(value map[string]any) {
+				value["payload"].(map[string]any)["policyContext"].(map[string]any)["unexpected"] = true
+			})
+		},
+		"invalid local SIGN timeout status": func(t *testing.T, root string) {
+			mutateJSONFixture(t, root, "sign-terminal-timed-out-local.json", func(value map[string]any) {
+				value["status"] = "FAILED"
 			})
 		},
 		"SIGN terminal uses DKG family": func(t *testing.T, root string) {

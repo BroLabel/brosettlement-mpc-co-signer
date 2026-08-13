@@ -3,6 +3,7 @@ package monolith
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
@@ -69,6 +70,49 @@ type IntentPayload struct {
 	DerivationContextHash string             `json:"derivationContextHash,omitempty"`
 	PartyID               string             `json:"partyId,omitempty"`
 	DerivationContext     *DerivationContext `json:"derivationContext,omitempty"`
+	PolicyContext         *SignPolicyContext `json:"policyContext,omitempty"`
+}
+
+// SignPolicyContext is the immutable transaction-policy snapshot authorized by
+// the backend for one SIGN intent. It is retained by the co-signer so claim
+// validation can bind the cryptographic request to the authorized chain and
+// source address.
+type SignPolicyContext struct {
+	AmountAtomic           string  `json:"amountAtomic"`
+	Asset                  string  `json:"asset"`
+	Chain                  string  `json:"chain"`
+	FeeLimitSun            *string `json:"feeLimitSun"`
+	FromAddress            string  `json:"fromAddress"`
+	ToAddress              string  `json:"toAddress"`
+	TokenContractCanonical *string `json:"tokenContractCanonical"`
+	TokenDecimals          *int64  `json:"tokenDecimals"`
+	TokenStandard          *string `json:"tokenStandard"`
+}
+
+func (c *SignPolicyContext) UnmarshalJSON(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	expected := []string{
+		"amountAtomic", "asset", "chain", "feeLimitSun", "fromAddress", "toAddress",
+		"tokenContractCanonical", "tokenDecimals", "tokenStandard",
+	}
+	if len(fields) != len(expected) {
+		return errors.New("SIGN policy context has invalid fields")
+	}
+	for _, name := range expected {
+		if _, ok := fields[name]; !ok {
+			return errors.New("SIGN policy context has invalid fields")
+		}
+	}
+	type wire SignPolicyContext
+	var decoded wire
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	*c = SignPolicyContext(decoded)
+	return nil
 }
 
 type OutboundFrame struct {

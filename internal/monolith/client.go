@@ -335,6 +335,13 @@ func validateSignClaimResult(claim ClaimResult) error {
 		payload.Chain != derivation.Chain || !strings.EqualFold(payload.Algorithm, derivation.Algorithm) || !strings.EqualFold(payload.Curve, derivation.Curve) {
 		return errors.New("SIGN claim derivation context mismatch")
 	}
+	policy := payload.PolicyContext
+	if policy == nil || policy.Asset == "" || policy.AmountAtomic == "" || policy.FromAddress == "" || policy.ToAddress == "" || policy.Chain == "" {
+		return errors.New("SIGN claim policy context is incomplete")
+	}
+	if policy.Chain != payload.Chain || policy.FromAddress != derivation.ExpectedAddress {
+		return errors.New("SIGN claim policy context mismatch")
+	}
 	return nil
 }
 

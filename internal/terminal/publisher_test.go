@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	fixtureIntentID  = "intent-123"
-	fixtureSessionID = "123e4567-e89b-42d3-a456-426614174123"
+	fixtureIntentID  = "30000000-0000-4000-8000-000000000003"
+	fixtureSessionID = "20000000-0000-4000-8000-000000000003"
 	fixtureKeyID     = "mpc_key_123e4567-e89b-42d3-a456-426614174002"
 )
 
@@ -262,7 +262,7 @@ func TestPublisherRejectsDuplicateAuthoritativeResponseFieldsWithSlowRetry(t *te
 	fields := []string{
 		`"outcome":"EXACT_REPLAY"`,
 		`"authoritativeStatus":"COMPLETED"`,
-		`"authoritativeResultFingerprint":"qQ-8-uXoRxlOUaJKqKRVlycQvqMwP6tNQ1bb6FDl7E0"`,
+		`"authoritativeResultFingerprint":"Odr9l-f5Mhyyx4FAe1Ll3et0e2_CUP3_5eEacrJoyaM"`,
 		`"httpStatus":200`,
 	}
 	for _, field := range fields {
@@ -344,7 +344,7 @@ func TestPublisherReturnsTypedConflictWithAuthoritativeWinner(t *testing.T) {
 	}
 	if outcome.Kind != OutcomeTerminalConflict ||
 		outcome.AuthoritativeStatus != mpc2of3.TerminalStatusFailed ||
-		outcome.AuthoritativeFingerprint.String() != "iFdDYnsaTdf44zp0M55qfYVIu_R2J7JhNVNfFWa0RbI" {
+		outcome.AuthoritativeFingerprint.String() != "UR9pYZ-wBq1yCmIE_ENhU4Gzl9W2-2nIBGUn24FJm5s" {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 	if alerts.count() != 1 {

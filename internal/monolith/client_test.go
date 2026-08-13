@@ -128,13 +128,13 @@ func TestClaimIntentDecodesDualPartyContractFixture(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	claim, err := client.ClaimIntent(context.Background(), "DKG", "intent-123")
+	claim, err := client.ClaimIntent(context.Background(), "DKG", "30000000-0000-4000-8000-000000000003")
 	if err != nil {
 		t.Fatalf("ClaimIntent() error = %v", err)
 	}
 	intent := claim.Intent()
 	if intent.Type != "DKG" ||
-		intent.SessionID != "123e4567-e89b-42d3-a456-426614174123" ||
+		intent.SessionID != "20000000-0000-4000-8000-000000000003" ||
 		intent.Payload.OrgID != "org-123" ||
 		intent.Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174002" ||
 		len(intent.Payload.DescriptorBytes) == 0 ||
@@ -154,10 +154,14 @@ func TestClaimIntentPreservesSignClaimReplayPayloadAndDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const (
+		intentID  = "30000000-0000-4000-8000-000000000005"
+		sessionID = "20000000-0000-4000-8000-000000000005"
+	)
 	requests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if r.URL.Path != "/api/v1/co-signer/intents/sign/intent-125/claim" {
+		if r.URL.Path != "/api/v1/co-signer/intents/sign/"+intentID+"/claim" {
 			t.Fatalf("request path = %q", r.URL.Path)
 		}
 		_, _ = w.Write(fixture)
@@ -165,23 +169,57 @@ func TestClaimIntentPreservesSignClaimReplayPayloadAndDeadline(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	first, err := client.ClaimIntent(context.Background(), "SIGN", "intent-125")
+	first, err := client.ClaimIntent(context.Background(), "SIGN", intentID)
 	if err != nil {
 		t.Fatalf("first ClaimIntent() error = %v", err)
 	}
-	second, err := client.ClaimIntent(context.Background(), "SIGN", "intent-125")
+	second, err := client.ClaimIntent(context.Background(), "SIGN", intentID)
 	if err != nil {
 		t.Fatalf("replay ClaimIntent() error = %v", err)
 	}
 	if requests != 2 || !reflect.DeepEqual(first, second) {
 		t.Fatalf("claim replay changed immutable response: first=%+v second=%+v requests=%d", first, second, requests)
 	}
-	if first.IntentID != "intent-125" || first.SessionID != "sign-125" || first.Type != "SIGN" || first.Status != "CLAIMED" ||
+	if first.IntentID != intentID || first.SessionID != sessionID || first.Type != "SIGN" || first.Status != "CLAIMED" ||
 		first.DeadlineRaw != "2026-07-30T00:00:00.000Z" ||
 		first.Payload.Type != "SIGN" || first.Payload.OrgID != "org-123" || first.Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174004" ||
 		!bytes.Equal(first.Payload.Digest, []byte{0xaa, 0xbb, 0xcc}) || !reflect.DeepEqual(first.Payload.Parties, []string{"mpc-signer", "co-signer-primary"}) ||
-		first.Payload.DerivationContext == nil || first.Payload.DerivationContext.FullPath != "m/44'/195'/0'/0/0" {
+		first.Payload.DerivationContext == nil || first.Payload.DerivationContext.FullPath != "m/44'/195'/0'/0/0" ||
+		first.Payload.PolicyContext == nil || first.Payload.PolicyContext.Asset != "TRX" || first.Payload.PolicyContext.AmountAtomic != "100" ||
+		first.Payload.PolicyContext.FromAddress != "TAddress" || first.Payload.PolicyContext.ToAddress != "TDestination" ||
+		first.Payload.PolicyContext.Chain != "tron:mainnet" || first.Payload.PolicyContext.TokenStandard != nil ||
+		first.Payload.PolicyContext.TokenContractCanonical != nil || first.Payload.PolicyContext.TokenDecimals != nil || first.Payload.PolicyContext.FeeLimitSun != nil {
 		t.Fatalf("unexpected SIGN claim = %+v", first)
+	}
+}
+
+func TestClaimIntentRejectsUnboundSignPolicyContext(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/sign-claim-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := bytes.Replace(fixture, []byte(`"chain":"tron:mainnet","feeLimitSun"`), []byte(`"chain":"tron:nile","feeLimitSun"`), 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(malformed) }))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	if _, err := client.ClaimIntent(context.Background(), "SIGN", "30000000-0000-4000-8000-000000000005"); err == nil {
+		t.Fatal("ClaimIntent() error = nil")
+	}
+}
+
+func TestClaimIntentRejectsUnknownSignPolicyContextField(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/sign-claim-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := bytes.Replace(fixture, []byte(`"amountAtomic":"100"`), []byte(`"amountAtomic":"100","unexpected":true`), 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(malformed) }))
+	defer srv.Close()
+
+	client, _ := newTestClient(t, srv.URL)
+	if _, err := client.ClaimIntent(context.Background(), "SIGN", "30000000-0000-4000-8000-000000000005"); err == nil {
+		t.Fatal("ClaimIntent() error = nil")
 	}
 }
 
@@ -250,8 +288,8 @@ func TestListActionableIntentsDecodesStrictBackendFixture(t *testing.T) {
 		t.Fatalf("len(OwnClaimedDKG) = %d, want 1", len(listing.OwnClaimedDKG))
 	}
 	claimed := listing.OwnClaimedDKG[0]
-	if claimed.IntentID != "intent-122" ||
-		claimed.SessionID != "123e4567-e89b-42d3-a456-426614174122" ||
+	if claimed.IntentID != "30000000-0000-4000-8000-000000000002" ||
+		claimed.SessionID != "20000000-0000-4000-8000-000000000002" ||
 		claimed.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174001" ||
 		claimed.Type != "DKG" ||
 		claimed.Status != "CLAIMED" ||
@@ -274,7 +312,7 @@ func TestListActionableIntentsDecodesStrictBackendFixture(t *testing.T) {
 		t.Fatalf("len(OwnClaimedSign) = %d, want 1", len(listing.OwnClaimedSign))
 	}
 	rediscovered := listing.OwnClaimedSign[0]
-	if rediscovered.IntentID != "intent-125" || rediscovered.SessionID != "sign-125" || rediscovered.Type != "SIGN" ||
+	if rediscovered.IntentID != "30000000-0000-4000-8000-000000000005" || rediscovered.SessionID != "20000000-0000-4000-8000-000000000005" || rediscovered.Type != "SIGN" ||
 		rediscovered.Status != "CLAIMED" ||
 		rediscovered.DeadlineRaw != "2026-07-30T00:00:00.000Z" || len(rediscovered.DescriptorBytes) != 0 {
 		t.Fatalf("unexpected own claimed SIGN = %+v", rediscovered)
@@ -299,11 +337,11 @@ func TestGetPendingIntentsExcludesOwnClaimedDKGFromStrictListing(t *testing.T) {
 	if len(pending) != 3 {
 		t.Fatalf("len(pending) = %d, want 3", len(pending))
 	}
-	if pending[0].IntentID != "intent-125" || pending[0].SessionID != "sign-125" || pending[0].Type != "SIGN" ||
+	if pending[0].IntentID != "30000000-0000-4000-8000-000000000005" || pending[0].SessionID != "20000000-0000-4000-8000-000000000005" || pending[0].Type != "SIGN" ||
 		pending[0].Payload.OrgID != "org-123" || pending[0].Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174004" ||
 		pending[0].ExpiresAt.Format(time.RFC3339Nano) != "2026-07-30T00:00:00Z" || len(pending[0].Payload.Digest) != 0 ||
-		pending[1].IntentID != "intent-123" || pending[1].Type != "DKG" ||
-		pending[2].IntentID != "intent-124" || pending[2].Type != "SIGN" {
+		pending[1].IntentID != "30000000-0000-4000-8000-000000000003" || pending[1].Type != "DKG" ||
+		pending[2].IntentID != "30000000-0000-4000-8000-000000000004" || pending[2].Type != "SIGN" {
 		t.Fatalf("pending = %+v, want own-claimed SIGN then backend pending collection", pending)
 	}
 	if pending[0].CreatedAt.IsZero() || pending[1].CreatedAt.IsZero() || pending[2].CreatedAt.IsZero() ||
@@ -499,17 +537,17 @@ func TestPostMessageAddsSigningAndIdempotencyHeaders(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	err = client.PostMessage(context.Background(), "123e4567-e89b-42d3-a456-426614174123", OutboundFrame{
+	err = client.PostMessage(context.Background(), "20000000-0000-4000-8000-000000000003", OutboundFrame{
 		AuthenticatedPartyID:  "co-signer-primary",
 		Broadcast:             false,
 		FromPartyID:           "co-signer-primary",
-		IntentID:              "intent-123",
+		IntentID:              "30000000-0000-4000-8000-000000000003",
 		MessageID:             "msg_0123456789abcdef",
 		OrgID:                 "org-123",
 		Payload:               []byte{0},
 		ProtocolSeq:           1,
 		Round:                 1,
-		SessionID:             "123e4567-e89b-42d3-a456-426614174123",
+		SessionID:             "20000000-0000-4000-8000-000000000003",
 		ToPartyID:             "mpc-signer",
 		DerivationContextHash: "must-not-be-an-extra-http-field",
 	})
@@ -797,6 +835,17 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 				"digestType":"transaction_hash",
 				"hashAlgorithm":"sha256",
 				"signingPayloadType":"ethereum_transaction",
+				"policyContext":{
+					"amountAtomic":"1",
+					"asset":"ETH",
+					"chain":"ethereum",
+					"feeLimitSun":null,
+					"fromAddress":"0x1234",
+					"toAddress":"0x5678",
+					"tokenContractCanonical":null,
+					"tokenDecimals":null,
+					"tokenStandard":null
+				},
 				"derivationContextHash":"context-hash",
 				"partyId":"co-signer",
 				"derivationContext":{
@@ -809,6 +858,7 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 					"accountPath":"m/44'/60'/0'",
 					"childPath":"/0/15",
 					"fullPath":"m/44'/60'/0'/0/15",
+					"expectedAddress":"0x1234",
 					"expectedPublicKey":"04abcdef",
 					"publicKeyFormat":"uncompressed_hex",
 					"descriptorVersion":7,
