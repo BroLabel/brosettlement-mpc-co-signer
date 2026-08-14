@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
@@ -20,7 +19,6 @@ type Config struct {
 	HTTPAddr                       string
 	PrimaryStore                   sharestore.StoreConfig
 	RecoveryStore                  sharestore.StoreConfig
-	StateDir                       string
 	LockPath                       string
 	FreeSpaceThresholdBytes        uint64
 	PreParamsGenerationParallelism int
@@ -90,17 +88,8 @@ func Load() (Config, error) {
 	if err := sharestore.ValidateStorePair(primaryStore, recoveryStore); err != nil {
 		return Config{}, fmt.Errorf("configure store pair: %w", err)
 	}
-
-	stateDir, err := absolutePath("CO_SIGNER_STATE_DIR", os.Getenv("CO_SIGNER_STATE_DIR"))
-	if err != nil {
-		return Config{}, err
-	}
-	lockPath, err := absolutePath("CO_SIGNER_LOCK_PATH", os.Getenv("CO_SIGNER_LOCK_PATH"))
-	if err != nil {
-		return Config{}, err
-	}
-	if !pathWithin(lockPath, stateDir) || lockPath == stateDir {
-		return Config{}, errors.New("CO_SIGNER_LOCK_PATH must be inside CO_SIGNER_STATE_DIR")
+	if os.Getenv("CO_SIGNER_STATE_DIR") != "" || os.Getenv("CO_SIGNER_LOCK_PATH") != "" {
+		return Config{}, errors.New("CO_SIGNER_STATE_DIR and CO_SIGNER_LOCK_PATH are unsupported; the lifetime lock is derived from the primary store")
 	}
 
 	cfg := Config{
@@ -110,8 +99,7 @@ func Load() (Config, error) {
 		HTTPAddr:                       httpAddr(),
 		PrimaryStore:                   primaryStore,
 		RecoveryStore:                  recoveryStore,
-		StateDir:                       stateDir,
-		LockPath:                       lockPath,
+		LockPath:                       filepath.Join(primaryStore.Directory(), ".co-signer.lock"),
 		FreeSpaceThresholdBytes:        freeSpaceThresholdBytes,
 		PreParamsGenerationParallelism: preParamsGenerationParallelism,
 		MaxConcurrent:                  maxConcurrent,
@@ -142,26 +130,6 @@ func Load() (Config, error) {
 	}
 
 	return cfg, nil
-}
-
-func absolutePath(name, value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", fmt.Errorf("%s is required", name)
-	}
-	path := filepath.Clean(value)
-	if !filepath.IsAbs(path) || path == string(filepath.Separator) {
-		return "", fmt.Errorf("%s must be a non-root absolute path", name)
-	}
-	return path, nil
-}
-
-func pathWithin(path, parent string) bool {
-	relative, err := filepath.Rel(parent, path)
-	if err != nil {
-		return false
-	}
-	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
 }
 
 func loadDotEnv() error {

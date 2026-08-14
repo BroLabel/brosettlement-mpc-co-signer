@@ -35,7 +35,7 @@ func TestLoadBuildsBoundPrimaryAndRecoveryStores(t *testing.T) {
 	if cfg.FreeSpaceThresholdBytes != 1<<20 {
 		t.Errorf("FreeSpaceThresholdBytes = %d, want %d", cfg.FreeSpaceThresholdBytes, 1<<20)
 	}
-	if got, want := cfg.LockPath, "/var/lib/co-signer/state/co-signer.lock"; got != want {
+	if got, want := cfg.LockPath, "/var/lib/co-signer/primary/.co-signer.lock"; got != want {
 		t.Errorf("LockPath = %q, want %q", got, want)
 	}
 }
@@ -78,17 +78,14 @@ func TestLoadRejectsZeroGenerationParallelism(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresLockPathInsideButNotEqualToStateDirectory(t *testing.T) {
-	for _, lockPath := range []string{
-		"/var/lib/co-signer/other/co-signer.lock",
-		"/var/lib/co-signer/state",
-	} {
-		t.Run(lockPath, func(t *testing.T) {
+func TestLoadRejectsObsoleteStateAndLockSettings(t *testing.T) {
+	for _, variable := range []string{"CO_SIGNER_STATE_DIR", "CO_SIGNER_LOCK_PATH"} {
+		t.Run(variable, func(t *testing.T) {
 			setRequiredEnv(t)
-			t.Setenv("CO_SIGNER_LOCK_PATH", lockPath)
+			t.Setenv(variable, "/obsolete")
 
 			if _, err := config.Load(); err == nil {
-				t.Fatal("Load() error = nil, want invalid lock path error")
+				t.Fatalf("Load() error = nil, want obsolete %s rejection", variable)
 			}
 		})
 	}
@@ -186,11 +183,11 @@ func setRequiredEnv(t *testing.T) {
 		"CO_SIGNER_API_PRIVATE_KEY":                  "cHJpdmF0ZS1rZXk=",
 		"CO_SIGNER_PRIMARY_SHARES_DIR":               "/var/lib/co-signer/primary",
 		"CO_SIGNER_RECOVERY_SHARES_DIR":              "/var/lib/co-signer/recovery",
-		"CO_SIGNER_STATE_DIR":                        "/var/lib/co-signer/state",
-		"CO_SIGNER_LOCK_PATH":                        "/var/lib/co-signer/state/co-signer.lock",
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY":             key,
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY_ID":          "keyref-1",
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY_REF":         "",
+		"CO_SIGNER_STATE_DIR":                        "",
+		"CO_SIGNER_LOCK_PATH":                        "",
 		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES":       "1048576",
 		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM": "2",
 		"CO_SIGNER_PARTY_ID":                         "",

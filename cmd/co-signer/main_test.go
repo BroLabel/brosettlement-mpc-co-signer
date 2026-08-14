@@ -43,10 +43,6 @@ func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T
 
 func TestCoSignerStartupPreservesEarlyCapabilityErrorWithoutPanic(t *testing.T) {
 	root := t.TempDir()
-	stateDir := filepath.Join(root, "state")
-	if err := os.Mkdir(stateDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	primaryTarget := filepath.Join(root, "primary-target")
 	if err := os.Mkdir(primaryTarget, 0o700); err != nil {
 		t.Fatal(err)
@@ -65,8 +61,6 @@ func TestCoSignerStartupPreservesEarlyCapabilityErrorWithoutPanic(t *testing.T) 
 		"CO_SIGNER_API_PRIVATE_KEY=" + privateKey,
 		"CO_SIGNER_PRIMARY_SHARES_DIR=" + primaryStore,
 		"CO_SIGNER_RECOVERY_SHARES_DIR=" + filepath.Join(root, "recovery"),
-		"CO_SIGNER_STATE_DIR=" + stateDir,
-		"CO_SIGNER_LOCK_PATH=" + filepath.Join(stateDir, "co-signer.lock"),
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY=" + base64.StdEncoding.EncodeToString(make([]byte, 32)),
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY_ID=keyref-1",
 		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES=1",
@@ -114,6 +108,9 @@ func TestArtifactInventoryExportsAggregateOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, ".artifact.tmp-1"), []byte("tmp"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".co-signer.lock"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	files, temporary, bytes, _, err := artifactInventory([]string{dir})

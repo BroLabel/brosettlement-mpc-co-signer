@@ -84,6 +84,9 @@ func artifactInventory(directories []string) (files, temporary, bytes uint64, ol
 				return 0, 0, 0, 0, err
 			}
 			name := filepath.Base(entry.Name())
+			if name == ".co-signer.lock" {
+				continue
+			}
 			if strings.HasPrefix(name, ".") {
 				temporary++
 				continue

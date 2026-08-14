@@ -80,11 +80,12 @@ whose decoded length is not exactly 32 bytes; it never derives an encryption key
 by hashing a passphrase.
 
 Operators must preserve the original encryption key, key reference, primary
-artifact directory, recovery artifact directory, and stable state/lock path.
+artifact directory, and recovery artifact directory. The process lifetime lock
+has the fixed path `<primary artifact directory>/.co-signer.lock`.
 Changing the key or key reference while artifacts remain live makes recovery
 unsafe. There is no rotation, re-encryption, or old-key lookup in v1. A local
 filesystem lock is process fencing for exactly one replica and one local
-writable state filesystem shared by B/C; it is not cross-host or distributed
+writable artifact topology shared by B/C; it is not cross-host or distributed
 fencing. Upgrades require no overlap between old and new writable processes.
 
 The co-signer host is a quorum-bearing trust domain. Compromise of that host,

@@ -13,21 +13,23 @@ Runtime model:
 
 The co-signer has two fixed local store profiles and is scoped by the
 authenticated organization on every backend request. Legacy
-`CO_SIGNER_PARTY_ID` and `CO_SIGNER_SHARES_DIR` settings are unsupported; if
-either is set, configuration validation rejects startup. The primary and
-recovery party IDs are fixed by the store purpose; configure their directories
-below.
+`CO_SIGNER_PARTY_ID`, `CO_SIGNER_SHARES_DIR`, `CO_SIGNER_STATE_DIR`, and
+`CO_SIGNER_LOCK_PATH` settings are unsupported; if any is set, configuration
+validation rejects startup. The primary and recovery party IDs are fixed by the
+store purpose; configure their directories below.
 
 | Variable | Required value |
 | --- | --- |
 | `CO_SIGNER_PRIMARY_SHARES_DIR` | Absolute pre-existing private primary-store directory. |
 | `CO_SIGNER_RECOVERY_SHARES_DIR` | Absolute pre-existing private recovery-store directory that does not equal or overlap the primary directory. |
-| `CO_SIGNER_STATE_DIR` | Absolute persistent state directory. |
-| `CO_SIGNER_LOCK_PATH` | Absolute stable lock-file path inside `CO_SIGNER_STATE_DIR`. |
 | `CO_SIGNER_SHARE_ENCRYPTION_KEY` | Canonical padded standard-base64 encoding of exactly 32 bytes. |
 | `CO_SIGNER_SHARE_ENCRYPTION_KEY_ID` | Stable printable-ASCII identifier (1–255 bytes) for that same non-secret key reference. |
 | `CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES` | Explicit minimum free-space threshold for provisioning. |
 | `CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM` | Explicit positive preparams generation parallelism. |
+
+The process lifetime lock is always stored at
+`<CO_SIGNER_PRIMARY_SHARES_DIR>/.co-signer.lock`; it is not independently
+configurable.
 
 The primary and recovery profiles use one in-memory key provider and the same
 key reference. The raw encryption key is never logged or returned by a store

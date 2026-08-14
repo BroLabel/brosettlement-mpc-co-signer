@@ -2,13 +2,13 @@
 
 ## Supported topology and stop conditions
 
-Operate exactly one co-signer replica on Linux. The primary, recovery, and
-state directories must be pre-created with private permissions on the intended
-local writable filesystem. The stable lock path must be inside the state
-directory. The advisory lock is local-filesystem fencing only; cross-host,
-shared-NFS, and active-active operation are unsupported.
-It is not distributed fencing. Run with no overlap and one writable local
-state topology.
+Operate exactly one co-signer replica on Linux. The primary and recovery
+directories must be pre-created with private permissions on the intended local
+writable filesystem. The process uses the fixed lifetime-lock path
+`<primary directory>/.co-signer.lock`. The advisory lock is local-filesystem
+fencing only; cross-host, shared-NFS, and active-active operation are
+unsupported. It is not distributed fencing. Run with no overlap and one
+writable local artifact topology.
 
 Keep provisioning closed and do not start a replacement process when any of
 the following is true:

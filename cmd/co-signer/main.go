@@ -297,7 +297,7 @@ func openApplicationResources(
 		provisioningReady: provisioningReady,
 		signingReady:      signingReady,
 	}
-	resources.healthServer = newApplicationHealthServer(cfg.HTTPAddr, cfg.StateDir, readiness, resources)
+	resources.healthServer = newApplicationHealthServer(cfg.HTTPAddr, cfg.PrimaryStore.Directory(), readiness, resources)
 	if preParamsCapabilityErr == nil {
 		resources.startBackground(func() { preParamsController.Run(ctx) })
 	}
@@ -306,7 +306,7 @@ func openApplicationResources(
 
 func newApplicationHealthServer(
 	addr,
-	stateDir string,
+	primarySharesDir string,
 	readiness *health.Readiness,
 	resources *applicationResources,
 ) *http.Server {
@@ -314,7 +314,7 @@ func newApplicationHealthServer(
 		Addr: addr,
 		Handler: health.NewLifecycleHandlerWithReadinessProbes(
 			version,
-			stateDir,
+			primarySharesDir,
 			readiness,
 			resources.signingReady,
 			resources.provisioningReady,
