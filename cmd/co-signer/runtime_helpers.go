@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,9 +10,105 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 )
+
+type artifactCapabilityProber interface {
+	ProbePublishCapability(context.Context) error
+}
+
+type admissionHinter interface {
+	AdmissionHint() bool
+}
+
+type freeSpaceReader func(path string) (uint64, error)
+
+func probeArtifactStores(ctx context.Context, primary, recovery artifactCapabilityProber) error {
+	if primary == nil || recovery == nil {
+		return errors.New("both artifact store capabilities are required")
+	}
+	if err := primary.ProbePublishCapability(ctx); err != nil {
+		return fmt.Errorf("primary artifact store capability: %w", err)
+	}
+	if err := recovery.ProbePublishCapability(ctx); err != nil {
+		return fmt.Errorf("recovery artifact store capability: %w", err)
+	}
+	return nil
+}
+
+func dkgProvisioningAdmissionHint(
+	preparams admissionHinter,
+	artifactDirectories []string,
+	freeSpaceThreshold uint64,
+	freeSpace freeSpaceReader,
+) bool {
+	files, temporary, bytes, oldest, inventoryErr := artifactInventory(artifactDirectories)
+	if inventoryErr == nil {
+		metrics.ObserveArtifactInventory(float64(files), float64(temporary), float64(bytes), oldest, 0)
+	}
+	if preparams == nil || !preparams.AdmissionHint() || freeSpaceThreshold == 0 || freeSpace == nil {
+		return false
+	}
+	for _, directory := range artifactDirectories {
+		available, err := freeSpace(directory)
+		if err == nil {
+			metrics.ObserveArtifactInventory(float64(files), float64(temporary), float64(bytes), oldest, float64(available))
+		}
+		if err != nil || available < freeSpaceThreshold {
+			return false
+		}
+	}
+	return true
+}
+
+// artifactInventory deliberately observes only aggregate filesystem shape. It
+// does not decrypt, open, classify terminal state, or return a file name/key ID.
+func artifactInventory(directories []string) (files, temporary, bytes uint64, oldestAge float64, returnErr error) {
+	now := time.Now()
+	var oldest time.Time
+	for _, directory := range directories {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			return 0, 0, 0, 0, err
+		}
+		for _, entry := range entries {
+			info, err := entry.Info()
+			if err != nil {
+				return 0, 0, 0, 0, err
+			}
+			name := filepath.Base(entry.Name())
+			if name == ".co-signer.lock" {
+				continue
+			}
+			if strings.HasPrefix(name, ".") {
+				temporary++
+				continue
+			}
+			if !info.Mode().IsRegular() || (!strings.HasSuffix(name, ".primary.json") && !strings.HasSuffix(name, ".recovery.json")) {
+				continue
+			}
+			files++
+			bytes += uint64(info.Size())
+			if oldest.IsZero() || info.ModTime().Before(oldest) {
+				oldest = info.ModTime()
+			}
+		}
+	}
+	if !oldest.IsZero() {
+		oldestAge = now.Sub(oldest).Seconds()
+		if oldestAge < 0 {
+			oldestAge = 0
+		}
+	}
+	return files, temporary, bytes, oldestAge, nil
+}
 
 func decodePrivateKey(raw string) (ed25519.PrivateKey, error) {
 	trimmed := strings.TrimSpace(raw)
@@ -59,16 +154,22 @@ func normalizePEMEnv(raw string) string {
 	return raw
 }
 
-func shareEncryptionKey(secret string) []byte {
-	sum := sha256.Sum256([]byte(secret))
-	return sum[:]
-}
-
-func serveHealth(log *slog.Logger, srv *http.Server) {
-	log.Info("health server listening", "addr", srv.Addr)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+func serveHealthListener(log *slog.Logger, srv *http.Server, listener net.Listener) {
+	log.Info("health server listening", "addr", listener.Addr().String())
+	if err := srv.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Error("health server stopped", "err", err)
 	}
+}
+
+type staticInspectionPreflight struct {
+	err error
+}
+
+func (p staticInspectionPreflight) Check(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return p.err
 }
 
 func drainWorkers(ctx context.Context, sem chan struct{}) error {

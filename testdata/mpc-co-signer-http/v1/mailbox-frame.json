@@ -1,0 +1,1 @@
+{"authenticatedPartyId":"co-signer-primary","broadcast":false,"fromPartyId":"co-signer-primary","intentId":"30000000-0000-4000-8000-000000000003","messageId":"msg_0123456789abcdef","orgId":"org-123","payload":"AA==","protocolSeq":1,"round":1,"sessionId":"20000000-0000-4000-8000-000000000003","toPartyId":"mpc-signer"}

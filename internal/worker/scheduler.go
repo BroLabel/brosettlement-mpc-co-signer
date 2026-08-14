@@ -3,39 +3,54 @@ package worker
 import (
 	"context"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 )
 
 type pendingClient interface {
 	GetPendingIntents(ctx context.Context) ([]monolith.Intent, error)
-	ClaimIntent(ctx context.Context, intentID string) (monolith.ClaimResult, error)
+	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
 	PostResult(ctx context.Context, intentID string, result monolith.IntentResult) error
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
 	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)
 }
 
 type SchedulerConfig struct {
-	MinInterval   time.Duration
-	MaxInterval   time.Duration
-	BackoffFactor float64
+	MinInterval        time.Duration
+	MaxInterval        time.Duration
+	BackoffFactor      float64
+	ProvisioningHint   func() bool
+	PreparamsHint      func() bool
+	ProvisioningWakeup <-chan struct{}
+	TerminalPublisher  DKGTerminalPublisher
+	Now                func() time.Time
 }
+
+type sessionLauncher func(context.Context, monolith.Intent, *jobPermitLease) <-chan struct{}
 
 type Scheduler struct {
 	client            pendingClient
-	runner            sessionRunner
+	signRunner        signSessionRunner
+	dkgRunner         dkgExecutor
 	localPartyID      string
 	framePollInterval time.Duration
-	sem               chan struct{}
+	permits           *schedulerPermits
 	repollCh          chan struct{}
 	cfg               SchedulerConfig
 	log               *slog.Logger
+	dkgAdmissionOpen  atomic.Bool
+	launch            sessionLauncher
+	forwardWakeups    func(context.Context)
 }
 
 func NewScheduler(
 	client pendingClient,
-	runner sessionRunner,
+	signRunner signSessionRunner,
+	dkgRunner dkgExecutor,
 	localPartyID string,
 	framePollInterval time.Duration,
 	cfg SchedulerConfig,
@@ -48,19 +63,38 @@ func NewScheduler(
 	if maxConcurrent <= 0 {
 		maxConcurrent = 1
 	}
-	return &Scheduler{
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	repollCh := make(chan struct{}, 1)
+	scheduler := &Scheduler{
 		client:            client,
-		runner:            runner,
+		signRunner:        signRunner,
+		dkgRunner:         dkgRunner,
 		localPartyID:      localPartyID,
 		framePollInterval: framePollInterval,
-		sem:               make(chan struct{}, maxConcurrent),
-		repollCh:          make(chan struct{}, 1),
+		permits:           newSchedulerPermits(maxConcurrent, repollCh),
+		repollCh:          repollCh,
 		cfg:               cfg,
 		log:               log,
 	}
+	scheduler.launch = scheduler.launchSession
+	scheduler.forwardWakeups = scheduler.forwardProvisioningWakeups
+	metrics.SetDKGAdmission(false)
+	metrics.SetDKGGuard(false)
+	return scheduler
 }
 
 func (s *Scheduler) Run(ctx context.Context) {
+	var children sync.WaitGroup
+	if s.forwardWakeups != nil {
+		children.Add(1)
+		go func() {
+			defer children.Done()
+			s.forwardWakeups(ctx)
+		}()
+	}
+	defer children.Wait()
 	backoff := s.cfg.MinInterval
 
 	for {
@@ -84,31 +118,165 @@ func (s *Scheduler) Run(ctx context.Context) {
 		}
 
 		backoff = s.cfg.MinInterval
-	dispatch:
-		for _, intent := range intents {
-			select {
-			case s.sem <- struct{}{}:
-				intent := intent
-				go RunSession(
-					ctx,
-					intent,
-					s.client,
-					s.runner,
-					s.localPartyID,
-					s.framePollInterval,
-					s.sem,
-					s.repollCh,
-					s.log,
-				)
-			default:
-				break dispatch
+		s.dispatchBatch(ctx, intents)
+	}
+}
+
+func (s *Scheduler) Semaphore() chan struct{} {
+	if s == nil || s.permits == nil || s.permits.general == nil {
+		return nil
+	}
+	return s.permits.general.slots
+}
+
+func (s *Scheduler) SetDKGAdmissionOpen(open bool) {
+	if s == nil {
+		return
+	}
+	s.dkgAdmissionOpen.Store(open)
+	metrics.SetDKGAdmission(open)
+	if open {
+		s.Wake()
+	}
+}
+
+func (s *Scheduler) DKGAdmissionOpen() bool {
+	return s != nil && s.dkgAdmissionOpen.Load()
+}
+
+func (s *Scheduler) Wake() {
+	if s == nil {
+		return
+	}
+	select {
+	case s.repollCh <- struct{}{}:
+	default:
+	}
+}
+
+func (s *Scheduler) forwardProvisioningWakeups(ctx context.Context) {
+	if s == nil || s.cfg.ProvisioningWakeup == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case _, ok := <-s.cfg.ProvisioningWakeup:
+			if !ok {
+				return
+			}
+			s.Wake()
+		}
+	}
+}
+
+func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent) {
+	var dkg, sign float64
+	for _, intent := range intents {
+		if kind, ok := classifyIntentKind(intent.Type); ok && kind == intentKindDKG {
+			dkg++
+		} else if ok {
+			sign++
+		}
+	}
+	now := s.cfg.Now()
+	metrics.ObservePending("DKG", oldestPendingAge(intents, intentKindDKG, now), dkg)
+	metrics.ObservePending("SIGN", oldestPendingAge(intents, intentKindSIGN, now), sign)
+	dkgConsidered := false
+	for _, intent := range intents {
+		kind, ok := classifyIntentKind(intent.Type)
+		if !ok {
+			s.log.Error("unsupported pending intent type")
+			continue
+		}
+		switch kind {
+		case intentKindDKG:
+			if dkgConsidered {
+				continue
+			}
+			dkgConsidered = true
+			if !s.DKGAdmissionOpen() {
+				continue
+			}
+			if !s.provisioningReady() {
+				if s.cfg.PreparamsHint != nil && !s.cfg.PreparamsHint() {
+					metrics.ObserveDKGSkippedPreparams()
+				}
+				continue
+			}
+			permits := s.permits.tryAcquireDKG()
+			if permits == nil {
+				continue
+			}
+			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits)) {
+				return
+			}
+		case intentKindSIGN:
+			permits := s.permits.tryAcquireSIGN()
+			if permits == nil {
+				continue
+			}
+			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits)) {
+				return
 			}
 		}
 	}
 }
 
-func (s *Scheduler) Semaphore() chan struct{} {
-	return s.sem
+func oldestPendingAge(intents []monolith.Intent, want intentKind, now time.Time) float64 {
+	var oldest time.Time
+	for _, intent := range intents {
+		kind, ok := classifyIntentKind(intent.Type)
+		if !ok || kind != want || intent.CreatedAt.IsZero() {
+			continue
+		}
+		if oldest.IsZero() || intent.CreatedAt.Before(oldest) {
+			oldest = intent.CreatedAt
+		}
+	}
+	if oldest.IsZero() {
+		return 0
+	}
+	age := now.Sub(oldest).Seconds()
+	if age < 0 {
+		return 0
+	}
+	return age
+}
+
+func waitForClaimDispatch(ctx context.Context, dispatched <-chan struct{}) bool {
+	if dispatched == nil {
+		return true
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-dispatched:
+		return true
+	}
+}
+
+func (s *Scheduler) provisioningReady() bool {
+	return s.cfg.ProvisioningHint == nil || s.cfg.ProvisioningHint()
+}
+
+func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, permits *jobPermitLease) <-chan struct{} {
+	claimDispatched := make(chan struct{})
+	go runSessionWithPermits(
+		ctx,
+		intent,
+		s.client,
+		s.signRunner,
+		s.dkgRunner,
+		s.cfg.TerminalPublisher,
+		s.localPartyID,
+		s.framePollInterval,
+		permits,
+		s.log,
+		func() { close(claimDispatched) },
+	)
+	return claimDispatched
 }
 
 func nextBackoff(current time.Duration, cfg SchedulerConfig) time.Duration {
