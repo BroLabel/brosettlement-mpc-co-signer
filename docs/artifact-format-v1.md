@@ -49,16 +49,18 @@ base64urlNoPad(SHA-256(exact final artifact bytes))`; `terminalResultFingerprint
 `chainCodeHash = base64urlNoPad(SHA-256(raw 32-byte chain code))`.
 
 The exact final bytes are the artifact fingerprint. Publication uses a private
-`0600` temporary file, file sync, Linux `renameat2(RENAME_NOREPLACE)`, parent
+`0600` temporary file, file sync, create-only rename (Linux
+`renameat2(RENAME_NOREPLACE)` or macOS `renamex_np(RENAME_EXCL)`), parent
 directory sync, no-follow readback, decrypt, and strict inspection. Existing
-final paths are never replaced or adopted.
+final paths are never replaced or adopted. macOS file publication additionally
+uses `F_FULLFSYNC` before the create-only rename.
 
 Readers bound the envelope to 16 MiB, ciphertext plus tag to 12 MiB, and
 plaintext/share blob to 8 MiB before allocation/decode. They verify the final
 path is a no-follow regular file, decode the closed envelope, decrypt, parse
 the exact descriptor, check session/key/party/purpose bindings, inspect the
 codec blob, and compare public-key and chain-code evidence. Publication follows
-write, file `fsync`, close, `RENAME_NOREPLACE`, directory `fsync`, no-follow
+write, file sync, close, create-only rename, directory `fsync`, no-follow
 readback, decrypt, and inspect. These operations never decrypt or classify
 unaddressed inventory files.
 

@@ -37,6 +37,10 @@ configuration object. Configure and back up the original key and its key
 reference for the lifetime of every v1 artifact; there is no passphrase hashing
 or automatic key rotation.
 
+Immutable artifact publication is supported natively on Linux and macOS.
+Production operations remain Linux-only as described by the recovery runbook;
+macOS support is intended for local development and verification.
+
 ## Recovery artifacts
 
 Run exactly one active co-signer installation per organization. A second
