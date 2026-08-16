@@ -24,8 +24,8 @@ store purpose; configure their directories below.
 | `CO_SIGNER_RECOVERY_SHARES_DIR` | Absolute pre-existing private recovery-store directory that does not equal or overlap the primary directory. |
 | `CO_SIGNER_SHARE_ENCRYPTION_KEY` | Canonical padded standard-base64 encoding of exactly 32 bytes. |
 | `CO_SIGNER_SHARE_ENCRYPTION_KEY_ID` | Stable printable-ASCII identifier (1–255 bytes) for that same non-secret key reference. |
-| `CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES` | Explicit minimum free-space threshold for provisioning. |
-| `CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM` | Explicit positive preparams generation parallelism. |
+| `CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES` | Optional minimum free-space threshold for provisioning; defaults to `1073741824` (1 GiB). |
+| `CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM` | Optional positive preparams generation parallelism; defaults to `2`. |
 
 The process lifetime lock is always stored at
 `<CO_SIGNER_PRIMARY_SHARES_DIR>/.co-signer.lock`; it is not independently

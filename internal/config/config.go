@@ -12,6 +12,11 @@ import (
 	"github.com/joho/godotenv"
 )
 
+const (
+	defaultFreeSpaceThresholdBytes        = uint64(1 << 30)
+	defaultPreParamsGenerationParallelism = 2
+)
+
 type Config struct {
 	MonolithURL                    string
 	APIKeyID                       string
@@ -60,11 +65,14 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	freeSpaceThresholdBytes, err := requiredPositiveUint64("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES")
+	freeSpaceThresholdBytes, err := envUint64("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES", defaultFreeSpaceThresholdBytes)
 	if err != nil {
 		return Config{}, err
 	}
-	preParamsGenerationParallelism, err := requiredInt("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM")
+	if freeSpaceThresholdBytes == 0 {
+		return Config{}, errors.New("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES must be > 0")
+	}
+	preParamsGenerationParallelism, err := envInt("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM", defaultPreParamsGenerationParallelism)
 	if err != nil {
 		return Config{}, err
 	}
@@ -173,31 +181,6 @@ func envUint64(key string, fallback uint64) (uint64, error) {
 		return 0, fmt.Errorf("%s must be an unsigned integer: %w", key, err)
 	}
 	return parsed, nil
-}
-
-func requiredInt(key string) (int, error) {
-	if os.Getenv(key) == "" {
-		return 0, fmt.Errorf("%s is required", key)
-	}
-	return envInt(key, 0)
-}
-
-func requiredUint64(key string) (uint64, error) {
-	if os.Getenv(key) == "" {
-		return 0, fmt.Errorf("%s is required", key)
-	}
-	return envUint64(key, 0)
-}
-
-func requiredPositiveUint64(key string) (uint64, error) {
-	value, err := requiredUint64(key)
-	if err != nil {
-		return 0, err
-	}
-	if value == 0 {
-		return 0, fmt.Errorf("%s must be > 0", key)
-	}
-	return value, nil
 }
 
 func envFloat(key string, fallback float64) (float64, error) {
