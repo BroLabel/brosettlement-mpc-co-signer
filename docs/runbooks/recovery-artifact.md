@@ -36,14 +36,14 @@ terminal publisher and pre-parameter generator, close stores, and only then let
 the process release the lock. If drain is stuck, terminate the old process and
 wait for the OS to release its file descriptor before restarting.
 
-## Filesystem capability and capacity incidents
+## Filesystem capability incidents
 
 Do not replace a missing mount by creating local directories. Restore the
 intended volume and its private ownership/permissions, then restart so startup
-capability checks run again. Low free space closes new DKG admission but must
-not trigger automatic artifact deletion. Observe file count, total bytes, free
-space, temporary-file count, and oldest-file age without logging paths or key
-identifiers.
+capability checks run again. Observe file count, total bytes, free space,
+temporary-file count, and oldest-file age without logging paths or key
+identifiers. Free-space telemetry is observational and does not close DKG
+admission or trigger automatic artifact deletion.
 
 Temporary or unclassified files are not authoritative evidence of an orphan.
 Never move, overwrite, decrypt, classify, or delete them solely by age or
@@ -111,7 +111,7 @@ unexpected byte mutation.
 - Missing or corrupt recovery C after activation does not disable A+B signing.
   It removes the customer's recovery capability and requires a custody alert;
   backend key state remains `ACTIVE`.
-- Recovery-store, free-space, or pre-parameter failure closes
+- Recovery-store or pre-parameter failure closes
   `provisioningReady` only. Do not report signing unavailable unless its own
   dependencies fail.
 
