@@ -63,7 +63,6 @@ func TestCoSignerStartupPreservesEarlyCapabilityErrorWithoutPanic(t *testing.T) 
 		"CO_SIGNER_RECOVERY_SHARES_DIR=" + filepath.Join(root, "recovery"),
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY=" + base64.StdEncoding.EncodeToString(make([]byte, 32)),
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY_ID=keyref-1",
-		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES=1",
 		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM=1",
 	}...)
 
@@ -164,88 +163,30 @@ func (p *stubArtifactCapabilityProber) ProbePublishCapability(context.Context) e
 	return p.err
 }
 
-func TestDKGProvisioningAdmissionHintRequiresPreParamsAndDiskCapacity(t *testing.T) {
+func TestDKGProvisioningAdmissionHintDependsOnlyOnPreParams(t *testing.T) {
 	tests := []struct {
 		name           string
 		preparamsReady bool
-		freeBytes      map[string]uint64
-		freeErr        map[string]error
 		want           bool
-		wantDiskCalls  int
 	}{
 		{
-			name:           "ready at threshold",
+			name:           "ready",
 			preparamsReady: true,
-			freeBytes: map[string]uint64{
-				"/primary":  100,
-				"/recovery": 100,
-			},
-			want:          true,
-			wantDiskCalls: 2,
+			want:           true,
 		},
 		{
-			name:           "preparams unavailable skips disk probe",
+			name:           "preparams unavailable",
 			preparamsReady: false,
 			want:           false,
-			wantDiskCalls:  0,
-		},
-		{
-			name:           "primary disk low",
-			preparamsReady: true,
-			freeBytes: map[string]uint64{
-				"/primary":  99,
-				"/recovery": 100,
-			},
-			want:          false,
-			wantDiskCalls: 1,
-		},
-		{
-			name:           "recovery disk low",
-			preparamsReady: true,
-			freeBytes: map[string]uint64{
-				"/primary":  100,
-				"/recovery": 99,
-			},
-			want:          false,
-			wantDiskCalls: 2,
-		},
-		{
-			name:           "disk capability error",
-			preparamsReady: true,
-			freeBytes: map[string]uint64{
-				"/primary": 100,
-			},
-			freeErr: map[string]error{
-				"/recovery": errors.New("statfs unavailable"),
-			},
-			want:          false,
-			wantDiskCalls: 2,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			preparams := stubAdmissionHinter{ready: tt.preparamsReady}
-			diskCalls := 0
-			freeSpace := func(path string) (uint64, error) {
-				diskCalls++
-				if err := tt.freeErr[path]; err != nil {
-					return 0, err
-				}
-				return tt.freeBytes[path], nil
-			}
-
-			got := dkgProvisioningAdmissionHint(
-				preparams,
-				[]string{"/primary", "/recovery"},
-				100,
-				freeSpace,
-			)
+			got := dkgProvisioningAdmissionHint(preparams)
 			if got != tt.want {
 				t.Fatalf("dkgProvisioningAdmissionHint() = %v, want %v", got, tt.want)
-			}
-			if diskCalls != tt.wantDiskCalls {
-				t.Fatalf("disk calls = %d, want %d", diskCalls, tt.wantDiskCalls)
 			}
 		})
 	}

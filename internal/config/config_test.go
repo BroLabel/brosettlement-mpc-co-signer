@@ -32,41 +32,30 @@ func TestLoadBuildsBoundPrimaryAndRecoveryStores(t *testing.T) {
 	if cfg.PreParamsGenerationParallelism != 2 {
 		t.Errorf("PreParamsGenerationParallelism = %d, want 2", cfg.PreParamsGenerationParallelism)
 	}
-	if cfg.FreeSpaceThresholdBytes != 1<<20 {
-		t.Errorf("FreeSpaceThresholdBytes = %d, want %d", cfg.FreeSpaceThresholdBytes, 1<<20)
-	}
 	if got, want := cfg.LockPath, "/var/lib/co-signer/primary/.co-signer.lock"; got != want {
 		t.Errorf("LockPath = %q, want %q", got, want)
 	}
 }
 
-func TestLoadUsesProvisioningCapacityDefaults(t *testing.T) {
+func TestLoadUsesPreParamsGenerationDefault(t *testing.T) {
 	setRequiredEnv(t)
-	t.Setenv("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES", "")
 	t.Setenv("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM", "")
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if got, want := cfg.FreeSpaceThresholdBytes, uint64(1<<30); got != want {
-		t.Errorf("FreeSpaceThresholdBytes = %d, want %d", got, want)
-	}
 	if got, want := cfg.PreParamsGenerationParallelism, 2; got != want {
 		t.Errorf("PreParamsGenerationParallelism = %d, want %d", got, want)
 	}
 }
 
-func TestLoadRejectsNonPositiveOrInvalidFreeSpaceThreshold(t *testing.T) {
-	for _, value := range []string{"0", "-1", "18446744073709551616"} {
-		t.Run(value, func(t *testing.T) {
-			setRequiredEnv(t)
-			t.Setenv("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES", value)
+func TestLoadIgnoresRemovedFreeSpaceThreshold(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES", "not-a-number")
 
-			if _, err := config.Load(); err == nil {
-				t.Fatal("Load() error = nil, want free-space threshold rejection")
-			}
-		})
+	if _, err := config.Load(); err != nil {
+		t.Fatalf("Load() error = %v, want removed free-space setting ignored", err)
 	}
 }
 
@@ -189,7 +178,6 @@ func setRequiredEnv(t *testing.T) {
 		"CO_SIGNER_SHARE_ENCRYPTION_KEY_REF":         "",
 		"CO_SIGNER_STATE_DIR":                        "",
 		"CO_SIGNER_LOCK_PATH":                        "",
-		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES":       "1048576",
 		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM": "2",
 		"CO_SIGNER_PARTY_ID":                         "",
 		"CO_SIGNER_SHARES_DIR":                       "",

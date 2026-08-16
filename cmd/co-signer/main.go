@@ -262,13 +262,10 @@ func openApplicationResources(
 	if err != nil {
 		return nil, err
 	}
+	artifactDirectories := []string{cfg.PrimaryStore.Directory(), cfg.RecoveryStore.Directory()}
 	provisioningReady := func() bool {
-		return provisioningCapabilityErr == nil && dkgProvisioningAdmissionHint(
-			preParamsController,
-			[]string{cfg.PrimaryStore.Directory(), cfg.RecoveryStore.Directory()},
-			cfg.FreeSpaceThresholdBytes,
-			filesystemFreeBytes,
-		)
+		observeArtifactCapacity(artifactDirectories, filesystemFreeBytes)
+		return provisioningCapabilityErr == nil && dkgProvisioningAdmissionHint(preParamsController)
 	}
 	signingReady := func() bool { return primaryReader.ProbeReadCapability() == nil }
 	scheduler := worker.NewScheduler(

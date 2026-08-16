@@ -5,5 +5,5 @@ package main
 import "errors"
 
 func filesystemFreeBytes(string) (uint64, error) {
-	return 0, errors.New("filesystem free-space admission is unsupported on this platform")
+	return 0, errors.New("filesystem free-space observation is unsupported on this platform")
 }

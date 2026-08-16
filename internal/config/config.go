@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	defaultFreeSpaceThresholdBytes        = uint64(1 << 30)
 	defaultPreParamsGenerationParallelism = 2
 )
 
@@ -25,7 +24,6 @@ type Config struct {
 	PrimaryStore                   sharestore.StoreConfig
 	RecoveryStore                  sharestore.StoreConfig
 	LockPath                       string
-	FreeSpaceThresholdBytes        uint64
 	PreParamsGenerationParallelism int
 	MaxConcurrent                  int
 	PollMinInterval                time.Duration
@@ -65,13 +63,6 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	freeSpaceThresholdBytes, err := envUint64("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES", defaultFreeSpaceThresholdBytes)
-	if err != nil {
-		return Config{}, err
-	}
-	if freeSpaceThresholdBytes == 0 {
-		return Config{}, errors.New("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES must be > 0")
-	}
 	preParamsGenerationParallelism, err := envInt("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM", defaultPreParamsGenerationParallelism)
 	if err != nil {
 		return Config{}, err
@@ -108,7 +99,6 @@ func Load() (Config, error) {
 		PrimaryStore:                   primaryStore,
 		RecoveryStore:                  recoveryStore,
 		LockPath:                       filepath.Join(primaryStore.Directory(), ".co-signer.lock"),
-		FreeSpaceThresholdBytes:        freeSpaceThresholdBytes,
 		PreParamsGenerationParallelism: preParamsGenerationParallelism,
 		MaxConcurrent:                  maxConcurrent,
 		PollMinInterval:                pollMinInterval,
@@ -168,18 +158,6 @@ func envInt(key string, fallback int) (int, error) {
 		return 0, fmt.Errorf("%s must be int: %w", key, err)
 	}
 
-	return parsed, nil
-}
-
-func envUint64(key string, fallback uint64) (uint64, error) {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseUint(value, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s must be an unsigned integer: %w", key, err)
-	}
 	return parsed, nil
 }
 
