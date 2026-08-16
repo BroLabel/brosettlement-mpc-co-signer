@@ -40,19 +40,20 @@ func TestLoadBuildsBoundPrimaryAndRecoveryStores(t *testing.T) {
 	}
 }
 
-func TestLoadRequiresExplicitProvisioningCapacitySettings(t *testing.T) {
-	for _, variable := range []string{
-		"CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES",
-		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM",
-	} {
-		t.Run(variable, func(t *testing.T) {
-			setRequiredEnv(t)
-			t.Setenv(variable, "")
+func TestLoadUsesProvisioningCapacityDefaults(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("CO_SIGNER_FREE_SPACE_THRESHOLD_BYTES", "")
+	t.Setenv("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM", "")
 
-			if _, err := config.Load(); err == nil {
-				t.Fatalf("Load() error = nil, want missing %s error", variable)
-			}
-		})
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got, want := cfg.FreeSpaceThresholdBytes, uint64(1<<30); got != want {
+		t.Errorf("FreeSpaceThresholdBytes = %d, want %d", got, want)
+	}
+	if got, want := cfg.PreParamsGenerationParallelism, 2; got != want {
+		t.Errorf("PreParamsGenerationParallelism = %d, want %d", got, want)
 	}
 }
 
