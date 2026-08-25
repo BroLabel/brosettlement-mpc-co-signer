@@ -89,15 +89,15 @@ func TestVerifyMPC2of3RejectsPreviousMPCorePin(t *testing.T) {
 	}
 	writeCommand("uname", "echo Linux")
 	writeCommand("grep", "exit 1")
-	writeCommand("go", "echo v0.3.1")
+	writeCommand("go", "echo v0.4.0")
 	command := exec.Command("/bin/sh", filepath.Join("..", "..", "scripts", "verify-mpc-2of3.sh"))
 	command.Env = append(os.Environ(), "PATH="+bin, "GOWORK=on")
 	output, err := command.CombinedOutput()
 	if err == nil {
 		t.Fatal("verify script accepted the previous mpc-core pin")
 	}
-	if !strings.Contains(string(output), "mpc-core must resolve exactly v0.4.0") {
-		t.Fatalf("output = %s, want rejection of v0.3.1", output)
+	if !strings.Contains(string(output), "mpc-core must resolve exactly v0.4.2") {
+		t.Fatalf("output = %s, want rejection of v0.4.0", output)
 	}
 }
 
