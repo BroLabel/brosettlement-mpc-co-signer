@@ -192,6 +192,46 @@ func TestDKGProvisioningAdmissionHintDependsOnlyOnPreParams(t *testing.T) {
 	}
 }
 
+func TestProvisioningReadinessTracksLiveRecoveryDirectoryAccess(t *testing.T) {
+	primary := t.TempDir()
+	recovery := t.TempDir()
+	directories := []string{primary, recovery}
+	preparams := stubAdmissionHinter{ready: true}
+
+	if !provisioningReadiness(directories, nil, nil, preparams) {
+		t.Fatal("provisioning readiness = false with both artifact directories accessible")
+	}
+
+	removedRecovery := recovery + "-removed"
+	if err := os.Rename(recovery, removedRecovery); err != nil {
+		t.Fatal(err)
+	}
+	if provisioningReadiness(directories, nil, nil, preparams) {
+		t.Fatal("provisioning readiness = true after recovery directory became inaccessible")
+	}
+	if _, _, _, _, err := artifactInventory([]string{primary}); err != nil {
+		t.Fatalf("primary artifact inspection after recovery loss: %v", err)
+	}
+
+	if err := os.Rename(removedRecovery, recovery); err != nil {
+		t.Fatal(err)
+	}
+	if !provisioningReadiness(directories, nil, nil, preparams) {
+		t.Fatal("provisioning readiness = false after recovery directory access was restored")
+	}
+}
+
+func TestProvisioningReadinessTreatsFreeSpaceProbeErrorsAsMetricsOnly(t *testing.T) {
+	directories := []string{t.TempDir(), t.TempDir()}
+	freeSpaceErr := errors.New("statfs unavailable")
+
+	if !provisioningReadiness(directories, func(string) (uint64, error) {
+		return 0, freeSpaceErr
+	}, nil, stubAdmissionHinter{ready: true}) {
+		t.Fatal("provisioning readiness = false when only free-space probes fail")
+	}
+}
+
 type stubAdmissionHinter struct {
 	ready bool
 }
