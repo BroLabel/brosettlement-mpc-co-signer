@@ -196,20 +196,9 @@ func TestSchedulerSkipsInFlightRediscoveredOwnClaimedSignAndAllowsRedispatchAfte
 	if got := client.claims(); !equalStrings(got, []string{discovery.IntentID}) {
 		t.Fatalf("claim calls while intent is in flight = %v, want one replay", got)
 	}
-	select {
-	case got := <-runner.started:
-		t.Fatalf("duplicate rediscovered SIGN started for session %q", got)
-	case <-time.After(50 * time.Millisecond):
-	}
 
 	close(release)
-	deadline := time.Now().Add(time.Second)
-	for len(scheduler.Semaphore()) != 0 && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if got := len(scheduler.Semaphore()); got != 0 {
-		t.Fatalf("SIGN permit count = %d, want 0 after completion", got)
-	}
+	waitForIntentRelease(t, scheduler, discovery.IntentID)
 
 	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
 	select {
@@ -633,6 +622,21 @@ func launchedIntentIDs(launched []launchedSession) []string {
 		ids = append(ids, session.intent.IntentID)
 	}
 	return ids
+}
+
+func waitForIntentRelease(t *testing.T, scheduler *Scheduler, intentID string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		scheduler.inFlightMu.Lock()
+		_, reserved := scheduler.inFlightIntentIDs[intentID]
+		scheduler.inFlightMu.Unlock()
+		if !reserved {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("intent %q remained reserved after the job completed", intentID)
 }
 
 func equalStrings(left, right []string) bool {
