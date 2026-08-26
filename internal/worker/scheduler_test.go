@@ -22,14 +22,26 @@ func (r *notifyingSignRunner) RunSignSession(context.Context, coretss.SignSessio
 	return nil
 }
 
+type blockingSignRunner struct {
+	started chan string
+	release <-chan struct{}
+}
+
+func (r *blockingSignRunner) RunSignSession(_ context.Context, req coretss.SignSessionRequest) error {
+	r.started <- req.Session.SessionID
+	<-r.release
+	return nil
+}
+
 type stubPendingClient struct {
-	mu          sync.Mutex
-	intents     []monolith.Intent
-	claimCalls  []string
-	claimResult monolith.ClaimResult
-	claimErr    error
-	claimErrors map[string]error
-	pollCalls   int
+	mu           sync.Mutex
+	intents      []monolith.Intent
+	claimCalls   []string
+	claimResult  monolith.ClaimResult
+	claimResults map[string]monolith.ClaimResult
+	claimErr     error
+	claimErrors  map[string]error
+	pollCalls    int
 }
 
 func TestSchedulerPublishesOldestPendingAgeFromCreatedAt(t *testing.T) {
@@ -69,6 +81,9 @@ func (s *stubPendingClient) ClaimIntent(_ context.Context, _ string, intentID st
 	}
 	if err := s.claimErrors[intentID]; err != nil {
 		return monolith.ClaimResult{}, err
+	}
+	if claim, ok := s.claimResults[intentID]; ok {
+		return claim, nil
 	}
 	return s.claimResult, s.claimErr
 }
@@ -157,6 +172,89 @@ func TestSchedulerDispatchesRediscoveredOwnClaimedSignThroughClaimReplay(t *test
 	}
 	if got := client.claims(); !equalStrings(got, []string{"intent-125"}) {
 		t.Fatalf("claim calls = %v, want existing claim endpoint", got)
+	}
+}
+
+func TestSchedulerSkipsInFlightRediscoveredOwnClaimedSignAndAllowsRedispatchAfterCompletion(t *testing.T) {
+	discovery, claim := rediscoveredSignFixture(t)
+	release := make(chan struct{})
+	runner := &blockingSignRunner{started: make(chan string, 2), release: release}
+	client := &stubPendingClient{claimResult: claim, claimErrors: make(map[string]error)}
+	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 2)
+
+	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
+	select {
+	case got := <-runner.started:
+		if got != discovery.SessionID {
+			t.Fatalf("first SIGN session = %q, want %q", got, discovery.SessionID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first rediscovered SIGN did not start")
+	}
+
+	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
+	if got := client.claims(); !equalStrings(got, []string{discovery.IntentID}) {
+		t.Fatalf("claim calls while intent is in flight = %v, want one replay", got)
+	}
+	select {
+	case got := <-runner.started:
+		t.Fatalf("duplicate rediscovered SIGN started for session %q", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for len(scheduler.Semaphore()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := len(scheduler.Semaphore()); got != 0 {
+		t.Fatalf("SIGN permit count = %d, want 0 after completion", got)
+	}
+
+	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
+	select {
+	case got := <-runner.started:
+		if got != discovery.SessionID {
+			t.Fatalf("redispatched SIGN session = %q, want %q", got, discovery.SessionID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completed rediscovered SIGN was not redispatched")
+	}
+}
+
+func TestSchedulerRunsDifferentIntentIDsInParallel(t *testing.T) {
+	firstDiscovery, firstClaim := rediscoveredSignFixture(t)
+	secondDiscovery, secondClaim := rediscoveredSignFixture(t)
+	secondDiscovery.IntentID = "intent-126"
+	secondDiscovery.SessionID = "sign-126"
+	secondDiscovery.Payload.KeyID = "key-126"
+	secondClaim.IntentID = secondDiscovery.IntentID
+	secondClaim.SessionID = secondDiscovery.SessionID
+	secondClaim.Payload.KeyID = secondDiscovery.Payload.KeyID
+	release := make(chan struct{})
+	runner := &blockingSignRunner{started: make(chan string, 2), release: release}
+	client := &stubPendingClient{
+		claimResults: map[string]monolith.ClaimResult{
+			firstDiscovery.IntentID:  firstClaim,
+			secondDiscovery.IntentID: secondClaim,
+		},
+		claimErrors: make(map[string]error),
+	}
+	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 2)
+	defer close(release)
+
+	scheduler.dispatchBatch(context.Background(), []monolith.Intent{firstDiscovery, secondDiscovery})
+	started := map[string]bool{}
+	for range 2 {
+		select {
+		case sessionID := <-runner.started:
+			started[sessionID] = true
+		case <-time.After(time.Second):
+			t.Fatalf("started sessions = %v, want both different intent IDs in parallel", started)
+		}
+	}
+	if !started[firstDiscovery.SessionID] || !started[secondDiscovery.SessionID] {
+		t.Fatalf("started sessions = %v, want %q and %q", started, firstDiscovery.SessionID, secondDiscovery.SessionID)
 	}
 }
 
@@ -486,8 +584,9 @@ func TestSchedulerRunJoinsProvisioningForwarderAfterCancellation(t *testing.T) {
 }
 
 type launchedSession struct {
-	intent  monolith.Intent
-	permits *jobPermitLease
+	intent        monolith.Intent
+	permits       *jobPermitLease
+	releaseIntent func()
 }
 
 func newDeterministicScheduler(t *testing.T, maxConcurrent int, hint func() bool) *Scheduler {
@@ -513,8 +612,8 @@ func newDeterministicScheduler(t *testing.T, maxConcurrent int, hint func() bool
 }
 
 func captureLaunches(target *[]launchedSession) sessionLauncher {
-	return func(_ context.Context, intent monolith.Intent, permits *jobPermitLease) <-chan struct{} {
-		*target = append(*target, launchedSession{intent: intent, permits: permits})
+	return func(_ context.Context, intent monolith.Intent, permits *jobPermitLease, releaseIntent func()) <-chan struct{} {
+		*target = append(*target, launchedSession{intent: intent, permits: permits, releaseIntent: releaseIntent})
 		dispatched := make(chan struct{})
 		close(dispatched)
 		return dispatched
@@ -524,6 +623,7 @@ func captureLaunches(target *[]launchedSession) sessionLauncher {
 func releaseLaunches(launched []launchedSession) {
 	for _, session := range launched {
 		session.permits.Release()
+		session.releaseIntent()
 	}
 }
 
