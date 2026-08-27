@@ -1,7 +1,7 @@
 bou.ke/monkey v1.0.1 h1:zEMLInw9xvNakzUUPjfS4Ds6jYPqCFx3m7bRmG5NH2U=
 bou.ke/monkey v1.0.1/go.mod h1:FgHuK96Rv2Nlf+0u1OOVDpCMdsWyOFmeeketDHE7LIg=
-github.com/BroLabel/brosettlement-mpc-core v0.4.3 h1:SoyhLNCFTTMlQ8hI74NlGFGcHg8uEL86oov9yMlSY00=
-github.com/BroLabel/brosettlement-mpc-core v0.4.3/go.mod h1:ljbtTXC5r3/4P8QrMlwmE5G9Gk4Az8ODIZepzzl7rgI=
+github.com/BroLabel/brosettlement-mpc-core v0.4.4 h1:jw64VKK/twfFHirTxxPgbAVdgym8AA8sCaEpIQMx778=
+github.com/BroLabel/brosettlement-mpc-core v0.4.4/go.mod h1:ljbtTXC5r3/4P8QrMlwmE5G9Gk4Az8ODIZepzzl7rgI=
 github.com/aead/siphash v1.0.1/go.mod h1:Nywa3cDsYNNK3gaciGTWPwHt0wlpNV15vwmswBAUSII=
 github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412 h1:w1UutsfOrms1J05zt7ISrnJIXKzwaspym5BTKGx93EI=
 github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412/go.mod h1:WPjqKcmVOxf0XSf3YxCJs6N6AOSrOx3obionmG7T0y0=
