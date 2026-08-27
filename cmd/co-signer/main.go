@@ -269,6 +269,8 @@ func openApplicationResources(
 			filesystemFreeBytes,
 			provisioningCapabilityErr,
 			preParamsController,
+			primaryStore,
+			recoveryStore,
 		)
 	}
 	signingReady := func() bool { return primaryReader.ProbeReadCapability() == nil }

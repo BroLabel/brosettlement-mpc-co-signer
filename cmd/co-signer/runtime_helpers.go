@@ -70,11 +70,19 @@ func provisioningReadiness(
 	freeSpace freeSpaceReader,
 	provisioningCapabilityErr error,
 	preparams admissionHinter,
+	primary artifactCapabilityProber,
+	recovery artifactCapabilityProber,
 ) bool {
+	if provisioningCapabilityErr != nil {
+		return false
+	}
+	if err := probeArtifactStores(context.Background(), primary, recovery); err != nil {
+		return false
+	}
 	if err := observeArtifactCapacity(artifactDirectories, freeSpace); err != nil {
 		return false
 	}
-	return provisioningCapabilityErr == nil && dkgProvisioningAdmissionHint(preparams)
+	return dkgProvisioningAdmissionHint(preparams)
 }
 
 // artifactInventory deliberately observes only aggregate filesystem shape. It

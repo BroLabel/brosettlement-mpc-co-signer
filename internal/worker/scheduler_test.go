@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
@@ -208,6 +209,104 @@ func TestSchedulerSkipsInFlightRediscoveredOwnClaimedSignAndAllowsRedispatchAfte
 		}
 	case <-time.After(time.Second):
 		t.Fatal("completed rediscovered SIGN was not redispatched")
+	}
+}
+
+func TestSchedulerDeduplicatesEveryNonEmptyIntentKindAndDiscoveryStateUntilRelease(t *testing.T) {
+	tests := []struct {
+		name            string
+		intentType      string
+		discoveryStatus string
+	}{
+		{name: "pending DKG", intentType: "DKG", discoveryStatus: "PENDING"},
+		{name: "own claimed DKG", intentType: "DKG", discoveryStatus: "CLAIMED"},
+		{name: "pending SIGN", intentType: "SIGN", discoveryStatus: "PENDING"},
+		{name: "own claimed SIGN", intentType: "SIGN", discoveryStatus: "CLAIMED"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheduler := newDeterministicScheduler(t, 2, func() bool { return true })
+			var launched []launchedSession
+			scheduler.launch = captureLaunches(&launched)
+			intent := monolith.Intent{
+				IntentID:        "intent-shared",
+				SessionID:       "session-shared",
+				Type:            tt.intentType,
+				DiscoveryStatus: tt.discoveryStatus,
+			}
+
+			scheduler.dispatchBatch(context.Background(), []monolith.Intent{intent})
+			scheduler.dispatchBatch(context.Background(), []monolith.Intent{intent})
+			if got := len(launched); got != 1 {
+				t.Fatalf("launches while reserved = %d, want 1", got)
+			}
+
+			launched[0].permits.Release()
+			launched[0].releaseIntent()
+			scheduler.dispatchBatch(context.Background(), []monolith.Intent{intent})
+			if got := len(launched); got != 2 {
+				t.Fatalf("launches after release = %d, want 2", got)
+			}
+			launched[1].permits.Release()
+			launched[1].releaseIntent()
+		})
+	}
+}
+
+func TestSchedulerReleasesIntentReservationWhenNoPermitIsAvailable(t *testing.T) {
+	for _, intentType := range []string{"DKG", "SIGN"} {
+		t.Run(intentType, func(t *testing.T) {
+			scheduler := newDeterministicScheduler(t, 1, func() bool { return true })
+			held := scheduler.permits.general.tryAcquire()
+			if held == nil {
+				t.Fatal("failed to occupy the general permit")
+			}
+			var launched []launchedSession
+			scheduler.launch = captureLaunches(&launched)
+			intent := monolith.Intent{IntentID: "intent-1", SessionID: "session-1", Type: intentType}
+
+			scheduler.dispatchBatch(context.Background(), []monolith.Intent{intent})
+			if len(launched) != 0 {
+				t.Fatalf("launches without a permit = %d, want 0", len(launched))
+			}
+
+			held.release()
+			scheduler.dispatchBatch(context.Background(), []monolith.Intent{intent})
+			if len(launched) != 1 {
+				t.Fatalf("launches after permit release = %d, want 1", len(launched))
+			}
+			releaseLaunches(launched)
+		})
+	}
+}
+
+func TestSchedulerReleasesIntentReservationAfterClaimFailure(t *testing.T) {
+	for _, intentType := range []string{"DKG", "SIGN"} {
+		t.Run(intentType, func(t *testing.T) {
+			client := &stubPendingClient{claimErr: errors.New("claim failed"), claimErrors: make(map[string]error)}
+			scheduler := NewScheduler(
+				client,
+				&stubRunner{},
+				&capturingDKGExecutor{},
+				coordinatorPrimaryParty,
+				time.Millisecond,
+				SchedulerConfig{ProvisioningHint: func() bool { return true }},
+				slog.Default(),
+				1,
+			)
+			scheduler.SetDKGAdmissionOpen(true)
+			intent := monolith.Intent{IntentID: "intent-claim", SessionID: "session-claim", Type: intentType}
+
+			scheduler.dispatchBatch(context.Background(), []monolith.Intent{intent})
+			waitForIntentRelease(t, scheduler, intent.IntentID)
+			scheduler.dispatchBatch(context.Background(), []monolith.Intent{intent})
+			waitForIntentRelease(t, scheduler, intent.IntentID)
+
+			if got := client.claims(); !equalStrings(got, []string{intent.IntentID, intent.IntentID}) {
+				t.Fatalf("claim calls after release = %v, want two attempts", got)
+			}
+		})
 	}
 }
 
