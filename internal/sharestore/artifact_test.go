@@ -298,6 +298,51 @@ func TestStoreRejectsSymlinkAndNonDirectoryArtifactDestination(t *testing.T) {
 	}
 }
 
+func TestProbePublishCapabilityRejectsRuntimeSymlinkReplacement(t *testing.T) {
+	provider, err := NewKeyProvider(base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)), testKeyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	directory := filepath.Join(root, "primary")
+	original := filepath.Join(root, "primary-original")
+	target := filepath.Join(root, "replacement-target")
+	for _, path := range []string{directory, target} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	config, err := NewStoreConfig(StorePurposePrimary, directory, provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := OpenStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(directory, original); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, directory); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ProbePublishCapability(context.Background()); err == nil {
+		t.Fatal("ProbePublishCapability() accepted a runtime symlink replacement")
+	}
+}
+
+func TestProbePublishCapabilityRejectsRuntimePermissionWidening(t *testing.T) {
+	store := testStore(t, StorePurposePrimary)
+	if err := os.Chmod(store.config.Directory(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ProbePublishCapability(context.Background()); err == nil {
+		t.Fatal("ProbePublishCapability() accepted a non-private runtime directory")
+	}
+}
+
 func TestInspectExistingRejectsSymlinkAndNonregular(t *testing.T) {
 	store := testStore(t, StorePurposePrimary)
 	descriptor := testDescriptor(t, testKeyID)

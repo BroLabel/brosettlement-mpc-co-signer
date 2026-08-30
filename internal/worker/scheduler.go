@@ -30,7 +30,7 @@ type SchedulerConfig struct {
 	Now                func() time.Time
 }
 
-type sessionLauncher func(context.Context, monolith.Intent, *jobPermitLease) <-chan struct{}
+type sessionLauncher func(context.Context, monolith.Intent, *jobPermitLease, func()) <-chan struct{}
 
 type Scheduler struct {
 	client            pendingClient
@@ -43,6 +43,8 @@ type Scheduler struct {
 	cfg               SchedulerConfig
 	log               *slog.Logger
 	dkgAdmissionOpen  atomic.Bool
+	inFlightMu        sync.Mutex
+	inFlightIntentIDs map[string]struct{}
 	launch            sessionLauncher
 	forwardWakeups    func(context.Context)
 }
@@ -77,6 +79,7 @@ func NewScheduler(
 		repollCh:          repollCh,
 		cfg:               cfg,
 		log:               log,
+		inFlightIntentIDs: make(map[string]struct{}),
 	}
 	scheduler.launch = scheduler.launchSession
 	scheduler.forwardWakeups = scheduler.forwardProvisioningWakeups
@@ -205,23 +208,53 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 				}
 				continue
 			}
-			permits := s.permits.tryAcquireDKG()
-			if permits == nil {
+			releaseIntent, reserved := s.reserveIntentID(intent.IntentID)
+			if !reserved {
 				continue
 			}
-			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits)) {
+			permits := s.permits.tryAcquireDKG()
+			if permits == nil {
+				releaseIntent()
+				continue
+			}
+			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits, releaseIntent)) {
 				return
 			}
 		case intentKindSIGN:
-			permits := s.permits.tryAcquireSIGN()
-			if permits == nil {
+			releaseIntent, reserved := s.reserveIntentID(intent.IntentID)
+			if !reserved {
 				continue
 			}
-			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits)) {
+			permits := s.permits.tryAcquireSIGN()
+			if permits == nil {
+				releaseIntent()
+				continue
+			}
+			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits, releaseIntent)) {
 				return
 			}
 		}
 	}
+}
+
+func (s *Scheduler) reserveIntentID(intentID string) (func(), bool) {
+	if intentID == "" {
+		return func() {}, true
+	}
+	s.inFlightMu.Lock()
+	defer s.inFlightMu.Unlock()
+	if _, exists := s.inFlightIntentIDs[intentID]; exists {
+		return nil, false
+	}
+	s.inFlightIntentIDs[intentID] = struct{}{}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			s.inFlightMu.Lock()
+			delete(s.inFlightIntentIDs, intentID)
+			s.inFlightMu.Unlock()
+		})
+	}, true
 }
 
 func oldestPendingAge(intents []monolith.Intent, want intentKind, now time.Time) float64 {
@@ -261,21 +294,24 @@ func (s *Scheduler) provisioningReady() bool {
 	return s.cfg.ProvisioningHint == nil || s.cfg.ProvisioningHint()
 }
 
-func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, permits *jobPermitLease) <-chan struct{} {
+func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, permits *jobPermitLease, releaseIntent func()) <-chan struct{} {
 	claimDispatched := make(chan struct{})
-	go runSessionWithPermits(
-		ctx,
-		intent,
-		s.client,
-		s.signRunner,
-		s.dkgRunner,
-		s.cfg.TerminalPublisher,
-		s.localPartyID,
-		s.framePollInterval,
-		permits,
-		s.log,
-		func() { close(claimDispatched) },
-	)
+	go func() {
+		defer releaseIntent()
+		runSessionWithPermits(
+			ctx,
+			intent,
+			s.client,
+			s.signRunner,
+			s.dkgRunner,
+			s.cfg.TerminalPublisher,
+			s.localPartyID,
+			s.framePollInterval,
+			permits,
+			s.log,
+			func() { close(claimDispatched) },
+		)
+	}()
 	return claimDispatched
 }
 

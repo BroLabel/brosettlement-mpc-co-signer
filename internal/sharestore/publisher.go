@@ -89,6 +89,9 @@ func (s *Store) ProbePublishCapability(ctx context.Context) error {
 	if s == nil || !s.publishSupported() {
 		return ErrUnsupportedPublishPlatform
 	}
+	if err := ensurePrivateStoreDirectory(s.config.Directory()); err != nil {
+		return err
+	}
 	if err := probePlatformPublishCapability(s.config.Directory()); err != nil {
 		return fmt.Errorf("probe immutable artifact publication: %w", err)
 	}

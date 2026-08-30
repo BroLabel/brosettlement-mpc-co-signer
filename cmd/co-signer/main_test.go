@@ -192,6 +192,66 @@ func TestDKGProvisioningAdmissionHintDependsOnlyOnPreParams(t *testing.T) {
 	}
 }
 
+func TestProvisioningReadinessTracksLiveRecoveryDirectoryAccess(t *testing.T) {
+	primary := t.TempDir()
+	recovery := t.TempDir()
+	directories := []string{primary, recovery}
+	preparams := stubAdmissionHinter{ready: true}
+	primaryCapability := &stubArtifactCapabilityProber{}
+	recoveryCapability := &stubArtifactCapabilityProber{}
+
+	if !provisioningReadiness(directories, nil, nil, preparams, primaryCapability, recoveryCapability) {
+		t.Fatal("provisioning readiness = false with both artifact directories accessible")
+	}
+
+	removedRecovery := recovery + "-removed"
+	if err := os.Rename(recovery, removedRecovery); err != nil {
+		t.Fatal(err)
+	}
+	if provisioningReadiness(directories, nil, nil, preparams, primaryCapability, recoveryCapability) {
+		t.Fatal("provisioning readiness = true after recovery directory became inaccessible")
+	}
+	if _, _, _, _, err := artifactInventory([]string{primary}); err != nil {
+		t.Fatalf("primary artifact inspection after recovery loss: %v", err)
+	}
+
+	if err := os.Rename(removedRecovery, recovery); err != nil {
+		t.Fatal(err)
+	}
+	if !provisioningReadiness(directories, nil, nil, preparams, primaryCapability, recoveryCapability) {
+		t.Fatal("provisioning readiness = false after recovery directory access was restored")
+	}
+}
+
+func TestProvisioningReadinessReprobesArtifactCapabilities(t *testing.T) {
+	directories := []string{t.TempDir(), t.TempDir()}
+	primary := &stubArtifactCapabilityProber{}
+	recovery := &stubArtifactCapabilityProber{}
+	preparams := stubAdmissionHinter{ready: true}
+
+	if !provisioningReadiness(directories, nil, nil, preparams, primary, recovery) {
+		t.Fatal("provisioning readiness = false with healthy live artifact capabilities")
+	}
+	recovery.err = errors.New("recovery store is no longer writable")
+	if provisioningReadiness(directories, nil, nil, preparams, primary, recovery) {
+		t.Fatal("provisioning readiness = true after a live artifact capability failed")
+	}
+	if primary.calls != 2 || recovery.calls != 2 {
+		t.Fatalf("live artifact probe calls = primary:%d recovery:%d, want 2 each", primary.calls, recovery.calls)
+	}
+}
+
+func TestProvisioningReadinessTreatsFreeSpaceProbeErrorsAsMetricsOnly(t *testing.T) {
+	directories := []string{t.TempDir(), t.TempDir()}
+	freeSpaceErr := errors.New("statfs unavailable")
+
+	if !provisioningReadiness(directories, func(string) (uint64, error) {
+		return 0, freeSpaceErr
+	}, nil, stubAdmissionHinter{ready: true}, &stubArtifactCapabilityProber{}, &stubArtifactCapabilityProber{}) {
+		t.Fatal("provisioning readiness = false when only free-space probes fail")
+	}
+}
+
 type stubAdmissionHinter struct {
 	ready bool
 }

@@ -47,14 +47,14 @@ func dkgProvisioningAdmissionHint(preparams admissionHinter) bool {
 	return preparams != nil && preparams.AdmissionHint()
 }
 
-func observeArtifactCapacity(artifactDirectories []string, freeSpace freeSpaceReader) {
+func observeArtifactCapacity(artifactDirectories []string, freeSpace freeSpaceReader) error {
 	files, temporary, bytes, oldest, inventoryErr := artifactInventory(artifactDirectories)
 	if inventoryErr != nil {
-		return
+		return inventoryErr
 	}
 	metrics.ObserveArtifactInventory(float64(files), float64(temporary), float64(bytes), oldest, 0)
 	if freeSpace == nil {
-		return
+		return nil
 	}
 	for _, directory := range artifactDirectories {
 		available, err := freeSpace(directory)
@@ -62,6 +62,27 @@ func observeArtifactCapacity(artifactDirectories []string, freeSpace freeSpaceRe
 			metrics.ObserveArtifactInventory(float64(files), float64(temporary), float64(bytes), oldest, float64(available))
 		}
 	}
+	return nil
+}
+
+func provisioningReadiness(
+	artifactDirectories []string,
+	freeSpace freeSpaceReader,
+	provisioningCapabilityErr error,
+	preparams admissionHinter,
+	primary artifactCapabilityProber,
+	recovery artifactCapabilityProber,
+) bool {
+	if provisioningCapabilityErr != nil {
+		return false
+	}
+	if err := probeArtifactStores(context.Background(), primary, recovery); err != nil {
+		return false
+	}
+	if err := observeArtifactCapacity(artifactDirectories, freeSpace); err != nil {
+		return false
+	}
+	return dkgProvisioningAdmissionHint(preparams)
 }
 
 // artifactInventory deliberately observes only aggregate filesystem shape. It
