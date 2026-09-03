@@ -32,6 +32,19 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+      # VERSION is published on every merge to main, alongside latest. Bump it
+      # in the PR that should produce a new number; leaving it unchanged means
+      # the next merge overwrites that version's tag.
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION must be plain semver like 1.0.0, got: '$VERSION'" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -54,6 +67,7 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           flavor: latest=false
           tags: |
+            type=raw,value=${{ steps.version.outputs.version }},enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern=v{{version}}
             type=semver,pattern={{major}}.{{minor}}
