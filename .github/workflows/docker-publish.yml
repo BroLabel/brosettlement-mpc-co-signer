@@ -70,3 +70,9 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Off by design: BuildKit otherwise attaches in-toto attestation
+          # manifests that GHCR lists as untagged "unknown/unknown" versions
+          # alongside the real image, which is actively misleading when
+          # checking what was published.
+          provenance: false
+          sbom: false
