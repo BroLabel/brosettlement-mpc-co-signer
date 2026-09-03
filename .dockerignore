@@ -1,0 +1,58 @@
+# The Dockerfile copies only go.mod, go.sum, cmd/ and internal/. This file is the
+# second layer of that boundary: nothing below may reach the build context.
+
+# Local secrets and live MPC key material
+.env
+.env.*
+data/
+**/*.pem
+**/*.key
+
+# Version control and CI metadata
+.git/
+.gitignore
+.github/
+
+# Build outputs and local binaries
+bin/
+dist/
+out/
+/app
+*.exe
+*.test
+*.out
+coverage*
+vendor/
+
+# Go workspace files (builds are pinned to go.mod; see GOWORK=off in Dockerfile)
+go.work
+go.work.sum
+
+# Tests, fixtures and contract fixtures (not needed by the service binary)
+**/*_test.go
+testdata/
+contracts/
+scripts/
+Makefile
+
+# Documentation
+docs/
+*.md
+LICENSE
+
+# Editor, tooling and OS noise
+.claude/
+.vscode/
+.idea/
+worktrees/
+.worktrees/
+.DS_Store
+
+# Node artifacts (none today; kept so a future tooling addition cannot leak them)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Container files themselves
+Dockerfile
+.dockerignore
