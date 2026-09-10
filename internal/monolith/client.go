@@ -64,6 +64,7 @@ func (c *Client) GetPendingIntents(ctx context.Context) ([]Intent, error) {
 	intents := make([]Intent, 0, len(listing.OwnClaimedSign)+len(listing.Pending))
 	appendIntent := func(item ActionableIntent) {
 		intents = append(intents, Intent{
+			Session:         item.Session,
 			CreatedAt:       item.CreatedAt,
 			DeadlineRaw:     item.DeadlineRaw,
 			DiscoveryStatus: item.Status,
@@ -97,16 +98,17 @@ type actionableListingWire struct {
 }
 
 type actionableIntentWire struct {
-	CreatedAt             string `json:"createdAt"`
-	Deadline              string `json:"deadline,omitempty"`
-	DescriptorBytes       string `json:"descriptorBytesBase64,omitempty"`
-	DescriptorFingerprint string `json:"descriptorFingerprint,omitempty"`
-	IntentID              string `json:"intentId"`
-	KeyID                 string `json:"keyId"`
-	OrgID                 string `json:"orgId"`
-	SessionID             string `json:"sessionId,omitempty"`
-	Status                string `json:"status"`
-	Type                  string `json:"type"`
+	Session               SessionLifecycle `json:"session"`
+	CreatedAt             string           `json:"createdAt"`
+	Deadline              string           `json:"deadline,omitempty"`
+	DescriptorBytes       string           `json:"descriptorBytesBase64,omitempty"`
+	DescriptorFingerprint string           `json:"descriptorFingerprint,omitempty"`
+	IntentID              string           `json:"intentId"`
+	KeyID                 string           `json:"keyId"`
+	OrgID                 string           `json:"orgId"`
+	SessionID             string           `json:"sessionId,omitempty"`
+	Status                string           `json:"status"`
+	Type                  string           `json:"type"`
 	fields                map[string]struct{}
 }
 
@@ -117,6 +119,7 @@ func (wire *actionableIntentWire) UnmarshalJSON(raw []byte) error {
 		return err
 	}
 	allowed := map[string]struct{}{
+		"session":   {},
 		"createdAt": {}, "deadline": {}, "descriptorBytesBase64": {},
 		"descriptorFingerprint": {}, "intentId": {}, "keyId": {}, "orgId": {}, "sessionId": {}, "status": {}, "type": {},
 	}
@@ -140,6 +143,7 @@ func (wire *actionableIntentWire) UnmarshalJSON(raw []byte) error {
 }
 
 func (wire actionableIntentWire) hasExactFields(expected ...string) bool {
+	expected = append(expected, "session")
 	if len(wire.fields) != len(expected) {
 		return false
 	}
@@ -206,6 +210,7 @@ func decodeActionableIntent(wire actionableIntentWire, collection string) (Actio
 	}
 
 	item := ActionableIntent{
+		Session:               wire.Session,
 		CreatedAt:             createdAt,
 		CreatedAtRaw:          wire.CreatedAt,
 		DeadlineRaw:           wire.Deadline,
@@ -259,6 +264,16 @@ func decodeActionableIntent(wire actionableIntentWire, collection string) (Actio
 	default:
 		return ActionableIntent{}, errors.New("actionable listing collection is invalid")
 	}
+	if err := wire.Session.Validate(wire.Type, item.SessionID, item.Deadline); err != nil {
+		return ActionableIntent{}, err
+	}
+	if item.SessionID == "" {
+		item.SessionID = wire.Session.SessionID
+	}
+	if item.Deadline.IsZero() {
+		item.Deadline = wire.Session.Deadline
+		item.DeadlineRaw = item.Deadline.Format(time.RFC3339Nano)
+	}
 	return item, nil
 }
 
@@ -291,6 +306,15 @@ func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (
 }
 
 func validateClaimResult(claim ClaimResult, expectedType string) error {
+	if claim.SessionID == "" {
+		return errors.New("claim session identity is required")
+	}
+	if claim.Deadline.IsZero() || claim.DeadlineRaw == "" {
+		return errors.New("claim deadline is required")
+	}
+	if err := claim.Session.Validate(expectedType, claim.SessionID, claim.Deadline); err != nil {
+		return err
+	}
 	if claim.Status != "CLAIMED" {
 		return errors.New("claim response status is invalid")
 	}
@@ -316,7 +340,7 @@ func validateClaimResult(claim ClaimResult, expectedType string) error {
 func validateSignClaimResult(claim ClaimResult) error {
 	payload := claim.Payload
 	if claim.IntentID == "" || claim.SessionID == "" || claim.Deadline.IsZero() || claim.DeadlineRaw == "" ||
-		claim.ClaimedBy != "" || claim.ClaimedAt != nil || !claim.ExpiresAt.IsZero() || claim.OrgID != "" || claim.KeyID != "" || len(claim.DescriptorBytes) != 0 ||
+		claim.OrgID != "" || claim.KeyID != "" || len(claim.DescriptorBytes) != 0 ||
 		claim.DescriptorFingerprint != "" || len(claim.ChainCode) != 0 ||
 		payload.Type != "SIGN" || payload.OrgID == "" || payload.KeyID == "" || payload.WalletID == "" || payload.ProfileID == "" || payload.ProfileTemplateID == "" ||
 		payload.ProfileVersion == 0 || len(payload.Parties) < 2 || payload.Threshold < 2 || payload.Algorithm == "" || payload.Curve == "" || payload.Chain == "" ||
@@ -350,15 +374,35 @@ func (c *Client) PostMessage(ctx context.Context, sessionID string, frame Outbou
 	return c.doJSON(ctx, http.MethodPost, path, frame, frame.MessageID, nil, 0)
 }
 
-func (c *Client) GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]InboundMessage, error) {
+func (c *Client) GetMessages(ctx context.Context, sessionID string, afterSeq uint64) (MessagesResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer cancel()
 	path := fmt.Sprintf("/api/v1/co-signer/sessions/%s/messages?afterSeq=%d", url.PathEscape(sessionID), afterSeq)
-	var out struct {
-		Messages []InboundMessage `json:"messages"`
+	// One bounded attempt: the existing polling loop owns retries and cadence.
+	req, err := c.newRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return MessagesResult{}, err
 	}
-	if err := c.doJSON(ctx, http.MethodGet, path, nil, "", &out, 0); err != nil {
-		return nil, err
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return MessagesResult{}, err
 	}
-	return out.Messages, nil
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return MessagesResult{}, &httpStatusError{statusCode: resp.StatusCode}
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return MessagesResult{}, err
+	}
+	var out MessagesResult
+	if err := strictjson.DecodeClosed(raw, &out); err != nil {
+		return MessagesResult{}, fmt.Errorf("%w: %v", ErrInvalidLifecycle, err)
+	}
+	if err := out.Session.Validate("", sessionID, time.Time{}); err != nil {
+		return MessagesResult{}, err
+	}
+	return out, nil
 }
 
 func (c *Client) PostResult(ctx context.Context, intentID string, result IntentResult) error {

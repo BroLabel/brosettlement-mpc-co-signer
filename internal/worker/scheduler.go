@@ -16,7 +16,7 @@ type pendingClient interface {
 	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
 	PostResult(ctx context.Context, intentID string, result monolith.IntentResult) error
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
-	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)
+	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) (monolith.MessagesResult, error)
 }
 
 type SchedulerConfig struct {

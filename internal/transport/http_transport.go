@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ var (
 const platformPartyID = "mpc-signer"
 
 type FrameContext struct {
+	Session   monolith.SessionLifecycle
 	IntentID  string
 	OrgID     string
 	SessionID string
@@ -29,7 +31,7 @@ type FrameContext struct {
 
 type messageClient interface {
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
-	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)
+	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) (monolith.MessagesResult, error)
 }
 
 type HTTPTransport struct {
@@ -39,6 +41,10 @@ type HTTPTransport struct {
 	inbound      chan protocol.Frame
 	startOnce    sync.Once
 	closeOnce    sync.Once
+	mu           sync.Mutex
+	cancel       context.CancelFunc
+	stopped      chan struct{}
+	err          error
 	done         chan struct{}
 	log          *slog.Logger
 }
@@ -60,7 +66,17 @@ func NewHTTPTransport(client messageClient, frameCtx FrameContext, pollInterval 
 
 func (t *HTTPTransport) Start(ctx context.Context) {
 	t.startOnce.Do(func() {
-		go t.poll(ctx)
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		select {
+		case <-t.done:
+			return
+		default:
+		}
+		pollCtx, cancel := context.WithCancel(ctx)
+		t.cancel = cancel
+		t.stopped = make(chan struct{})
+		go func() { defer close(t.stopped); t.poll(pollCtx) }()
 	})
 }
 
@@ -114,6 +130,12 @@ func (t *HTTPTransport) SendFrame(ctx context.Context, frame protocol.Frame) err
 }
 
 func (t *HTTPTransport) RecvFrame(ctx context.Context) (protocol.Frame, error) {
+	if t.isDone(ctx) {
+		if ctx.Err() != nil {
+			return protocol.Frame{}, ctx.Err()
+		}
+		return protocol.Frame{}, ErrTransportClosed
+	}
 	select {
 	case frame := <-t.inbound:
 		return frame, nil
@@ -125,22 +147,52 @@ func (t *HTTPTransport) RecvFrame(ctx context.Context) (protocol.Frame, error) {
 }
 
 func (t *HTTPTransport) Close() {
+	t.stop(nil)
+	t.mu.Lock()
+	stopped := t.stopped
+	t.mu.Unlock()
+	if stopped != nil {
+		<-stopped
+	}
+}
+
+func (t *HTTPTransport) Done() <-chan struct{} { return t.done }
+func (t *HTTPTransport) Err() error            { t.mu.Lock(); defer t.mu.Unlock(); return t.err }
+
+func (t *HTTPTransport) stop(err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.closeOnce.Do(func() {
+		t.err = err
 		close(t.done)
+		if t.cancel != nil {
+			t.cancel()
+		}
 	})
 }
 
 func (t *HTTPTransport) poll(ctx context.Context) {
 	afterSeq := uint64(0)
 	sessionID := t.frameCtx.SessionID
+	baseline := t.frameCtx.Session
+	kind := strings.ToUpper(t.frameCtx.Stage)
 
 	for {
 		if t.isDone(ctx) {
 			return
 		}
 
-		msgs, err := t.client.GetMessages(ctx, sessionID, afterSeq)
+		pollCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+		result, err := t.client.GetMessages(pollCtx, sessionID, afterSeq)
+		cancel()
+		if t.isDone(ctx) {
+			return
+		}
 		if err != nil {
+			if errors.Is(err, monolith.ErrInvalidLifecycle) {
+				t.stop(err)
+				return
+			}
 			if ctx.Err() != nil || t.isDone(ctx) {
 				return
 			}
@@ -150,7 +202,23 @@ func (t *HTTPTransport) poll(ctx context.Context) {
 			}
 			continue
 		}
+		if err := result.Session.Validate(kind, sessionID, baseline.Deadline); err != nil {
+			t.stop(err)
+			return
+		}
+		if kind == "SIGN" {
+			if result.Session.Status != "RUNNING" || !result.Session.Deadline.After(time.Now()) || result.Session.ExecutionExpiresAt == nil || !result.Session.ExecutionExpiresAt.After(time.Now()) {
+				t.stop(monolith.ErrInvalidLifecycle)
+				return
+			}
+			if baseline.StartedAt != nil && (baseline.ExecutionExpiresAt == nil || !result.Session.StartedAt.Equal(*baseline.StartedAt) || !result.Session.ExecutionExpiresAt.Equal(*baseline.ExecutionExpiresAt)) {
+				t.stop(monolith.ErrInvalidLifecycle)
+				return
+			}
+		}
+		baseline = result.Session
 
+		msgs := result.Messages
 		sort.Slice(msgs, func(i, j int) bool {
 			return msgs[i].DeliverySeq < msgs[j].DeliverySeq
 		})

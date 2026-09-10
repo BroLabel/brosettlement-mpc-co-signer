@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,7 @@ import (
 )
 
 type stubClient struct {
+	poll        func(context.Context, string, uint64) (monolith.MessagesResult, error)
 	mu          sync.Mutex
 	claimResult monolith.ClaimResult
 	claimErr    error
@@ -33,9 +35,6 @@ type stubClient struct {
 }
 
 func (s *stubClient) ClaimIntent(_ context.Context, _ string, _ string) (monolith.ClaimResult, error) {
-	if s.claimResult.ExpiresAt.IsZero() {
-		s.claimResult.ExpiresAt = time.Now().Add(time.Minute)
-	}
 	return s.claimResult, s.claimErr
 }
 
@@ -52,18 +51,39 @@ func (s *stubClient) PostMessage(_ context.Context, sessionID string, frame mono
 	return nil
 }
 
-func (s *stubClient) GetMessages(context.Context, string, uint64) ([]monolith.InboundMessage, error) {
-	return nil, nil
+func (s *stubClient) GetMessages(ctx context.Context, id string, seq uint64) (monolith.MessagesResult, error) {
+	if s.poll != nil {
+		return s.poll(ctx, id, seq)
+	}
+	lifecycle := s.claimResult.Session
+	if lifecycle.Status == "PENDING" && s.claimResult.Type == "SIGN" {
+		start := time.Now()
+		expiry := start.Add(300 * time.Second)
+		if lifecycle.Deadline.Before(expiry) {
+			expiry = lifecycle.Deadline
+		}
+		lifecycle.Status = "RUNNING"
+		lifecycle.StartedAt = &start
+		lifecycle.ExecutionExpiresAt = &expiry
+		s.claimResult.Session = lifecycle
+	}
+	return monolith.MessagesResult{Session: lifecycle}, nil
 }
 
 func claimResultForIntent(intent monolith.Intent) monolith.ClaimResult {
+	deadline := intent.ExpiresAt
+	if deadline.IsZero() {
+		deadline = time.Now().Add(time.Minute)
+	}
 	return monolith.ClaimResult{
-		IntentID:  intent.IntentID,
-		SessionID: intent.SessionID,
-		Type:      intent.Type,
-		Payload:   intent.Payload,
-		Status:    "CLAIMED",
-		ExpiresAt: time.Now().Add(time.Minute),
+		Session:     monolith.SessionLifecycle{SessionID: intent.SessionID, Status: "PENDING", Deadline: deadline},
+		IntentID:    intent.IntentID,
+		SessionID:   intent.SessionID,
+		Type:        intent.Type,
+		Payload:     intent.Payload,
+		Status:      "CLAIMED",
+		Deadline:    deadline,
+		DeadlineRaw: deadline.Format(time.RFC3339Nano),
 	}
 }
 
@@ -229,12 +249,17 @@ func runSessionWithExecutorsForTest(
 	sem chan struct{},
 	repollCh chan struct{},
 	log *slog.Logger,
+	clocks ...readinessClock,
 ) {
+	clock := realReadinessClock()
+	if len(clocks) > 0 {
+		clock = clocks[0]
+	}
 	lease := &jobPermitLease{wakeups: repollCh}
 	if sem != nil {
 		lease.general = &permitToken{owner: &permitPool{slots: sem}}
 	}
-	runSessionWithPermits(
+	runSessionWithClock(
 		ctx,
 		intent,
 		client,
@@ -246,6 +271,7 @@ func runSessionWithExecutorsForTest(
 		lease,
 		log,
 		nil,
+		clock,
 	)
 }
 
@@ -334,9 +360,578 @@ func rediscoveredSignFixture(t *testing.T) (monolith.Intent, monolith.ClaimResul
 	}
 	claim := claimResultForIntent(claimed)
 	claim.Deadline = deadline
-	claim.ExpiresAt = time.Time{}
+	claim.Session.Deadline = deadline
 	claim.DeadlineRaw = deadlineRaw
 	return discovery, claim
+}
+
+type receivingSignRunner struct {
+	calls   atomic.Int64
+	entered chan struct{}
+	frames  chan protocol.Frame
+}
+
+func TestSignRejectsUnsafeReadinessWithHistoricalFrames(t *testing.T) {
+	for name, mutate := range map[string]func(*monolith.SessionLifecycle){
+		"absent":           func(s *monolith.SessionLifecycle) { *s = monolith.SessionLifecycle{} },
+		"terminal":         func(s *monolith.SessionLifecycle) { s.Status = "COMPLETED" },
+		"unknown":          func(s *monolith.SessionLifecycle) { s.Status = "CREATED" },
+		"wrong identity":   func(s *monolith.SessionLifecycle) { s.SessionID = "other" },
+		"changed deadline": func(s *monolith.SessionLifecycle) { s.Deadline = s.Deadline.Add(time.Second) },
+		"missing expiry":   func(s *monolith.SessionLifecycle) { s.ExecutionExpiresAt = nil },
+		"invalid expiry": func(s *monolith.SessionLifecycle) {
+			v := s.ExecutionExpiresAt.Add(time.Second)
+			s.ExecutionExpiresAt = &v
+		},
+		"expired execution": func(s *monolith.SessionLifecycle) {
+			start := time.Now().Add(-301 * time.Second)
+			expiry := start.Add(300 * time.Second)
+			s.StartedAt = &start
+			s.ExecutionExpiresAt = &expiry
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			intent := validSignIntent(t)
+			claim := claimResultForIntent(intent)
+			start := time.Now()
+			expiry := claim.Deadline
+			s := claim.Session
+			s.Status = "RUNNING"
+			s.StartedAt = &start
+			s.ExecutionExpiresAt = &expiry
+			mutate(&s)
+			polls := 0
+			client := &stubClient{claimResult: claim, poll: func(_ context.Context, _ string, seq uint64) (monolith.MessagesResult, error) {
+				polls++
+				if seq != 0 {
+					t.Errorf("invalid poll advanced cursor to %d", seq)
+				}
+				return monolith.MessagesResult{Session: s, Messages: []monolith.InboundMessage{{DeliverySeq: 42, Payload: []byte("historical")}}}, nil
+			}}
+			runner := &countingSignRunner{}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			sem := make(chan struct{}, 1)
+			sem <- struct{}{}
+			runSessionWithExecutorsForTest(ctx, intent, client, runner, nil, nil, primaryPartyID, time.Millisecond, sem, nil, slog.Default())
+			if runner.calls != 0 || polls != 1 || len(sem) != 0 || client.lastResult.Status != "FAILED" {
+				t.Fatalf("unsafe readiness: dispatch=%d polls=%d permit=%d result=%+v", runner.calls, polls, len(sem), client.lastResult)
+			}
+		})
+	}
+}
+
+func TestSignExecutionBudgetMatchesSignerBoundaries(t *testing.T) {
+	wall := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
+	for _, old := range []time.Time{{}, time.Unix(0, 0), time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC)} {
+		if got := signExecutionBudget(old, wall); got > 0 {
+			t.Fatalf("ancient expiry grants %v", got)
+		}
+	}
+	for _, tc := range []struct {
+		name                 string
+		expiry, offset, want time.Duration
+	}{
+		{"normal", 90 * time.Second, 0, 88 * time.Second},
+		{"maximum", 400 * time.Second, 0, 300 * time.Second},
+		{"boundary", 2 * time.Second, 0, 0},
+		{"negative", time.Second, 0, -time.Second},
+		{"fast clock", 90 * time.Second, time.Second, 87 * time.Second},
+		{"slow clock", 90 * time.Second, -time.Second, 89 * time.Second},
+		{"microsecond", 2*time.Second + time.Microsecond, 0, time.Microsecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := signExecutionBudget(wall.Add(tc.expiry), wall.Add(tc.offset)); got != tc.want {
+				t.Fatalf("budget=%v want=%v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadinessBindsOneMonotonicTimerBeforeDispatchDelay(t *testing.T) {
+	wall := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
+	mono := time.Now()
+	intent := validSignIntent(t)
+	intent.ExpiresAt = wall.Add(time.Hour)
+	start := wall.Add(-297 * time.Second)
+	expiry := wall.Add(3 * time.Second)
+	lifecycle := monolith.SessionLifecycle{SessionID: intent.SessionID, Status: "RUNNING", Deadline: intent.ExpiresAt, StartedAt: &start, ExecutionExpiresAt: &expiry}
+	client := &stubClient{poll: func(context.Context, string, uint64) (monolith.MessagesResult, error) {
+		return monolith.MessagesResult{Session: lifecycle}, nil
+	}}
+	armed := 0
+	clock := readinessClock{sample: func() (time.Time, time.Time) { return wall, mono }, arm: func(parent context.Context, at time.Time) (context.Context, context.CancelFunc) {
+		armed++
+		if at != mono.Add(time.Second) {
+			t.Errorf("deadline=%v want original monotonic sample + 1s", at)
+		}
+		return context.WithDeadline(parent, at)
+	}}
+	active, cancel, _, err := waitForSignReadiness(context.Background(), client, intent, time.Millisecond, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	original, _ := active.Deadline()
+	for _, step := range []time.Duration{-time.Hour, time.Hour, -time.Second, time.Second} {
+		wall = wall.Add(step)
+		if got, _ := active.Deadline(); got != original {
+			t.Fatal("wall correction moved timer")
+		}
+	}
+	if armed != 1 {
+		t.Fatalf("timer bindings=%d", armed)
+	}
+	// A delayed dispatch sees the original expired context, never a fresh TTL.
+	select {
+	case <-active.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("bound timer did not fire")
+	}
+	if !errors.Is(active.Err(), context.DeadlineExceeded) {
+		t.Fatalf("active context=%v", active.Err())
+	}
+}
+
+func TestReadinessBoundaryRejectsDispatchAndHonorsEarlierCancellation(t *testing.T) {
+	wall := time.Now()
+	for _, remaining := range []time.Duration{0, time.Second, 2 * time.Second, 3 * time.Second} {
+		t.Run(remaining.String(), func(t *testing.T) {
+			intent := validSignIntent(t)
+			intent.ExpiresAt = wall.Add(time.Hour)
+			expiry := wall.Add(remaining)
+			start := expiry.Add(-300 * time.Second)
+			client := &stubClient{poll: func(context.Context, string, uint64) (monolith.MessagesResult, error) {
+				return monolith.MessagesResult{Session: monolith.SessionLifecycle{SessionID: intent.SessionID, Status: "RUNNING", StartedAt: &start, ExecutionExpiresAt: &expiry, Deadline: intent.ExpiresAt}}, nil
+			}}
+			parent, stop := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			defer stop()
+			clock := realReadinessClock()
+			clock.sample = func() (time.Time, time.Time) { return wall, wall }
+			active, cancel, _, err := waitForSignReadiness(parent, client, intent, time.Millisecond, clock)
+			if remaining <= 2*time.Second {
+				if err == nil {
+					cancel()
+					t.Fatal("boundary authorized execution")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cancel()
+			want, _ := parent.Deadline()
+			got, _ := active.Deadline()
+			if got != want {
+				t.Fatal("execution extended earlier caller deadline")
+			}
+		})
+	}
+}
+
+func TestFreshReadinessCannotReplaceAlreadyObservedStart(t *testing.T) {
+	intent := validSignIntent(t)
+	claim := claimResultForIntent(intent)
+	start := time.Now()
+	expiry := claim.Deadline
+	claim.Session.Status = "RUNNING"
+	claim.Session.StartedAt = &start
+	claim.Session.ExecutionExpiresAt = &expiry
+	changed := claim.Session
+	later := start.Add(time.Second)
+	changed.StartedAt = &later
+	client := &stubClient{claimResult: claim, poll: func(context.Context, string, uint64) (monolith.MessagesResult, error) {
+		return monolith.MessagesResult{Session: changed}, nil
+	}}
+	runner := &countingSignRunner{}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	runSessionWithExecutorsForTest(ctx, intent, client, runner, nil, nil, primaryPartyID, time.Millisecond, sem, nil, slog.Default())
+	if runner.calls != 0 || client.lastResult.Status != "FAILED" {
+		t.Fatalf("changed Start dispatched runner=%d result=%+v", runner.calls, client.lastResult)
+	}
+}
+
+func TestInvalidDKGLifecyclePreservesTerminalPublisherOwnership(t *testing.T) {
+	intent := authoritativeDKGIntent()
+	claim := claimResultForIntent(intent)
+	claim.Session = monolith.SessionLifecycle{}
+	client := &stubClient{claimResult: claim}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSessionWithExecutorsForTest(ctx, intent, client, &stubRunner{}, &capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
+	}()
+	select {
+	case <-done:
+		t.Error("invalid DKG released ownership without terminal publisher")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(sem) != 1 {
+		t.Error("DKG permit was released without terminal resolution")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("DKG shutdown did not release worker")
+	}
+}
+
+type gatedSignRunner struct {
+	entered, canceled chan struct{}
+	release           <-chan struct{}
+}
+
+type signRunnerFunc func(context.Context, coretss.SignSessionRequest) error
+
+func (f signRunnerFunc) RunSignSession(ctx context.Context, req coretss.SignSessionRequest) error {
+	return f(ctx, req)
+}
+
+func TestSignDelayedDispatchCannotRearmExpiredReadinessTimer(t *testing.T) {
+	intent := validSignIntent(t)
+	claim := claimResultForIntent(intent)
+	wall := time.Now()
+	expiry := wall.Add(2*time.Second + 20*time.Millisecond)
+	start := expiry.Add(-300 * time.Second)
+	lifecycle := claim.Session
+	lifecycle.Status = "RUNNING"
+	lifecycle.StartedAt = &start
+	lifecycle.ExecutionExpiresAt = &expiry
+	client := &stubClient{claimResult: claim, poll: func(context.Context, string, uint64) (monolith.MessagesResult, error) {
+		return monolith.MessagesResult{Session: lifecycle}, nil
+	}}
+	armed := 0
+	clock := readinessClock{sample: func() (time.Time, time.Time) { return wall, wall }, arm: func(parent context.Context, deadline time.Time) (context.Context, context.CancelFunc) {
+		armed++
+		if deadline != wall.Add(20*time.Millisecond) {
+			t.Errorf("late readiness deadline=%v", deadline)
+		}
+		ctx, cancel := context.WithDeadline(parent, deadline)
+		<-ctx.Done() // Dispatch is delayed while this already-bound timer expires.
+		return ctx, cancel
+	}}
+	runner := &countingSignRunner{}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	runSessionWithExecutorsForTest(ctx, intent, client, runner, nil, nil, primaryPartyID, time.Millisecond, sem, nil, slog.Default(), clock)
+	if runner.calls != 0 || armed != 1 || client.lastResult.Status != "FAILED" {
+		t.Fatalf("dispatch=%d timers=%d result=%+v", runner.calls, armed, client.lastResult)
+	}
+}
+
+func TestDuplicateRunningPollsAndWallCorrectionsKeepOneRunnerAndTimer(t *testing.T) {
+	intent := validSignIntent(t)
+	claim := claimResultForIntent(intent)
+	wall := time.Now()
+	expiry := wall.Add(30 * time.Second)
+	start := expiry.Add(-300 * time.Second)
+	lifecycle := claim.Session
+	lifecycle.Status = "RUNNING"
+	lifecycle.StartedAt = &start
+	lifecycle.ExecutionExpiresAt = &expiry
+	var offset, samples, arms, dispatches atomic.Int64
+	duplicates := make(chan struct{})
+	releasePoll := make(chan struct{})
+	polls := 0
+	client := &stubClient{claimResult: claim, poll: func(ctx context.Context, _ string, _ uint64) (monolith.MessagesResult, error) {
+		polls++
+		switch polls {
+		case 2:
+			offset.Store(int64(time.Hour))
+		case 3:
+			offset.Store(int64(-time.Hour))
+		case 4:
+			close(duplicates)
+		case 5:
+			select {
+			case <-releasePoll:
+			case <-ctx.Done():
+				return monolith.MessagesResult{}, ctx.Err()
+			}
+		}
+		return monolith.MessagesResult{Session: lifecycle}, nil
+	}}
+	clock := readinessClock{sample: func() (time.Time, time.Time) { samples.Add(1); return wall.Add(time.Duration(offset.Load())), wall }, arm: func(parent context.Context, at time.Time) (context.Context, context.CancelFunc) {
+		arms.Add(1)
+		return context.WithDeadline(parent, at)
+	}}
+	runner := signRunnerFunc(func(ctx context.Context, _ coretss.SignSessionRequest) error {
+		dispatches.Add(1)
+		original, _ := ctx.Deadline()
+		if original != wall.Add(28*time.Second) {
+			t.Errorf("runner budget=%v, want sampled expiry minus 2s", original)
+		}
+		select {
+		case <-duplicates:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if got, _ := ctx.Deadline(); got != original {
+			t.Error("duplicate polling extended execution deadline")
+		}
+		close(releasePoll)
+		return nil
+	})
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	runSessionWithExecutorsForTest(ctx, intent, client, runner, nil, nil, primaryPartyID, time.Millisecond, sem, nil, slog.Default(), clock)
+	if samples.Load() != 1 || arms.Load() != 1 || dispatches.Load() != 1 || client.lastResult.Status != "COMPLETED" {
+		t.Fatalf("samples=%d arms=%d dispatches=%d result=%+v", samples.Load(), arms.Load(), dispatches.Load(), client.lastResult)
+	}
+}
+
+func TestInvalidLaterPollCancelsRunnerBeforeResultAndPermitRelease(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	intent := validSignIntent(t)
+	claim := claimResultForIntent(intent)
+	start := time.Now()
+	expiry := claim.Deadline
+	lifecycle := claim.Session
+	lifecycle.Status = "RUNNING"
+	lifecycle.StartedAt = &start
+	lifecycle.ExecutionExpiresAt = &expiry
+	entered := make(chan struct{})
+	stopped := make(chan struct{})
+	polls := 0
+	client := &stubClient{claimResult: claim, poll: func(ctx context.Context, _ string, _ uint64) (monolith.MessagesResult, error) {
+		polls++
+		if polls == 1 {
+			return monolith.MessagesResult{Session: lifecycle}, nil
+		}
+		select {
+		case <-entered:
+		case <-ctx.Done():
+			return monolith.MessagesResult{}, ctx.Err()
+		}
+		changed := lifecycle
+		changed.Deadline = changed.Deadline.Add(time.Second)
+		return monolith.MessagesResult{Session: changed, Messages: []monolith.InboundMessage{{DeliverySeq: 1, Payload: []byte("must not be delivered")}}}, nil
+	}}
+	runner := signRunnerFunc(func(ctx context.Context, req coretss.SignSessionRequest) error {
+		close(entered)
+		<-ctx.Done()
+		close(stopped)
+		return nil
+	})
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	runSessionWithExecutorsForTest(ctx, intent, client, runner, nil, nil, primaryPartyID, time.Millisecond, sem, nil, slog.Default())
+	select {
+	case <-stopped:
+	default:
+		t.Fatal("runner did not stop before worker return")
+	}
+	if client.lastResult.Status != "FAILED" || len(sem) != 0 {
+		t.Fatalf("invalid later poll result=%+v permit=%d", client.lastResult, len(sem))
+	}
+}
+
+func (r *gatedSignRunner) RunSignSession(ctx context.Context, _ coretss.SignSessionRequest) error {
+	close(r.entered)
+	<-ctx.Done()
+	close(r.canceled)
+	<-r.release
+	return ctx.Err()
+}
+
+func TestSignCancellationHoldsPermitUntilRunnerAndPollerStop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	intent := validSignIntent(t)
+	claim := claimResultForIntent(intent)
+	start := time.Now()
+	expiry := claim.Deadline
+	lifecycle := claim.Session
+	lifecycle.Status = "RUNNING"
+	lifecycle.StartedAt = &start
+	lifecycle.ExecutionExpiresAt = &expiry
+	pollEntered, pollRelease, pollCanceled := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	runRelease := make(chan struct{})
+	runner := &gatedSignRunner{entered: make(chan struct{}), canceled: make(chan struct{}), release: runRelease}
+	polls := 0
+	client := &stubClient{claimResult: claim, poll: func(ctx context.Context, _ string, _ uint64) (monolith.MessagesResult, error) {
+		polls++
+		if polls == 1 {
+			return monolith.MessagesResult{Session: lifecycle}, nil
+		}
+		close(pollEntered)
+		<-ctx.Done()
+		close(pollCanceled)
+		<-pollRelease
+		return monolith.MessagesResult{}, ctx.Err()
+	}}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSessionWithExecutorsForTest(ctx, intent, client, runner, nil, nil, primaryPartyID, time.Millisecond, sem, nil, slog.Default())
+	}()
+	select {
+	case <-runner.entered:
+	case <-ctx.Done():
+		t.Fatal("runner did not start")
+	}
+	select {
+	case <-pollEntered:
+	case <-ctx.Done():
+		t.Fatal("poller did not start")
+	}
+	cancel()
+	<-runner.canceled
+	<-pollCanceled
+	if len(sem) != 1 {
+		t.Error("permit released before runner stop")
+	}
+	select {
+	case <-done:
+		t.Error("worker returned before runner stop")
+	default:
+	}
+	close(runRelease)
+	select {
+	case <-done:
+		t.Error("worker returned before poller stop")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if len(sem) != 1 {
+		t.Error("permit released before poller stop")
+	}
+	close(pollRelease)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not join both barriers")
+	}
+	if len(sem) != 0 {
+		t.Fatal("permit retained after both workers stopped")
+	}
+}
+
+func (r *receivingSignRunner) RunSignSession(ctx context.Context, req coretss.SignSessionRequest) error {
+	r.calls.Add(1)
+	close(r.entered)
+	for i := 0; i < 2; i++ {
+		frame, err := req.Transport.RecvFrame(ctx)
+		if err != nil {
+			return err
+		}
+		r.frames <- frame
+	}
+	return nil
+}
+
+func TestSignWaitsForFreshRunningAndReceivesOriginalFrames(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	intent := validSignIntent(t)
+	claim := claimResultForIntent(intent)
+	start := time.Now()
+	expiry := claim.Deadline
+	running := claim.Session
+	running.Status = "RUNNING"
+	running.StartedAt = &start
+	running.ExecutionExpiresAt = &expiry
+	claim.Session = running // A RUNNING claim still cannot authorize dispatch.
+	pending := running
+	pending.Status = "PENDING"
+	pending.StartedAt = nil
+	pending.ExecutionExpiresAt = nil
+	early := []monolith.InboundMessage{
+		{DeliverySeq: 11, ProtocolSeq: 7, MessageID: "early-1", FromPartyID: "mpc-signer", ToPartyID: primaryPartyID, Payload: []byte("first")},
+		{DeliverySeq: 12, ProtocolSeq: 8, MessageID: "early-2", FromPartyID: "mpc-signer", ToPartyID: primaryPartyID, Payload: []byte("second")},
+	}
+	observedPending := make(chan struct{})
+	allowRunning := make(chan struct{})
+	runner := &receivingSignRunner{entered: make(chan struct{}), frames: make(chan protocol.Frame, 2)}
+	polls := 0
+	client := &stubClient{claimResult: claim}
+	client.poll = func(ctx context.Context, id string, after uint64) (monolith.MessagesResult, error) {
+		polls++
+		if id != intent.SessionID {
+			t.Errorf("poll session = %q", id)
+		}
+		switch polls {
+		case 1:
+			if after != 0 {
+				t.Errorf("pending cursor = %d", after)
+			}
+			close(observedPending)
+			return monolith.MessagesResult{Session: pending, Messages: early}, nil
+		case 2:
+			if after != 0 {
+				t.Errorf("readiness lost early cursor = %d", after)
+			}
+			select {
+			case <-allowRunning:
+			case <-ctx.Done():
+				return monolith.MessagesResult{}, ctx.Err()
+			}
+			return monolith.MessagesResult{Session: running}, nil
+		case 3:
+			if after != 0 {
+				t.Errorf("transport replay cursor = %d", after)
+			}
+			return monolith.MessagesResult{Session: running, Messages: early}, nil
+		default:
+			return monolith.MessagesResult{Session: running}, nil
+		}
+	}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runSessionWithExecutorsForTest(ctx, intent, client, runner, nil, nil, primaryPartyID, time.Millisecond, sem, nil, slog.Default())
+	}()
+	select {
+	case <-observedPending:
+	case <-ctx.Done():
+		t.Fatal("no pending poll")
+	}
+	select {
+	case <-runner.entered:
+		t.Error("runner dispatched before fresh RUNNING")
+	default:
+	}
+	if runner.calls.Load() != 0 {
+		t.Error("runner count was nonzero before fresh RUNNING")
+	}
+	close(allowRunning)
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("worker failed to receive replayed frames")
+	}
+	for i, want := range early {
+		select {
+		case got := <-runner.frames:
+			if got.SessionID != intent.SessionID || got.MessageID != want.MessageID || got.FromParty != want.FromPartyID || got.ToParty != want.ToPartyID || got.Seq != want.ProtocolSeq || !bytes.Equal(got.Payload, want.Payload) {
+				t.Errorf("frame %d = %+v, want %+v", i, got, want)
+			}
+		default:
+			t.Fatalf("runner did not receive frame %d", i)
+		}
+	}
+	if client.lastResult.Status != "COMPLETED" {
+		t.Fatalf("result = %+v", client.lastResult)
+	}
+	if runner.calls.Load() != 1 {
+		t.Fatalf("runner calls=%d, want 1", runner.calls.Load())
+	}
 }
 
 func TestNormalDKGHoldsPermitLeaseUntilAuthoritativeTerminalOutcome(t *testing.T) {
@@ -1002,11 +1597,12 @@ func TestRunSessionUsesClaimedPayloadForDkgExecution(t *testing.T) {
 	client := &stubClient{
 		claimResult: monolith.ClaimResult{
 			IntentID:  claimedIntent.IntentID,
+			Session:   monolith.SessionLifecycle{SessionID: claimedIntent.SessionID, Status: "PENDING", Deadline: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)},
 			SessionID: claimedIntent.SessionID,
 			Type:      claimedIntent.Type,
 			Payload:   claimedIntent.Payload,
 			Status:    "CLAIMED",
-			ExpiresAt: time.Now().Add(time.Minute),
+			Deadline:  time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 	}
 	runner := &capturingRunner{}
@@ -1032,7 +1628,7 @@ func TestRunSessionRejectsIncompleteClaimResponse(t *testing.T) {
 			IntentID:  pendingIntent.IntentID,
 			SessionID: pendingIntent.SessionID,
 			Type:      pendingIntent.Type,
-			ExpiresAt: time.Now().Add(time.Minute),
+			Deadline:  time.Now().Add(time.Minute),
 		},
 	}
 	runner := &capturingRunner{}

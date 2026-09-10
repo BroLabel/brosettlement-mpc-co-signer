@@ -77,9 +77,6 @@ func (s *stubPendingClient) ClaimIntent(_ context.Context, _ string, intentID st
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.claimCalls = append(s.claimCalls, intentID)
-	if s.claimResult.ExpiresAt.IsZero() {
-		s.claimResult.ExpiresAt = time.Now().Add(time.Minute)
-	}
 	if err := s.claimErrors[intentID]; err != nil {
 		return monolith.ClaimResult{}, err
 	}
@@ -97,8 +94,25 @@ func (s *stubPendingClient) PostMessage(context.Context, string, monolith.Outbou
 	return nil
 }
 
-func (s *stubPendingClient) GetMessages(context.Context, string, uint64) ([]monolith.InboundMessage, error) {
-	return nil, nil
+func (s *stubPendingClient) GetMessages(_ context.Context, id string, _ uint64) (monolith.MessagesResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	claim := s.claimResult
+	for _, c := range s.claimResults {
+		if c.SessionID == id {
+			claim = c
+			break
+		}
+	}
+	lifecycle := claim.Session
+	if lifecycle.Status == "PENDING" && claim.Type == "SIGN" {
+		start := lifecycle.Deadline.Add(-time.Minute)
+		expiry := lifecycle.Deadline
+		lifecycle.Status = "RUNNING"
+		lifecycle.StartedAt = &start
+		lifecycle.ExecutionExpiresAt = &expiry
+	}
+	return monolith.MessagesResult{Session: lifecycle}, nil
 }
 
 func (s *stubPendingClient) claims() []string {
@@ -318,6 +332,7 @@ func TestSchedulerRunsDifferentIntentIDsInParallel(t *testing.T) {
 	secondDiscovery.Payload.KeyID = "key-126"
 	secondClaim.IntentID = secondDiscovery.IntentID
 	secondClaim.SessionID = secondDiscovery.SessionID
+	secondClaim.Session.SessionID = secondDiscovery.SessionID
 	secondClaim.Payload.KeyID = secondDiscovery.Payload.KeyID
 	release := make(chan struct{})
 	runner := &blockingSignRunner{started: make(chan string, 2), release: release}

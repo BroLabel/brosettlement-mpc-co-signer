@@ -46,7 +46,7 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
 		bodyHashHeaderIsAbsent = len(r.Header.Values("X-Api-Body-Hash")) == 0
 		signatureIsValid = verifyRequestSignature(t, r, pub, "")
-		_, _ = w.Write([]byte(`{"httpStatus":200,"status":"CLAIMED","type":"DKG","expiresAt":"2026-04-16T12:00:00Z"}`))
+		_, _ = w.Write([]byte(`{"httpStatus":200,"status":"CLAIMED","type":"DKG","sessionId":"session-1","deadline":"2026-04-16T12:00:00Z","session":{"sessionId":"session-1","status":"PENDING","startedAt":null,"executionExpiresAt":null,"deadline":"2026-04-16T12:00:00Z"}}`))
 	}))
 	defer srv.Close()
 
@@ -83,7 +83,8 @@ func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
 			"sessionId":"session-1",
 			"type":"DKG",
 			"status":"CLAIMED",
-			"expiresAt":"2026-04-16T12:00:00Z",
+			"deadline":"2026-04-16T12:00:00Z",
+ "session":{"sessionId":"session-1","status":"PENDING","startedAt":null,"executionExpiresAt":null,"deadline":"2026-04-16T12:00:00Z"},
 			"payload":{
 				"type":"DKG",
 				"orgId":"org-1",
@@ -443,7 +444,7 @@ func TestListActionableIntentsRejectsUnexpectedHTTPStatusWithValidBody(t *testin
 
 func TestClaimIntentRejectsUnknownBackendFixtureField(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"expiresAt":"2026-04-16T12:00:00Z","unexpected":true}`))
+		_, _ = w.Write([]byte(`{"deadline":"2026-04-16T12:00:00Z","unexpected":true}`))
 	}))
 	defer srv.Close()
 
@@ -751,12 +752,13 @@ func TestGetMessagesDecodesDeliverySeqSeparatelyFromProtocolSeq(t *testing.T) {
 			"",
 			testAPIKeyID,
 		)
-		_, _ = w.Write([]byte(`{"messages":[{"deliverySeq":11,"protocolSeq":7,"messageId":"msg-1","round":2,"fromPartyId":"co-signer","toPartyId":"mpc-signer","payload":"YWJj"}]}`))
+		_, _ = w.Write([]byte(`{"session":{"sessionId":"session-1","status":"PENDING","startedAt":null,"executionExpiresAt":null,"deadline":"2026-04-16T12:00:00Z"},"messages":[{"deliverySeq":11,"protocolSeq":7,"messageId":"msg-1","round":2,"fromPartyId":"co-signer","toPartyId":"mpc-signer","payload":"YWJj"}]}`))
 	}))
 	defer srv.Close()
 
 	client, pub := newTestClient(t, srv.URL)
-	msgs, err := client.GetMessages(context.Background(), "session-1", 10)
+	result, err := client.GetMessages(context.Background(), "session-1", 10)
+	msgs := result.Messages
 	if err != nil {
 		t.Fatalf("GetMessages() error = %v", err)
 	}
@@ -818,6 +820,7 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 			"type":"SIGN",
 			"status":"CLAIMED",
 			"deadline":"2027-04-16T12:00:00.000Z",
+			"session":{"sessionId":"session-1","status":"PENDING","startedAt":null,"executionExpiresAt":null,"deadline":"2027-04-16T12:00:00.000Z"},
 			"payload":{
 				"type":"SIGN",
 				"orgId":"org-1",

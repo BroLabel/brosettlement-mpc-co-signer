@@ -38,7 +38,7 @@ type sessionClient interface {
 	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
 	PostResult(ctx context.Context, intentID string, result monolith.IntentResult) error
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
-	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)
+	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) (monolith.MessagesResult, error)
 }
 
 type signSessionRunner interface {
@@ -83,6 +83,23 @@ func runSessionWithPermits(
 	permits *jobPermitLease,
 	log *slog.Logger,
 	claimDispatched func(),
+) {
+	runSessionWithClock(ctx, intent, client, signRunner, dkgRunner, terminalPublisher, localPartyID, framePollInterval, permits, log, claimDispatched, realReadinessClock())
+}
+
+func runSessionWithClock(
+	ctx context.Context,
+	intent monolith.Intent,
+	client sessionClient,
+	signRunner signSessionRunner,
+	dkgRunner dkgExecutor,
+	terminalPublisher DKGTerminalPublisher,
+	localPartyID string,
+	framePollInterval time.Duration,
+	permits *jobPermitLease,
+	log *slog.Logger,
+	claimDispatched func(),
+	clock readinessClock,
 ) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -163,6 +180,17 @@ func runSessionWithPermits(
 			return
 		}
 	}
+	if err := claim.Session.Validate(strings.ToUpper(claimedIntent.Type), claimedIntent.SessionID, claim.Deadline); err != nil || claim.Deadline.IsZero() ||
+		intent.SessionID != "" && intent.SessionID != claimedIntent.SessionID || !intent.ExpiresAt.IsZero() && !intent.ExpiresAt.Equal(claim.Deadline) {
+		if admittedKind == intentKindDKG {
+			if !publishClaimedDKGFailure(ctx, terminalPublisher, claimedIntent, log) && ctx.Err() == nil {
+				<-ctx.Done()
+			}
+		} else {
+			postResult(ctx, client, intent.IntentID, failedResult(ErrorCodeInvalidIntent, monolith.ErrInvalidLifecycle), log)
+		}
+		return
+	}
 	intent = claimedIntent
 
 	if err := validateIntent(intent, localPartyID); err != nil {
@@ -197,8 +225,19 @@ func runSessionWithPermits(
 
 	sessionCtx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
+	if admittedKind == intentKindSIGN {
+		var readyCancel context.CancelFunc
+		var err error
+		sessionCtx, readyCancel, intent.Session, err = waitForSignReadiness(sessionCtx, client, intent, framePollInterval, clock)
+		if err != nil {
+			postResult(ctx, client, intent.IntentID, BuildResult(err, sessionCtx, intent), log)
+			return
+		}
+		defer readyCancel()
+	}
 
 	frameCtx := transport.FrameContext{
+		Session:   intent.Session,
 		IntentID:  intent.IntentID,
 		OrgID:     intent.Payload.OrgID,
 		SessionID: intent.SessionID,
@@ -220,12 +259,45 @@ func runSessionWithPermits(
 		}
 		dkgResult, runErr = dkgRunner.Run(sessionCtx, intent, tr)
 	case "SIGN":
-		runErr = signRunner.RunSignSession(sessionCtx, buildSignRequest(intent, localPartyID, tr))
+		if err := sessionCtx.Err(); err != nil {
+			runErr = err
+			break
+		}
+		runnerCtx, stopRunner := context.WithCancel(sessionCtx)
+		finished := make(chan error, 1)
+		go func() {
+			if err := runnerCtx.Err(); err != nil {
+				finished <- err
+				return
+			}
+			finished <- signRunner.RunSignSession(runnerCtx, buildSignRequest(intent, localPartyID, tr))
+		}()
+		select {
+		case runErr = <-finished:
+		case <-tr.Done():
+			stopRunner()
+			runErr = <-finished
+			if tr.Err() != nil {
+				runErr = tr.Err()
+			}
+		case <-sessionCtx.Done():
+			stopRunner()
+			runErr = <-finished
+			if runErr == nil {
+				runErr = sessionCtx.Err()
+			}
+		}
+		stopRunner()
 		if isPrimarySigningArtifactFailure(runErr) {
 			log.Error("critical primary signing material failure", "alert_class", "primary_material_unavailable")
 		}
 	default:
 		runErr = fmt.Errorf("%w: unknown intent type: %s", errInvalidIntent, intent.Type)
+	}
+	// Both completion barriers precede terminal publication and permit release.
+	tr.Close()
+	if admittedKind == intentKindSIGN && tr.Err() != nil {
+		runErr = tr.Err()
 	}
 
 	if strings.EqualFold(strings.TrimSpace(intent.Type), "DKG") {
@@ -260,6 +332,65 @@ func runSessionWithPermits(
 
 	result := BuildResult(runErr, sessionCtx, intent)
 	postResult(ctx, client, intent.IntentID, result, log)
+}
+
+type readinessClock struct {
+	sample func() (time.Time, time.Time)
+	arm    func(context.Context, time.Time) (context.Context, context.CancelFunc)
+}
+
+func realReadinessClock() readinessClock {
+	return readinessClock{sample: func() (time.Time, time.Time) { now := time.Now(); return now, now }, arm: context.WithDeadline}
+}
+
+func signExecutionBudget(expiresAt, wall time.Time) time.Duration {
+	return min(300*time.Second, expiresAt.Add(-2*time.Second).Sub(wall))
+}
+
+func waitForSignReadiness(ctx context.Context, client sessionClient, intent monolith.Intent, interval time.Duration, clock readinessClock) (context.Context, context.CancelFunc, monolith.SessionLifecycle, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return ctx, nil, monolith.SessionLifecycle{}, err
+		}
+		pollCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+		result, err := client.GetMessages(pollCtx, intent.SessionID, 0)
+		cancel()
+		if errors.Is(err, monolith.ErrInvalidLifecycle) {
+			return ctx, nil, result.Session, err
+		}
+		if err == nil {
+			if err := result.Session.Validate("SIGN", intent.SessionID, intent.ExpiresAt); err != nil {
+				return ctx, nil, result.Session, err
+			}
+			switch result.Session.Status {
+			case "PENDING":
+			case "RUNNING":
+				if intent.Session.StartedAt != nil && (!result.Session.StartedAt.Equal(*intent.Session.StartedAt) || intent.Session.ExecutionExpiresAt == nil || !result.Session.ExecutionExpiresAt.Equal(*intent.Session.ExecutionExpiresAt)) {
+					return ctx, nil, result.Session, monolith.ErrInvalidLifecycle
+				}
+				wall, mono := clock.sample()
+				budget := signExecutionBudget(*result.Session.ExecutionExpiresAt, wall)
+				if budget <= 0 || !result.Session.Deadline.After(wall) {
+					return ctx, nil, result.Session, errAlreadyExpired
+				}
+				active, stop := clock.arm(ctx, mono.Add(budget))
+				if err := active.Err(); err != nil {
+					stop()
+					return ctx, nil, result.Session, err
+				}
+				return active, stop, result.Session, nil
+			default:
+				return ctx, nil, result.Session, monolith.ErrInvalidLifecycle
+			}
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx, nil, monolith.SessionLifecycle{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func validateRediscoveredSignClaim(discovery monolith.Intent, claim monolith.ClaimResult) error {
