@@ -27,8 +27,12 @@ COPY internal/ ./internal/
 
 ARG TARGETOS
 ARG TARGETARCH
-RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -buildvcs=false -ldflags='-s -w' \
+ARG VERSION
+ARG REVISION
+RUN printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+    && printf '%s' "${REVISION}" | grep -Eq '^[0-9a-fA-F]{7,64}$' \
+    && GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/co-signer ./cmd/co-signer
 
 # The share stores must exist and be private before startup: sharestore rejects
@@ -45,9 +49,14 @@ RUN mkdir -p /state/primary /state/recovery \
 # pre-declared non-root user.
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 
+ARG VERSION
+ARG REVISION
+
 LABEL org.opencontainers.image.source="https://github.com/BroLabel/brosettlement-mpc-co-signer" \
       org.opencontainers.image.description="BroSettlement MPC co-signer" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}"
 
 # Binary stays root-owned and read-only to the running user.
 COPY --from=build /out/co-signer /usr/local/bin/co-signer

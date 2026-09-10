@@ -88,6 +88,33 @@ func TestApplicationExpiredDrainStillJoinsSignDelivery(t *testing.T) {
 	}
 }
 
+func TestApplicationHealthReportsBuildVersion(t *testing.T) {
+	want := os.Getenv("EXPECTED_VERSION")
+	if want == "" {
+		want = "dev"
+	}
+
+	readiness := health.NewReadiness()
+	readiness.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
+	resources := &applicationResources{
+		signingReady:      func() bool { return true },
+		provisioningReady: func() bool { return true },
+	}
+	server := newApplicationHealthServer("127.0.0.1:0", t.TempDir(), readiness, resources)
+	recorder := httptest.NewRecorder()
+	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
+
+	var body struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	if body.Version != want {
+		t.Fatalf("health version = %q, want %q", body.Version, want)
+	}
+}
+
 func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T) {
 	wantErr := errors.New("renameat2 unavailable")
 	primary := &stubArtifactCapabilityProber{err: wantErr}

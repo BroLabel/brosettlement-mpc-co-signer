@@ -27,10 +27,9 @@ import (
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
-const (
-	version         = "0.1.0"
-	shutdownTimeout = 30 * time.Second
-)
+var version = "dev"
+
+const shutdownTimeout = 30 * time.Second
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
