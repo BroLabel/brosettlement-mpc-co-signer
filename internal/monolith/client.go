@@ -282,25 +282,27 @@ func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (
 	if err != nil {
 		return ClaimResult{}, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer cancel()
 	path := "/api/v1/co-signer/intents/" + pathType + "/" + url.PathEscape(intentID) + "/claim"
 	var out ClaimResult
-	if err := c.doJSON(ctx, http.MethodPost, path, nil, intentID, &out, http.StatusOK); err != nil {
+	if err := c.doJSONAttempts(ctx, http.MethodPost, path, nil, intentID, &out, http.StatusOK, 1); err != nil {
 		switch {
 		case statusCode(err) == http.StatusConflict:
 			return ClaimResult{}, ErrAlreadyClaimed
 		case statusCode(err) == http.StatusNotFound:
 			return ClaimResult{}, ErrNotFound
-		case isAmbiguous(err):
+		case isAmbiguous(err), statusCode(err) >= 500, errors.Is(err, context.Canceled):
 			return ClaimResult{}, ErrClaimOutcomeUnknown
 		default:
 			return ClaimResult{}, err
 		}
 	}
 	if out.HTTPStatus != http.StatusOK {
-		return ClaimResult{}, errors.New("claim response body HTTP status mismatch")
+		return ClaimResult{}, fmt.Errorf("%w: claim response body HTTP status mismatch", ErrClaimOutcomeUnknown)
 	}
 	if err := validateClaimResult(out, intentType); err != nil {
-		return ClaimResult{}, err
+		return ClaimResult{}, fmt.Errorf("%w: %w", ErrClaimOutcomeUnknown, err)
 	}
 	return out, nil
 }
@@ -406,51 +408,53 @@ func (c *Client) GetMessages(ctx context.Context, sessionID string, afterSeq uin
 }
 
 func (c *Client) PostResult(ctx context.Context, intentID string, result IntentResult) error {
-	body, err := marshalSignResult(result)
+	request, err := NewSignResultRequest(result)
 	if err != nil {
 		return err
 	}
+	return c.PostSignResult(ctx, intentID, request)
+}
+
+// SignResultRequest retains the exact serialized result for its live owner.
+// Strings and private fields prevent mutation between delivery attempts.
+type SignResultRequest struct{ body, status string }
+
+func NewSignResultRequest(result IntentResult) (SignResultRequest, error) {
+	body, err := marshalSignResult(result)
+	return SignResultRequest{body: string(body), status: result.Status}, err
+}
+
+func (r SignResultRequest) MarshalJSON() ([]byte, error) { return []byte(r.body), nil }
+
+func (c *Client) PostSignResult(ctx context.Context, intentID string, result SignResultRequest) error {
+	ctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
+	defer cancel()
 	path := "/api/v1/co-signer/intents/sign/" + url.PathEscape(intentID) + "/result"
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		req, err := c.newRequest(ctx, http.MethodPost, path, body)
-		if err != nil {
-			return err
-		}
-		req.Header.Set("X-Idempotency-Key", intentID)
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			lastErr = err
-			if attempt < maxAttempts && isRetryable(err) {
-				time.Sleep(backoff(attempt))
-				continue
-			}
-			return err
-		}
-		responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxTerminalResponseBytes+1))
-		_ = resp.Body.Close()
-		if readErr != nil {
-			lastErr = readErr
-			if attempt < maxAttempts {
-				time.Sleep(backoff(attempt))
-				continue
-			}
-			return readErr
-		}
-		if len(responseBody) > maxTerminalResponseBytes {
-			return errors.New("SIGN result response is too large")
-		}
-		if resp.StatusCode >= http.StatusInternalServerError {
-			lastErr = &httpStatusError{statusCode: resp.StatusCode, body: string(responseBody)}
-			if attempt < maxAttempts {
-				time.Sleep(backoff(attempt))
-				continue
-			}
-			return lastErr
-		}
-		return parseSignResultOutcome(resp.StatusCode, responseBody, result.Status)
+	body, err := result.MarshalJSON()
+	if err != nil {
+		return err
 	}
-	return lastErr
+	req, err := c.newRequest(ctx, http.MethodPost, path, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Idempotency-Key", intentID)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxTerminalResponseBytes+1))
+	_ = resp.Body.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if len(responseBody) > maxTerminalResponseBytes {
+		return errors.New("SIGN result response is too large")
+	}
+	if resp.StatusCode >= http.StatusInternalServerError {
+		return &httpStatusError{statusCode: resp.StatusCode, body: string(responseBody)}
+	}
+	return parseSignResultOutcome(resp.StatusCode, responseBody, result.status)
 }
 
 func marshalSignResult(result IntentResult) ([]byte, error) {
@@ -557,6 +561,10 @@ func (c *Client) doJSON(
 	out any,
 	expectedStatus int,
 ) error {
+	return c.doJSONAttempts(ctx, method, path, payload, idempotencyKey, out, expectedStatus, maxAttempts)
+}
+
+func (c *Client) doJSONAttempts(ctx context.Context, method, path string, payload any, idempotencyKey string, out any, expectedStatus, attempts int) error {
 	var body []byte
 	if payload != nil {
 		var err error
@@ -567,7 +575,7 @@ func (c *Client) doJSON(
 	}
 
 	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; attempt <= attempts; attempt++ {
 		req, err := c.newRequest(ctx, method, path, body)
 		if err != nil {
 			return err
@@ -579,7 +587,7 @@ func (c *Client) doJSON(
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			lastErr = err
-			if attempt < maxAttempts && isRetryable(err) {
+			if attempt < attempts && isRetryable(err) {
 				time.Sleep(backoff(attempt))
 				continue
 			}
@@ -590,7 +598,7 @@ func (c *Client) doJSON(
 		_ = resp.Body.Close()
 		if readErr != nil {
 			lastErr = readErr
-			if attempt < maxAttempts {
+			if attempt < attempts {
 				time.Sleep(backoff(attempt))
 				continue
 			}
@@ -599,7 +607,7 @@ func (c *Client) doJSON(
 
 		if resp.StatusCode >= 500 {
 			lastErr = &httpStatusError{statusCode: resp.StatusCode, body: string(respBody)}
-			if attempt < maxAttempts {
+			if attempt < attempts {
 				time.Sleep(backoff(attempt))
 				continue
 			}

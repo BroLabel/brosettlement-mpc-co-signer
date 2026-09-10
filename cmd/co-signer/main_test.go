@@ -18,11 +18,75 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/worker"
 )
+
+type blockedSignDelivery struct {
+	listed                     atomic.Bool
+	entered, canceled, release chan struct{}
+}
+
+func (c *blockedSignDelivery) GetPendingIntents(context.Context) ([]monolith.Intent, error) {
+	if c.listed.Swap(true) {
+		return nil, nil
+	}
+	return []monolith.Intent{{Type: "SIGN", IntentID: "orphan", SessionID: "session", DiscoveryStatus: "CLAIMED"}}, nil
+}
+func (*blockedSignDelivery) ClaimIntent(context.Context, string, string) (monolith.ClaimResult, error) {
+	panic("orphan must not claim")
+}
+func (c *blockedSignDelivery) PostSignResult(ctx context.Context, _ string, _ monolith.SignResultRequest) error {
+	close(c.entered)
+	<-ctx.Done()
+	close(c.canceled)
+	<-c.release
+	return nil
+}
+func (*blockedSignDelivery) PostMessage(context.Context, string, monolith.OutboundFrame) error {
+	return nil
+}
+func (*blockedSignDelivery) GetMessages(context.Context, string, uint64) (monolith.MessagesResult, error) {
+	return monolith.MessagesResult{}, errors.New("unavailable")
+}
+
+func TestApplicationExpiredDrainStillJoinsSignDelivery(t *testing.T) {
+	client := &blockedSignDelivery{entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	resources := &applicationResources{scheduler: worker.NewScheduler(client, nil, nil, "co-signer-primary", time.Millisecond, worker.SchedulerConfig{MinInterval: time.Millisecond}, nil, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	resources.startScheduler(ctx)
+	<-client.entered
+	cancel()
+	<-client.canceled
+	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer stop()
+	if err := drainWorkers(expired, resources.scheduler.Semaphore()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("drain error=%v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- resources.Close() }()
+	select {
+	case err := <-done:
+		close(client.release)
+		t.Fatalf("resources closed before SIGN stopped: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(client.release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resource close did not join stopped delivery")
+	}
+}
 
 func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T) {
 	wantErr := errors.New("renameat2 unavailable")

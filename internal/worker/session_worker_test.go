@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,6 +42,18 @@ func (s *stubClient) ClaimIntent(_ context.Context, _ string, _ string) (monolit
 func (s *stubClient) PostResult(_ context.Context, _ string, result monolith.IntentResult) error {
 	s.lastResult = result
 	return nil
+}
+
+func (s *stubClient) PostSignResult(ctx context.Context, id string, result monolith.SignResultRequest) error {
+	body, err := result.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	var decoded monolith.IntentResult
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return err
+	}
+	return s.PostResult(ctx, id, decoded)
 }
 
 func (s *stubClient) PostMessage(_ context.Context, sessionID string, frame monolith.OutboundFrame) error {
@@ -295,24 +308,34 @@ func TestRunSessionPassesClaimedMailboxContextToDKGTransport(t *testing.T) {
 	}
 }
 
-func TestRunSessionRediscoveredSignClaimsReplayBeforeRuntime(t *testing.T) {
-	discovery, claim := rediscoveredSignFixture(t)
-	client := &stubClient{claimResult: claim}
-	runner := &countingSignRunner{}
-	sem := make(chan struct{}, 1)
-	sem <- struct{}{}
+func TestRunSessionOrphanClaimedPendingNeverStartsRuntime(t *testing.T) {
+	for _, state := range []string{"PENDING", "RUNNING", "COMPLETED", "FAILED", "TIMED_OUT", "EXPIRED"} {
+		t.Run(state, func(t *testing.T) {
+			discovery, claim := rediscoveredSignFixture(t)
+			discovery.Session = claim.Session
+			if state == "EXPIRED" {
+				discovery.ExpiresAt = time.Now().Add(-time.Hour)
+			} else {
+				discovery.Session.Status = state
+			}
+			client := &stubClient{claimResult: claim}
+			runner := &countingSignRunner{}
+			sem := make(chan struct{}, 1)
+			sem <- struct{}{}
 
-	runSessionWithExecutorsForTest(context.Background(), discovery, client, runner, &capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil, slog.Default())
+			runSessionWithExecutorsForTest(context.Background(), discovery, client, runner, &capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil, slog.Default())
 
-	if runner.calls != 1 {
-		t.Fatalf("SIGN runtime calls = %d, want 1 after organization-scoped claim replay", runner.calls)
-	}
-	if client.lastResult.Status != "COMPLETED" {
-		t.Fatalf("SIGN result = %+v, want minimal completed result", client.lastResult)
+			if runner.calls != 0 {
+				t.Fatalf("orphan SIGN runtime calls = %d, want 0", runner.calls)
+			}
+			if client.lastResult.Status != "FAILED" {
+				t.Fatalf("SIGN result = %+v, want orphan cleanup", client.lastResult)
+			}
+		})
 	}
 }
 
-func TestRunSessionRejectsRediscoveredSignClaimIdentityOrDeadlineMismatch(t *testing.T) {
+func TestRunSessionRejectsLiveSignClaimIdentityOrDeadlineMismatch(t *testing.T) {
 	tests := []struct {
 		name string
 		edit func(*monolith.ClaimResult)
@@ -322,16 +345,16 @@ func TestRunSessionRejectsRediscoveredSignClaimIdentityOrDeadlineMismatch(t *tes
 		{name: "key", edit: func(claim *monolith.ClaimResult) { claim.Payload.KeyID = "key-other" }},
 		{name: "org", edit: func(claim *monolith.ClaimResult) { claim.Payload.OrgID = "org-other" }},
 		{name: "deadline value", edit: func(claim *monolith.ClaimResult) { claim.Deadline = claim.Deadline.Add(time.Second) }},
-		{name: "deadline representation", edit: func(claim *monolith.ClaimResult) { claim.DeadlineRaw = claim.Deadline.Format(time.RFC3339) }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			discovery, claim := rediscoveredSignFixture(t)
+			discovery.DiscoveryStatus = "PENDING"
 			tt.edit(&claim)
 			runner := &countingSignRunner{}
 			sem := make(chan struct{}, 1)
 			sem <- struct{}{}
-			runSessionWithExecutorsForTest(context.Background(), discovery, &stubClient{claimResult: claim}, runner, &capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
+			runSessionWithExecutorsForTest(context.Background(), discovery, &stubClient{claimResult: claim}, runner, &capturingDKGExecutor{}, nil, coordinatorPrimaryParty, time.Millisecond, sem, nil, slog.Default())
 			if runner.calls != 0 {
 				t.Fatalf("SIGN runtime calls = %d, want 0", runner.calls)
 			}

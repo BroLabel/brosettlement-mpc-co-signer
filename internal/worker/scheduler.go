@@ -14,7 +14,7 @@ import (
 type pendingClient interface {
 	GetPendingIntents(ctx context.Context) ([]monolith.Intent, error)
 	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
-	PostResult(ctx context.Context, intentID string, result monolith.IntentResult) error
+	PostSignResult(ctx context.Context, intentID string, result monolith.SignResultRequest) error
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
 	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) (monolith.MessagesResult, error)
 }
@@ -47,6 +47,7 @@ type Scheduler struct {
 	inFlightIntentIDs map[string]struct{}
 	launch            sessionLauncher
 	forwardWakeups    func(context.Context)
+	sessions          sync.WaitGroup
 }
 
 func NewScheduler(
@@ -98,6 +99,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		}()
 	}
 	defer children.Wait()
+	defer s.sessions.Wait()
 	backoff := s.cfg.MinInterval
 
 	for {
@@ -188,6 +190,9 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 	metrics.ObservePending("SIGN", oldestPendingAge(intents, intentKindSIGN, now), sign)
 	dkgConsidered := false
 	for _, intent := range intents {
+		if ctx.Err() != nil {
+			return
+		}
 		kind, ok := classifyIntentKind(intent.Type)
 		if !ok {
 			s.log.Error("unsupported pending intent type")
@@ -296,7 +301,9 @@ func (s *Scheduler) provisioningReady() bool {
 
 func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, permits *jobPermitLease, releaseIntent func()) <-chan struct{} {
 	claimDispatched := make(chan struct{})
+	s.sessions.Add(1)
 	go func() {
+		defer s.sessions.Done()
 		defer releaseIntent()
 		runSessionWithPermits(
 			ctx,

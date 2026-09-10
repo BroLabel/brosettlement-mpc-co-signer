@@ -916,13 +916,16 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 	}
 }
 
-func TestClaimIntentReturnsOutcomeUnknownAfterAmbiguousRetries(t *testing.T) {
+func TestClaimIntentReturnsOutcomeUnknownAfterOneBoundedAttempt(t *testing.T) {
 	client, pub := newTestClient(t, "https://example.test")
 	attempts := 0
 	seenNonces := make(map[string]bool)
 	seenSignatures := make(map[string]bool)
 	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		attempts++
+		if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > time.Second {
+			t.Error("claim transport lacks short request deadline")
+		}
 		if r.Header.Get("X-Api-Timestamp") == "" {
 			t.Fatal("retry request is missing X-Api-Timestamp")
 		}
@@ -946,8 +949,53 @@ func TestClaimIntentReturnsOutcomeUnknownAfterAmbiguousRetries(t *testing.T) {
 	if !errors.Is(err, ErrClaimOutcomeUnknown) {
 		t.Fatalf("expected ErrClaimOutcomeUnknown, got %v", err)
 	}
-	if attempts != 3 {
-		t.Fatalf("attempts = %d, want 3", attempts)
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want one attempt owned by worker", attempts)
+	}
+}
+
+func TestSignResultRetriesFrozenExactBytesWithFreshAuthentication(t *testing.T) {
+	client, _ := newTestClient(t, "http://localhost")
+	original := IntentResult{Status: "FAILED", ErrorCode: "WORKER_SHUTDOWN", ErrorMessage: "same failure"}
+	request, err := NewSignResultRequest(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original.ErrorMessage = "changed after serialization"
+	const expected = `{"errorCode":"WORKER_SHUTDOWN","errorMessage":"same failure","status":"FAILED"}`
+	var bodies, nonces []string
+	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, string(body))
+		nonces = append(nonces, r.Header.Get("X-Api-Nonce"))
+		if r.Header.Get("X-Idempotency-Key") != "intent-1" {
+			t.Fatal("result request identity changed")
+		}
+		if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > time.Second {
+			t.Fatal("result request lacks short budget")
+		}
+		if len(bodies) == 1 {
+			return nil, io.ErrUnexpectedEOF
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"authoritativeStatus":"FAILED","httpStatus":200,"outcome":"EXACT_REPLAY"}`)), Header: make(http.Header)}, nil
+	})
+	if err := client.PostSignResult(context.Background(), "intent-1", request); err == nil {
+		t.Fatal("lost response was not ambiguous")
+	}
+	if len(bodies) != 1 {
+		t.Fatal("HTTP client hid additional retries")
+	}
+	if err := client.PostSignResult(context.Background(), "intent-1", request); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 || bodies[0] != expected || bodies[1] != expected {
+		t.Fatalf("request bodies=%q", bodies)
+	}
+	if nonces[0] == nonces[1] {
+		t.Fatal("authentication nonce replayed")
 	}
 }
 

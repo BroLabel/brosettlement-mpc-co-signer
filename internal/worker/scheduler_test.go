@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -35,6 +36,9 @@ func (r *blockingSignRunner) RunSignSession(_ context.Context, req coretss.SignS
 }
 
 type stubPendingClient struct {
+	claimFunc    func(context.Context, string, string) (monolith.ClaimResult, error)
+	postFunc     func(context.Context, string, monolith.IntentResult) error
+	pollFunc     func(context.Context, string, uint64) (monolith.MessagesResult, error)
 	mu           sync.Mutex
 	intents      []monolith.Intent
 	claimCalls   []string
@@ -73,7 +77,10 @@ func (s *stubPendingClient) GetPendingIntents(context.Context) ([]monolith.Inten
 	return append([]monolith.Intent(nil), s.intents...), nil
 }
 
-func (s *stubPendingClient) ClaimIntent(_ context.Context, _ string, intentID string) (monolith.ClaimResult, error) {
+func (s *stubPendingClient) ClaimIntent(ctx context.Context, kind string, intentID string) (monolith.ClaimResult, error) {
+	if s.claimFunc != nil {
+		return s.claimFunc(ctx, kind, intentID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.claimCalls = append(s.claimCalls, intentID)
@@ -86,15 +93,33 @@ func (s *stubPendingClient) ClaimIntent(_ context.Context, _ string, intentID st
 	return s.claimResult, s.claimErr
 }
 
-func (s *stubPendingClient) PostResult(context.Context, string, monolith.IntentResult) error {
+func (s *stubPendingClient) PostResult(ctx context.Context, id string, result monolith.IntentResult) error {
+	if s.postFunc != nil {
+		return s.postFunc(ctx, id, result)
+	}
 	return nil
+}
+
+func (s *stubPendingClient) PostSignResult(ctx context.Context, id string, result monolith.SignResultRequest) error {
+	body, err := result.MarshalJSON()
+	if err != nil {
+		return err
+	}
+	var decoded monolith.IntentResult
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return err
+	}
+	return s.PostResult(ctx, id, decoded)
 }
 
 func (s *stubPendingClient) PostMessage(context.Context, string, monolith.OutboundFrame) error {
 	return nil
 }
 
-func (s *stubPendingClient) GetMessages(_ context.Context, id string, _ uint64) (monolith.MessagesResult, error) {
+func (s *stubPendingClient) GetMessages(ctx context.Context, id string, seq uint64) (monolith.MessagesResult, error) {
+	if s.pollFunc != nil {
+		return s.pollFunc(ctx, id, seq)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	claim := s.claimResult
@@ -173,56 +198,34 @@ func TestSchedulerSkipsBlockedDKGAndContinuesSIGN(t *testing.T) {
 	}
 }
 
-func TestSchedulerDispatchesRediscoveredOwnClaimedSignThroughClaimReplay(t *testing.T) {
+func TestSchedulerCleansOrphanWithoutClaimReplay(t *testing.T) {
 	discovery, claim := rediscoveredSignFixture(t)
 	client := &stubPendingClient{claimResult: claim, claimErrors: make(map[string]error)}
 	runner := &notifyingSignRunner{started: make(chan struct{}, 1)}
 	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 1)
 
 	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
-	select {
-	case <-runner.started:
-	case <-time.After(time.Second):
-		t.Fatal("rediscovered SIGN runtime did not start")
+	waitForIntentRelease(t, scheduler, discovery.IntentID)
+	if len(runner.started) != 0 {
+		t.Fatal("orphan started Core")
 	}
-	if got := client.claims(); !equalStrings(got, []string{"intent-125"}) {
-		t.Fatalf("claim calls = %v, want existing claim endpoint", got)
+	if got := client.claims(); len(got) != 0 {
+		t.Fatalf("orphan claim calls = %v, want none", got)
 	}
 }
 
-func TestSchedulerSkipsInFlightRediscoveredOwnClaimedSignAndAllowsRedispatchAfterCompletion(t *testing.T) {
+func TestSchedulerRepeatedOrphanDiscoveryNeverRecomputes(t *testing.T) {
 	discovery, claim := rediscoveredSignFixture(t)
-	release := make(chan struct{})
-	runner := &blockingSignRunner{started: make(chan string, 2), release: release}
+	runner := &notifyingSignRunner{started: make(chan struct{}, 2)}
 	client := &stubPendingClient{claimResult: claim, claimErrors: make(map[string]error)}
 	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 2)
 
-	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
-	select {
-	case got := <-runner.started:
-		if got != discovery.SessionID {
-			t.Fatalf("first SIGN session = %q, want %q", got, discovery.SessionID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("first rediscovered SIGN did not start")
+	for range 3 {
+		scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery, discovery})
+		waitForIntentRelease(t, scheduler, discovery.IntentID)
 	}
-
-	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
-	if got := client.claims(); !equalStrings(got, []string{discovery.IntentID}) {
-		t.Fatalf("claim calls while intent is in flight = %v, want one replay", got)
-	}
-
-	close(release)
-	waitForIntentRelease(t, scheduler, discovery.IntentID)
-
-	scheduler.dispatchBatch(context.Background(), []monolith.Intent{discovery})
-	select {
-	case got := <-runner.started:
-		if got != discovery.SessionID {
-			t.Fatalf("redispatched SIGN session = %q, want %q", got, discovery.SessionID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("completed rediscovered SIGN was not redispatched")
+	if len(runner.started) != 0 || len(client.claims()) != 0 {
+		t.Fatal("orphan rediscovery created execution ownership")
 	}
 }
 
@@ -327,6 +330,8 @@ func TestSchedulerReleasesIntentReservationAfterClaimFailure(t *testing.T) {
 func TestSchedulerRunsDifferentIntentIDsInParallel(t *testing.T) {
 	firstDiscovery, firstClaim := rediscoveredSignFixture(t)
 	secondDiscovery, secondClaim := rediscoveredSignFixture(t)
+	firstDiscovery.DiscoveryStatus = "PENDING"
+	secondDiscovery.DiscoveryStatus = "PENDING"
 	secondDiscovery.IntentID = "intent-126"
 	secondDiscovery.SessionID = "sign-126"
 	secondDiscovery.Payload.KeyID = "key-126"
@@ -740,17 +745,19 @@ func launchedIntentIDs(launched []launchedSession) []string {
 
 func waitForIntentRelease(t *testing.T, scheduler *Scheduler, intentID string) {
 	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		scheduler.inFlightMu.Lock()
-		_, reserved := scheduler.inFlightIntentIDs[intentID]
-		scheduler.inFlightMu.Unlock()
-		if !reserved {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	joined := make(chan struct{})
+	go func() { scheduler.sessions.Wait(); close(joined) }()
+	select {
+	case <-joined:
+	case <-time.After(time.Second):
+		t.Fatal("session workers did not finish")
 	}
-	t.Fatalf("intent %q remained reserved after the job completed", intentID)
+	scheduler.inFlightMu.Lock()
+	_, reserved := scheduler.inFlightIntentIDs[intentID]
+	scheduler.inFlightMu.Unlock()
+	if reserved {
+		t.Fatalf("intent %q remained reserved after the job completed", intentID)
+	}
 }
 
 func equalStrings(left, right []string) bool {

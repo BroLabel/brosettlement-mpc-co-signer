@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
@@ -32,11 +33,12 @@ var (
 	errInvalidIntent  = errors.New("invalid intent")
 	errAlreadyExpired = errors.New("claimed intent already expired")
 	errMPCProtocol    = errors.New("mpc protocol error")
+	errClaimCleanup   = errors.New("claim delivery requires cleanup")
 )
 
 type sessionClient interface {
 	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
-	PostResult(ctx context.Context, intentID string, result monolith.IntentResult) error
+	PostSignResult(ctx context.Context, intentID string, result monolith.SignResultRequest) error
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
 	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) (monolith.MessagesResult, error)
 }
@@ -108,6 +110,15 @@ func runSessionWithClock(
 		log = slog.Default()
 	}
 	defer permits.Release()
+	var dispatchOnce sync.Once
+	notifyDispatch := func() {
+		dispatchOnce.Do(func() {
+			if claimDispatched != nil {
+				claimDispatched()
+			}
+		})
+	}
+	defer notifyDispatch()
 
 	admittedKind, ok := classifyIntentKind(intent.Type)
 	if !ok {
@@ -125,8 +136,28 @@ func runSessionWithClock(
 		metrics.ObserveSessionDuration(metricKind, time.Since(started).Seconds())
 	}()
 
-	claim, err := client.ClaimIntent(ctx, intent.Type, intent.IntentID)
+	// Discovery without a live reserved worker is cleanup only. Exact claim
+	// recovery below belongs exclusively to this newly admitted live attempt.
+	if admittedKind == intentKindSIGN && intent.DiscoveryStatus == "CLAIMED" {
+		notifyDispatch()
+		postResult(ctx, client, intent, failedResult(ErrorCodeWorkerShutdown, errors.New("orphaned SIGN claim")), log)
+		return
+	}
+	claim, err := claimWithRecovery(ctx, client, intent, notifyDispatch)
 	if err != nil {
+		if (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errClaimCleanup)) && ctx.Err() == nil {
+			if admittedKind == intentKindSIGN {
+				code := ErrorCodeInternal
+				if errors.Is(err, context.DeadlineExceeded) {
+					code = ErrorCodeAlreadyExpired
+				}
+				postResult(ctx, client, intent, failedResult(code, err), log)
+			} else {
+				if !publishClaimedDKGFailure(ctx, terminalPublisher, intent, log) {
+					<-ctx.Done()
+				}
+			}
+		}
 		outcome := "failed"
 		if errors.Is(err, monolith.ErrAlreadyClaimed) {
 			outcome = "conflict"
@@ -139,9 +170,7 @@ func runSessionWithClock(
 			metrics.ObserveClaimConflict()
 		}
 		permits.Release()
-		if claimDispatched != nil {
-			claimDispatched()
-		}
+		notifyDispatch()
 		switch {
 		case errors.Is(err, monolith.ErrAlreadyClaimed):
 			log.Debug("intent already claimed", "intent_id", intent.IntentID)
@@ -155,9 +184,6 @@ func runSessionWithClock(
 		return
 	}
 	metrics.ObserveClaim(metricKind, "accepted")
-	if claimDispatched != nil {
-		claimDispatched()
-	}
 	claimedIntent := claim.Intent()
 	claimedKind, claimedKindOK := classifyIntentKind(claimedIntent.Type)
 	if !claimedKindOK || claimedKind != admittedKind {
@@ -174,20 +200,17 @@ func runSessionWithClock(
 		}
 		return
 	}
-	if admittedKind == intentKindSIGN && intent.DiscoveryStatus == "CLAIMED" {
-		if err := validateRediscoveredSignClaim(intent, claim); err != nil {
-			log.Error("rediscovered SIGN claim replay mismatch", "intent_id", intent.IntentID, "err", err)
-			return
-		}
-	}
 	if err := claim.Session.Validate(strings.ToUpper(claimedIntent.Type), claimedIntent.SessionID, claim.Deadline); err != nil || claim.Deadline.IsZero() ||
-		intent.SessionID != "" && intent.SessionID != claimedIntent.SessionID || !intent.ExpiresAt.IsZero() && !intent.ExpiresAt.Equal(claim.Deadline) {
+		intent.SessionID != "" && intent.SessionID != claimedIntent.SessionID || !intent.ExpiresAt.IsZero() && !intent.ExpiresAt.Equal(claim.Deadline) ||
+		admittedKind == intentKindSIGN && (intent.IntentID != claimedIntent.IntentID ||
+			intent.Payload.OrgID != "" && intent.Payload.OrgID != claimedIntent.Payload.OrgID ||
+			intent.Payload.KeyID != "" && intent.Payload.KeyID != claimedIntent.Payload.KeyID) {
 		if admittedKind == intentKindDKG {
 			if !publishClaimedDKGFailure(ctx, terminalPublisher, claimedIntent, log) && ctx.Err() == nil {
 				<-ctx.Done()
 			}
 		} else {
-			postResult(ctx, client, intent.IntentID, failedResult(ErrorCodeInvalidIntent, monolith.ErrInvalidLifecycle), log)
+			postResult(ctx, client, intent, failedResult(ErrorCodeInvalidIntent, monolith.ErrInvalidLifecycle), log)
 		}
 		return
 	}
@@ -200,7 +223,7 @@ func runSessionWithClock(
 			}
 			return
 		}
-		postResult(ctx, client, intent.IntentID, monolith.IntentResult{
+		postResult(ctx, client, intent, monolith.IntentResult{
 			Status:       intentStatusFailed,
 			ErrorCode:    ErrorCodeInvalidIntent,
 			ErrorMessage: err.Error(),
@@ -216,7 +239,7 @@ func runSessionWithClock(
 			}
 			return
 		}
-		postResult(ctx, client, intent.IntentID, monolith.IntentResult{
+		postResult(ctx, client, intent, monolith.IntentResult{
 			Status:    intentStatusFailed,
 			ErrorCode: ErrorCodeAlreadyExpired,
 		}, log)
@@ -230,7 +253,7 @@ func runSessionWithClock(
 		var err error
 		sessionCtx, readyCancel, intent.Session, err = waitForSignReadiness(sessionCtx, client, intent, framePollInterval, clock)
 		if err != nil {
-			postResult(ctx, client, intent.IntentID, BuildResult(err, sessionCtx, intent), log)
+			postResult(ctx, client, intent, BuildResult(err, sessionCtx, intent), log)
 			return
 		}
 		defer readyCancel()
@@ -336,7 +359,7 @@ func runSessionWithClock(
 	}
 
 	result := BuildResult(runErr, sessionCtx, intent)
-	postResult(ctx, client, intent.IntentID, result, log)
+	postResult(ctx, client, intent, result, log)
 }
 
 type readinessClock struct {
@@ -401,19 +424,56 @@ func waitForSignReadiness(ctx context.Context, client sessionClient, intent mono
 	}
 }
 
-func validateRediscoveredSignClaim(discovery monolith.Intent, claim monolith.ClaimResult) error {
-	if discovery.DiscoveryStatus != "CLAIMED" || discovery.Type != "SIGN" || discovery.IntentID == "" || discovery.SessionID == "" ||
-		discovery.Payload.OrgID == "" || discovery.Payload.KeyID == "" || discovery.DeadlineRaw == "" || discovery.ExpiresAt.IsZero() {
-		return errors.New("rediscovered SIGN metadata is incomplete")
+func claimWithRecovery(ctx context.Context, client sessionClient, intent monolith.Intent, dispatched func()) (monolith.ClaimResult, error) {
+	claimCtx := ctx
+	if !intent.ExpiresAt.IsZero() {
+		var cancel context.CancelFunc
+		claimCtx, cancel = context.WithDeadline(ctx, intent.ExpiresAt)
+		defer cancel()
 	}
-	claimed := claim.Intent()
-	if claim.Status != "CLAIMED" ||
-		claimed.IntentID != discovery.IntentID || claimed.SessionID != discovery.SessionID || claimed.Type != discovery.Type ||
-		claimed.Payload.OrgID != discovery.Payload.OrgID || claimed.Payload.KeyID != discovery.Payload.KeyID ||
-		claim.DeadlineRaw != discovery.DeadlineRaw || !claim.DeadlineTime().Equal(discovery.ExpiresAt) {
-		return errors.New("claim replay differs from SIGN discovery metadata")
+	first := true
+	uncertain := false
+	for {
+		if err := claimCtx.Err(); err != nil {
+			return monolith.ClaimResult{}, err
+		}
+		requestCtx, cancel := context.WithTimeout(claimCtx, 400*time.Millisecond)
+		claim, err := client.ClaimIntent(requestCtx, intent.Type, intent.IntentID)
+		cancel()
+		if first {
+			first = false
+			if (err == nil || errors.Is(err, monolith.ErrClaimOutcomeUnknown) || errors.Is(err, context.DeadlineExceeded)) && dispatched != nil {
+				dispatched()
+			}
+		}
+		if err == nil || errors.Is(err, monolith.ErrAlreadyClaimed) || errors.Is(err, monolith.ErrNotFound) {
+			if uncertain && errors.Is(err, monolith.ErrAlreadyClaimed) {
+				return claim, errors.Join(errClaimCleanup, err)
+			}
+			return claim, err
+		}
+		if !errors.Is(err, monolith.ErrClaimOutcomeUnknown) && !errors.Is(err, context.DeadlineExceeded) {
+			if uncertain {
+				return claim, errors.Join(errClaimCleanup, err)
+			}
+			return claim, err
+		}
+		uncertain = true
+		if !waitDeliveryRetry(claimCtx) {
+			return monolith.ClaimResult{}, claimCtx.Err()
+		}
 	}
-	return nil
+}
+
+func waitDeliveryRetry(ctx context.Context) bool {
+	timer := time.NewTimer(25 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func isPrimarySigningArtifactFailure(err error) bool {
@@ -804,19 +864,49 @@ func buildSignRequest(intent monolith.Intent, localPartyID string, tr coretss.Tr
 func postResult(
 	ctx context.Context,
 	client sessionClient,
-	intentID string,
+	intent monolith.Intent,
 	result monolith.IntentResult,
 	log *slog.Logger,
 ) {
+	intentID := intent.IntentID
 	postCtx := ctx
+	request, err := monolith.NewSignResultRequest(result)
+	if err != nil {
+		log.Error("serialize SIGN result failed", "err", err)
+		if ctx != nil {
+			<-ctx.Done()
+		}
+		return
+	}
 	if ctx == nil || ctx.Err() != nil {
 		timeoutCtx, cancel := context.WithTimeout(context.Background(), postResultTimeout)
 		defer cancel()
 		postCtx = timeoutCtx
 	}
 
-	if err := client.PostResult(postCtx, intentID, result); err != nil {
-		log.Warn("post result failed", "intent_id", intentID, "status", result.Status, "error_code", result.ErrorCode, "err", err)
+	for {
+		requestCtx, cancel := context.WithTimeout(postCtx, 400*time.Millisecond)
+		err := client.PostSignResult(requestCtx, intentID, request)
+		cancel()
+		if err == nil || errors.Is(err, monolith.ErrTerminalConflict) {
+			return
+		}
+		pollCtx, stopPoll := context.WithTimeout(postCtx, 400*time.Millisecond)
+		observed, pollErr := client.GetMessages(pollCtx, intent.SessionID, 0)
+		stopPoll()
+		if pollErr == nil && observed.Session.Validate("SIGN", intent.SessionID, intent.ExpiresAt) == nil &&
+			(intent.Session.StartedAt == nil || observed.Session.StartedAt != nil && observed.Session.ExecutionExpiresAt != nil &&
+				observed.Session.StartedAt.Equal(*intent.Session.StartedAt) && intent.Session.ExecutionExpiresAt != nil &&
+				observed.Session.ExecutionExpiresAt.Equal(*intent.Session.ExecutionExpiresAt)) {
+			switch observed.Session.Status {
+			case "COMPLETED", "FAILED", "TIMED_OUT":
+				return
+			}
+		}
+		log.Warn("post result unresolved", "intent_id", intentID, "status", result.Status, "error_code", result.ErrorCode, "err", err)
+		if !waitDeliveryRetry(postCtx) {
+			return
+		}
 	}
 }
 

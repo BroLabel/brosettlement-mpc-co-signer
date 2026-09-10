@@ -7,12 +7,96 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/reconcile"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/worker"
 )
+
+type blockedSignDelivery struct {
+	listed                     atomic.Bool
+	entered, canceled, release chan struct{}
+}
+
+func (c *blockedSignDelivery) GetPendingIntents(context.Context) ([]monolith.Intent, error) {
+	if c.listed.Swap(true) {
+		return nil, nil
+	}
+	return []monolith.Intent{{Type: "SIGN", IntentID: "orphan", SessionID: "session", DiscoveryStatus: "CLAIMED"}}, nil
+}
+func (*blockedSignDelivery) ClaimIntent(context.Context, string, string) (monolith.ClaimResult, error) {
+	panic("orphan must not claim")
+}
+func (c *blockedSignDelivery) PostSignResult(ctx context.Context, _ string, _ monolith.SignResultRequest) error {
+	close(c.entered)
+	<-ctx.Done()
+	close(c.canceled)
+	<-c.release
+	return nil
+}
+func (*blockedSignDelivery) PostMessage(context.Context, string, monolith.OutboundFrame) error {
+	return nil
+}
+func (*blockedSignDelivery) GetMessages(context.Context, string, uint64) (monolith.MessagesResult, error) {
+	return monolith.MessagesResult{}, errors.New("unavailable")
+}
+
+func TestCoordinatorExpiredDrainRetainsLockUntilSignDeliveryStops(t *testing.T) {
+	var events eventLog
+	deps := successfulDependencies(&events, reconcile.Result{Disposition: reconcile.DispositionEligible})
+	client := &blockedSignDelivery{entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	scheduler := worker.NewScheduler(client, nil, nil, "co-signer-primary", time.Millisecond, worker.SchedulerConfig{MinInterval: time.Millisecond}, nil, 1)
+	schedulerDone := make(chan struct{})
+	closeEntered := make(chan struct{})
+	deps.StartScheduler = func(ctx context.Context) { go func() { scheduler.Run(ctx); close(schedulerDone) }() }
+	deps.OpenCapabilities = func(context.Context) (io.Closer, error) {
+		return closeFunc(func() error { close(closeEntered); <-schedulerDone; events.Add("capabilities-close"); return nil }), nil
+	}
+	deps.Drain = func(ctx context.Context) error { return ctx.Err() }
+	coordinator := mustCoordinator(t, deps)
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-client.entered
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- coordinator.Shutdown(expired) }()
+	<-client.canceled
+	<-closeEntered
+	select {
+	case err := <-done:
+		close(client.release)
+		t.Fatalf("shutdown returned before SIGN delivery stopped: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if events.Contains("lock-close") || events.Contains("capabilities-close") {
+		t.Fatal("resources or lifetime lock released while SIGN remained live")
+	}
+	close(client.release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not join stopped delivery")
+	}
+	if err := coordinator.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, event := range events.Copy() {
+		counts[event]++
+	}
+	if counts["lock-close"] != 1 || counts["capabilities-close"] != 1 {
+		t.Fatalf("resource release counts=%v", counts)
+	}
+}
 
 func TestCoordinatorStartsLockFirstAndPublishesReadinessAfterIntake(t *testing.T) {
 	var events eventLog
