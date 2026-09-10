@@ -16,6 +16,127 @@ type controlledSignRunner struct {
 	run func(context.Context, coretss.SignSessionRequest) error
 }
 
+func TestRejectedReadinessCannotReplaceTrustedResultIdentity(t *testing.T) {
+	for _, name := range []string{"changed start", "changed expiry", "empty malformed lifecycle", "terminal readiness", "expired readiness"} {
+		t.Run(name, func(t *testing.T) {
+			discovery, claim := rediscoveredSignFixture(t)
+			discovery.DiscoveryStatus = "PENDING"
+			start := time.Now()
+			expiry := start.Add(300 * time.Second)
+			claim.Session.Status = "RUNNING"
+			claim.Session.StartedAt = &start
+			claim.Session.ExecutionExpiresAt = &expiry
+			changedStart := start.Add(time.Second)
+			if name == "expired readiness" {
+				changedStart = start.Add(-400 * time.Second)
+			}
+			changedExpiry := changedStart.Add(300 * time.Second)
+			rejected := claim.Session
+			rejected.StartedAt = &changedStart
+			rejected.ExecutionExpiresAt = &changedExpiry
+			terminal := rejected
+			terminal.Status = "COMPLETED"
+			var readinessErr error
+			switch name {
+			case "changed expiry":
+				rejected.StartedAt = &start
+			case "empty malformed lifecycle":
+				rejected = monolith.SessionLifecycle{}
+				readinessErr = monolith.ErrInvalidLifecycle
+			case "terminal readiness":
+				rejected.Status = "COMPLETED"
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			var polls, posts, coreCalls atomic.Int32
+			retried, release := make(chan struct{}), make(chan struct{})
+			client := &stubPendingClient{claimResult: claim}
+			client.pollFunc = func(context.Context, string, uint64) (monolith.MessagesResult, error) {
+				if polls.Add(1) == 1 {
+					return monolith.MessagesResult{Session: rejected}, readinessErr
+				}
+				return monolith.MessagesResult{Session: terminal}, nil
+			}
+			client.postFunc = func(c context.Context, _ string, result monolith.IntentResult) error {
+				if result.Status != "FAILED" {
+					t.Errorf("readiness failure result = %+v", result)
+				}
+				if posts.Add(1) == 1 {
+					return errors.New("FAILED response lost")
+				}
+				close(retried)
+				select {
+				case <-release:
+					return nil
+				case <-c.Done():
+					return c.Err()
+				}
+			}
+			runner := controlledSignRunner{run: func(context.Context, coretss.SignSessionRequest) error { coreCalls.Add(1); return nil }}
+			s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+			s.dispatchBatch(ctx, []monolith.Intent{discovery})
+			select {
+			case <-retried:
+				if len(s.Semaphore()) != 1 {
+					t.Error("rejected readiness released permit")
+				}
+				close(release)
+				waitForIntentRelease(t, s, discovery.IntentID)
+			case <-s.repollCh:
+				waitForIntentRelease(t, s, discovery.IntentID)
+				t.Fatalf("rejected readiness replaced trusted identity: permit released after %d POST, Core calls %d", posts.Load(), coreCalls.Load())
+			case <-ctx.Done():
+				t.Fatal("owned result was not retried")
+			}
+			if coreCalls.Load() != 0 {
+				t.Fatalf("invalid readiness started Core %d times", coreCalls.Load())
+			}
+		})
+	}
+}
+
+func TestMatchingTerminalReadinessResolvesLegitimateCleanup(t *testing.T) {
+	for _, baseline := range []string{"pending", "running", "expired execution"} {
+		t.Run(baseline, func(t *testing.T) {
+			discovery, claim := rediscoveredSignFixture(t)
+			discovery.DiscoveryStatus = "PENDING"
+			if baseline != "pending" {
+				start := time.Now()
+				if baseline == "expired execution" {
+					start = start.Add(-400 * time.Second)
+				}
+				expiry := start.Add(300 * time.Second)
+				claim.Session.Status = "RUNNING"
+				claim.Session.StartedAt = &start
+				claim.Session.ExecutionExpiresAt = &expiry
+			}
+			terminal := claim.Session
+			terminal.Status = "FAILED"
+			var posts, coreCalls atomic.Int32
+			client := &stubPendingClient{claimResult: claim}
+			client.pollFunc = func(context.Context, string, uint64) (monolith.MessagesResult, error) {
+				if baseline == "expired execution" && posts.Load() == 0 {
+					return monolith.MessagesResult{Session: claim.Session}, nil
+				}
+				return monolith.MessagesResult{Session: terminal}, nil
+			}
+			client.postFunc = func(context.Context, string, monolith.IntentResult) error {
+				posts.Add(1)
+				return errors.New("cleanup response lost")
+			}
+			runner := controlledSignRunner{run: func(context.Context, coretss.SignSessionRequest) error { coreCalls.Add(1); return nil }}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+			s.dispatchBatch(ctx, []monolith.Intent{discovery})
+			waitForIntentRelease(t, s, discovery.IntentID)
+			if ctx.Err() != nil || posts.Load() != 1 || coreCalls.Load() != 0 {
+				t.Fatalf("legitimate terminal cleanup: context=%v posts=%d Core=%d", ctx.Err(), posts.Load(), coreCalls.Load())
+			}
+		})
+	}
+}
+
 func (r controlledSignRunner) RunSignSession(ctx context.Context, req coretss.SignSessionRequest) error {
 	return r.run(ctx, req)
 }

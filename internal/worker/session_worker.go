@@ -250,12 +250,16 @@ func runSessionWithClock(
 	defer cancel()
 	if admittedKind == intentKindSIGN {
 		var readyCancel context.CancelFunc
+		var readyLifecycle monolith.SessionLifecycle
 		var err error
-		sessionCtx, readyCancel, intent.Session, err = waitForSignReadiness(sessionCtx, client, intent, framePollInterval, clock)
+		sessionCtx, readyCancel, readyLifecycle, err = waitForSignReadiness(sessionCtx, client, intent, framePollInterval, clock)
 		if err != nil {
 			postResult(ctx, client, intent, BuildResult(err, sessionCtx, intent), log)
 			return
 		}
+		// A rejected observation must never replace the trusted claim identity
+		// used to reconcile an ambiguous failure publication.
+		intent.Session = readyLifecycle
 		defer readyCancel()
 	}
 

@@ -29,8 +29,11 @@ type Dependencies struct {
 	StartIntake       func(context.Context) error
 	StopIntake        func(context.Context) error
 	Drain             func(context.Context) error
-	WaitPublisher     func()
-	Readiness         *health.Readiness
+	// ReportDrainError is an optional synchronous diagnostic. Like the other
+	// lifecycle callbacks, it must return without waiting for shutdown itself.
+	ReportDrainError func(error)
+	WaitPublisher    func()
+	Readiness        *health.Readiness
 }
 
 type Coordinator struct {
@@ -248,7 +251,12 @@ func (c *Coordinator) shutdown(ctx context.Context, stopIntake bool) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
-	errs = appendError(errs, c.deps.Drain(ctx))
+	if err := c.deps.Drain(ctx); err != nil {
+		errs = appendError(errs, err)
+		if c.deps.ReportDrainError != nil {
+			c.deps.ReportDrainError(err)
+		}
+	}
 	c.deps.WaitPublisher()
 	if c.capabilities != nil {
 		errs = appendError(errs, c.capabilities.Close())

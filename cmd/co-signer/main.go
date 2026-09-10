@@ -110,6 +110,9 @@ func main() {
 			}
 			return drainWorkers(drainCtx, resources.scheduler.Semaphore())
 		},
+		ReportDrainError: func(err error) {
+			log.Warn("worker drain failed; shutdown is waiting for owned work to stop", "err", err)
+		},
 		WaitPublisher: func() {
 			if resources != nil {
 				resources.startupPublisher.Wait()
@@ -133,7 +136,7 @@ func main() {
 	defer shutdownCancel()
 
 	if err := coordinator.Shutdown(shutdownCtx); err != nil {
-		log.Warn("lifecycle shutdown interrupted", "err", err)
+		log.Warn("lifecycle shutdown completed with errors", "err", err)
 	}
 
 	log.Info("shutdown complete")
