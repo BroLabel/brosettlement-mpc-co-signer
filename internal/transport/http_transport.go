@@ -16,6 +16,7 @@ import (
 var (
 	ErrTransportClosed   = errors.New("transport closed")
 	ErrInvalidFrameRoute = errors.New("http transport accepts only platform-bound frames")
+	ErrAlreadyDispatched = errors.New("transport execution already dispatched")
 )
 
 const platformPartyID = "mpc-signer"
@@ -35,18 +36,20 @@ type messageClient interface {
 }
 
 type HTTPTransport struct {
-	client       messageClient
-	frameCtx     FrameContext
-	pollInterval time.Duration
-	inbound      chan protocol.Frame
-	startOnce    sync.Once
-	closeOnce    sync.Once
-	mu           sync.Mutex
-	cancel       context.CancelFunc
-	stopped      chan struct{}
-	err          error
-	done         chan struct{}
-	log          *slog.Logger
+	client         messageClient
+	frameCtx       FrameContext
+	pollInterval   time.Duration
+	inbound        chan protocol.Frame
+	startOnce      sync.Once
+	closeOnce      sync.Once
+	mu             sync.Mutex
+	cancel         context.CancelFunc
+	stopped        chan struct{}
+	err            error
+	dispatched     bool
+	dispatchCancel context.CancelFunc
+	done           chan struct{}
+	log            *slog.Logger
 }
 
 func NewHTTPTransport(client messageClient, frameCtx FrameContext, pollInterval time.Duration, log *slog.Logger) *HTTPTransport {
@@ -159,16 +162,56 @@ func (t *HTTPTransport) Close() {
 func (t *HTTPTransport) Done() <-chan struct{} { return t.done }
 func (t *HTTPTransport) Err() error            { t.mu.Lock(); defer t.mu.Unlock(); return t.err }
 
+// Dispatch atomically reserves execution against stop. This reservation is
+// the dispatch linearization point: a prior stop prohibits run, while a later
+// stop cancels the already-owned execution. No lock is held while run executes.
+// The caller must join this synchronous call before releasing its resources.
+func (t *HTTPTransport) Dispatch(ctx context.Context, run func(context.Context) error) error {
+	t.mu.Lock()
+	select {
+	case <-t.done:
+		err := t.err
+		t.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		return ErrTransportClosed
+	default:
+	}
+	if err := ctx.Err(); err != nil {
+		t.mu.Unlock()
+		return err
+	}
+	if t.dispatched {
+		t.mu.Unlock()
+		return ErrAlreadyDispatched
+	}
+	runnerCtx, cancel := context.WithCancel(ctx)
+	t.dispatched = true
+	t.dispatchCancel = cancel
+	t.mu.Unlock()
+	defer cancel()
+	return run(runnerCtx)
+}
+
 func (t *HTTPTransport) stop(err error) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	stopped := false
 	t.closeOnce.Do(func() {
+		stopped = true
 		t.err = err
 		close(t.done)
 		if t.cancel != nil {
 			t.cancel()
 		}
+		if t.dispatchCancel != nil {
+			t.dispatchCancel()
+		}
 	})
+	t.mu.Unlock()
+	if stopped && err != nil {
+		t.log.Warn("http transport lifecycle stopped", "err", err)
+	}
 }
 
 func (t *HTTPTransport) poll(ctx context.Context) {

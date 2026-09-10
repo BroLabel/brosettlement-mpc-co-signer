@@ -270,7 +270,12 @@ func runSessionWithClock(
 				finished <- err
 				return
 			}
-			finished <- signRunner.RunSignSession(runnerCtx, buildSignRequest(intent, localPartyID, tr))
+			if clock.beforeDispatch != nil {
+				clock.beforeDispatch(tr)
+			}
+			finished <- tr.Dispatch(runnerCtx, func(dispatchCtx context.Context) error {
+				return signRunner.RunSignSession(dispatchCtx, buildSignRequest(intent, localPartyID, tr))
+			})
 		}()
 		select {
 		case runErr = <-finished:
@@ -335,8 +340,11 @@ func runSessionWithClock(
 }
 
 type readinessClock struct {
-	sample func() (time.Time, time.Time)
-	arm    func(context.Context, time.Time) (context.Context, context.CancelFunc)
+	// Scheduling at this boundary cannot authorize execution; Dispatch always
+	// arbitrates against transport stop after the scheduling callback returns.
+	beforeDispatch func(*transport.HTTPTransport)
+	sample         func() (time.Time, time.Time)
+	arm            func(context.Context, time.Time) (context.Context, context.CancelFunc)
 }
 
 func realReadinessClock() readinessClock {

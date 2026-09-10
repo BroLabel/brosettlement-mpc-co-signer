@@ -168,6 +168,57 @@ func TestLatePollResponseAfterCloseCannotDeliverFrame(t *testing.T) {
 	}
 }
 
+func TestDispatchWinnerIsCanceledSynchronouslyByStop(t *testing.T) {
+	tr := transport.NewHTTPTransport(&stubClient{}, transport.FrameContext{SessionID: "session-1", Stage: "sign"}, time.Millisecond, slog.Default())
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- tr.Dispatch(context.Background(), func(ctx context.Context) error {
+			close(entered)
+			<-ctx.Done()
+			close(canceled)
+			<-release
+			return ctx.Err()
+		})
+	}()
+	<-entered
+	// Close must acquire the stop/dispatch mutex while execution is still
+	// blocked; a mutex held throughout Core would deadlock here.
+	closed := make(chan struct{})
+	go func() { tr.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("Close blocked on running execution")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("stop did not synchronously cancel owned execution")
+	}
+	if err := tr.Dispatch(context.Background(), func(context.Context) error { t.Error("second dispatch executed"); return nil }); !errors.Is(err, transport.ErrTransportClosed) {
+		t.Fatalf("second dispatch=%v", err)
+	}
+	close(release)
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("dispatch result=%v", err)
+	}
+	tr.Close()
+}
+
+func TestOnlyOneDispatchCanOwnOpenTransport(t *testing.T) {
+	tr := transport.NewHTTPTransport(&stubClient{}, transport.FrameContext{}, time.Millisecond, slog.Default())
+	defer tr.Close()
+	if err := tr.Dispatch(context.Background(), func(context.Context) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := tr.Dispatch(context.Background(), func(context.Context) error { t.Error("second execution admitted"); return nil }); !errors.Is(err, transport.ErrAlreadyDispatched) {
+		t.Fatalf("duplicate=%v", err)
+	}
+}
+
 func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {
 	client := &stubClient{
 		inbound: []monolith.InboundMessage{
