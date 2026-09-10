@@ -23,10 +23,14 @@ while (($#)); do
 done
 
 [[ -n "$ref" && -n "$image" && -n "$revision" && -n "$version_file" && -n "$output_file" ]] || usage
-[[ "$revision" =~ ^[0-9a-fA-F]{7,64}$ ]] || { echo "revision must be a Git SHA" >&2; exit 1; }
+[[ "$revision" != *$'\n'* && "$revision" =~ ^[0-9a-fA-F]{7,64}$ ]] || { echo "revision must be a single-line Git SHA" >&2; exit 1; }
 [[ -f "$version_file" ]] || { echo "VERSION file is unavailable" >&2; exit 1; }
-version=$(cat "$version_file")
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "VERSION must be plain semver, got: '$version'" >&2; exit 1; }
+version_lines=$(awk 'END { print NR }' "$version_file")
+version=$(awk 'NR == 1 { print; exit }' "$version_file")
+[[ "$version_lines" == "1" && "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || {
+  echo "VERSION must be a single-line plain SemVer without leading zeros, got: '$version'" >&2
+  exit 1
+}
 
 publication_state=${RELEASE_PUBLICATION_STATE:-not-started}
 if [[ "$publication_state" != "not-started" ]]; then
@@ -58,11 +62,17 @@ case "$ref" in
       echo "release image already exists: $release_image" >&2
       exit 1
     fi
-    inspect_output=$(cat "$inspect_output_file")
-    if ! grep -Eiq 'manifest unknown' <<<"$inspect_output" &&
-      ! grep -Fiq "$release_image: not found" <<<"$inspect_output"; then
+    canonical_absence=false
+    for expected in "manifest unknown" "$release_image: not found" "ERROR: $release_image: not found"; do
+      if cmp -s "$inspect_output_file" <(printf '%s' "$expected") ||
+        cmp -s "$inspect_output_file" <(printf '%s\n' "$expected"); then
+        canonical_absence=true
+        break
+      fi
+    done
+    if [[ "$canonical_absence" != "true" ]]; then
       echo "registry evidence is unavailable or ambiguous for $release_image" >&2
-      printf '%s\n' "$inspect_output" >&2
+      cat "$inspect_output_file" >&2
       exit 1
     fi
     tags=$release_image

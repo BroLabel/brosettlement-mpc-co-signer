@@ -29,9 +29,16 @@ ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION
 ARG REVISION
-RUN printf '%s' "${VERSION}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
-    && printf '%s' "${REVISION}" | grep -Eq '^[0-9a-fA-F]{7,64}$' \
-    && GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+RUN set -eu; \
+    case "${VERSION}" in ''|*[!0-9.]*) echo 'VERSION must be a single-line plain SemVer without leading zeros' >&2; exit 1;; esac; \
+    if ! printf '%s' "${VERSION}" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then \
+        echo 'VERSION must be a single-line plain SemVer without leading zeros' >&2; exit 1; \
+    fi; \
+    case "${REVISION}" in ''|*[!0-9a-fA-F]*) echo 'REVISION must be a single-line Git SHA' >&2; exit 1;; esac; \
+    if ! printf '%s' "${REVISION}" | grep -Eq '^[0-9a-fA-F]{7,64}$'; then \
+        echo 'REVISION must be a single-line Git SHA' >&2; exit 1; \
+    fi
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/co-signer ./cmd/co-signer
 

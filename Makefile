@@ -4,8 +4,9 @@ verify-contracts:
 	GOWORK=off go run ./cmd/mpc-contracts verify
 
 build-release:
-	@VERSION=$$(cat VERSION); \
-	printf '%s' "$$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "VERSION must be plain semver" >&2; exit 1; }; \
+	@VERSION_LINES=$$(awk 'END { print NR }' VERSION); \
+	VERSION=$$(awk 'NR == 1 { print; exit }' VERSION); \
+	test "$$VERSION_LINES" -eq 1 && printf '%s' "$$VERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$$' || { echo "VERSION must be a single-line plain SemVer without leading zeros" >&2; exit 1; }; \
 	mkdir -p bin; \
 	GOWORK=off go build -trimpath -buildvcs=false -ldflags "-X main.version=$$VERSION" -o ./bin/co-signer ./cmd/co-signer
 
