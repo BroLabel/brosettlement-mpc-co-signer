@@ -28,16 +28,7 @@ COPY internal/ ./internal/
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION
-ARG REVISION
-RUN set -eu; \
-    case "${VERSION}" in ''|*[!0-9.]*) echo 'VERSION must be a single-line plain SemVer without leading zeros' >&2; exit 1;; esac; \
-    if ! printf '%s' "${VERSION}" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then \
-        echo 'VERSION must be a single-line plain SemVer without leading zeros' >&2; exit 1; \
-    fi; \
-    case "${REVISION}" in ''|*[!0-9a-fA-F]*) echo 'REVISION must be a single-line Git SHA' >&2; exit 1;; esac; \
-    if ! printf '%s' "${REVISION}" | grep -Eq '^[0-9a-fA-F]{7,64}$'; then \
-        echo 'REVISION must be a single-line Git SHA' >&2; exit 1; \
-    fi
+RUN test -n "${VERSION}" || { echo 'VERSION is required' >&2; exit 1; }
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=${VERSION}" \
         -o /out/co-signer ./cmd/co-signer
@@ -56,14 +47,9 @@ RUN mkdir -p /state/primary /state/recovery \
 # pre-declared non-root user.
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
 
-ARG VERSION
-ARG REVISION
-
 LABEL org.opencontainers.image.source="https://github.com/BroLabel/brosettlement-mpc-co-signer" \
       org.opencontainers.image.description="BroSettlement MPC co-signer" \
-      org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.version="${VERSION}" \
-      org.opencontainers.image.revision="${REVISION}"
+      org.opencontainers.image.licenses="Apache-2.0"
 
 # Binary stays root-owned and read-only to the running user.
 COPY --from=build /out/co-signer /usr/local/bin/co-signer

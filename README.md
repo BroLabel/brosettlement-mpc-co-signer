@@ -67,12 +67,9 @@ mkdir -p bin
 GOWORK=off go build -o ./bin/co-signer ./cmd/co-signer
 ```
 
-Direct development builds report `dev` in `/health.version`. Release builds use
-the validated plain SemVer from `VERSION`:
-
-```bash
-make build-release
-```
+Direct development builds report `dev` in `/health.version`. The Docker release
+workflow validates `VERSION` and injects it into the binary. CI also sets the
+image version and revision labels.
 
 The matching annotated Git tag is `v<VERSION>`. Creating or pushing that tag is
 a separate release-owner operation after validation; release tags and images
