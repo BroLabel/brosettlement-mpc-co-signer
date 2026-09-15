@@ -1289,7 +1289,7 @@ func TestRunSessionRejectsInvalidIntent(t *testing.T) {
 }
 
 func TestBuildResultMapsShareNotFound(t *testing.T) {
-	result := BuildResult(coretss.ErrShareNotFound, context.Background(), monolith.Intent{Type: "SIGN"})
+	result := BuildResult(coretss.ErrShareNotFound, context.Background())
 	if result.ErrorCode != ErrorCodeShareNotFound {
 		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeShareNotFound)
 	}
@@ -1387,7 +1387,7 @@ func TestPrimarySigningArtifactFailuresEmitRedactedCriticalAlertAndDoNotDegradeR
 }
 
 func TestBuildResultMapsKnownProtocolErrors(t *testing.T) {
-	result := BuildResult(errors.New("duplicate frame"), context.Background(), monolith.Intent{Type: "SIGN"})
+	result := BuildResult(errors.New("duplicate frame"), context.Background())
 	if result.ErrorCode != ErrorCodeProtocol {
 		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeProtocol)
 	}
@@ -1412,7 +1412,7 @@ func TestBuildResultMapsDerivationErrorsToInvalidIntent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			wrappedErr := fmt.Errorf("wrapped core derivation error: %w", tt.err)
-			result := BuildResult(wrappedErr, context.Background(), monolith.Intent{Type: "SIGN"})
+			result := BuildResult(wrappedErr, context.Background())
 			if result.ErrorCode != ErrorCodeInvalidIntent {
 				t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeInvalidIntent)
 			}
@@ -1424,7 +1424,7 @@ func TestBuildResultUsesCanceledSessionContext(t *testing.T) {
 	sessionCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	result := BuildResult(errors.New("transport closed"), sessionCtx, monolith.Intent{Type: "SIGN"})
+	result := BuildResult(errors.New("transport closed"), sessionCtx)
 	if result.ErrorCode != ErrorCodeWorkerShutdown {
 		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeWorkerShutdown)
 	}
@@ -1434,7 +1434,7 @@ func TestBuildResultUsesExpiredSessionContext(t *testing.T) {
 	sessionCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	result := BuildResult(errors.New("transport closed"), sessionCtx, monolith.Intent{Type: "SIGN"})
+	result := BuildResult(errors.New("transport closed"), sessionCtx)
 	if result.ErrorCode != ErrorCodeSessionTimeout {
 		t.Fatalf("error code = %q, want %q", result.ErrorCode, ErrorCodeSessionTimeout)
 	}
