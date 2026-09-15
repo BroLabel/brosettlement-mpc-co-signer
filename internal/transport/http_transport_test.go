@@ -88,6 +88,68 @@ func TestCloseWaitsForBlockedPoller(t *testing.T) {
 	}
 }
 
+func TestCloseBeforeStartPreventsPolling(t *testing.T) {
+	client := &stubClient{}
+	tr := transport.NewHTTPTransport(client, transport.FrameContext{}, time.Millisecond, slog.Default())
+	tr.Close()
+	tr.Start(context.Background())
+	tr.Close()
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.getCalls != 0 {
+		t.Fatalf("poll requests after Close = %d, want 0", client.getCalls)
+	}
+	if _, err := tr.RecvFrame(context.Background()); !errors.Is(err, transport.ErrTransportClosed) {
+		t.Fatalf("RecvFrame after Close = %v", err)
+	}
+}
+
+func TestConcurrentStartAndCloseOwnAtMostOnePoller(t *testing.T) {
+	for iteration := 0; iteration < 40; iteration++ {
+		var mu sync.Mutex
+		calls, exits := 0, 0
+		client := &stubClient{poll: func(ctx context.Context, _ string, _ uint64) (monolith.MessagesResult, error) {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			<-ctx.Done()
+			mu.Lock()
+			exits++
+			mu.Unlock()
+			return monolith.MessagesResult{}, ctx.Err()
+		}}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		tr := transport.NewHTTPTransport(client, transport.FrameContext{}, time.Millisecond, slog.Default())
+		start := make(chan struct{})
+		var workers sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			workers.Add(2)
+			go func() {
+				defer workers.Done()
+				<-start
+				tr.Start(ctx)
+			}()
+			go func() {
+				defer workers.Done()
+				<-start
+				tr.Close()
+			}()
+		}
+		close(start)
+		workers.Wait()
+		cancel()
+		tr.Start(context.Background())
+		tr.Close()
+		mu.Lock()
+		gotCalls, gotExits := calls, exits
+		mu.Unlock()
+		if gotCalls > 1 || gotExits != gotCalls {
+			t.Fatalf("iteration %d: calls=%d exits=%d, want at most one joined poller", iteration, gotCalls, gotExits)
+		}
+	}
+}
+
 func TestPollRejectsChangedLifecycleBeforeDeliveringHistoricalFrames(t *testing.T) {
 	for _, mutation := range []string{"terminal", "pending", "changed deadline", "changed start", "expired", "missing"} {
 		t.Run(mutation, func(t *testing.T) {
