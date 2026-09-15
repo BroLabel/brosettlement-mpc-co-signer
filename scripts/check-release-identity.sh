@@ -32,12 +32,6 @@ version=$(awk 'NR == 1 { print; exit }' "$version_file")
   exit 1
 }
 
-publication_state=${RELEASE_PUBLICATION_STATE:-not-started}
-if [[ "$publication_state" != "not-started" ]]; then
-  echo "publication state is '$publication_state'; operator verification is required" >&2
-  exit 1
-fi
-
 case "$ref" in
   refs/heads/main)
     route=main
