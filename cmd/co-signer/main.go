@@ -12,12 +12,16 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/config"
 )
 
-var version = "dev"
+var (
+	version  = "dev"
+	revision = "unknown"
+)
 
 const shutdownTimeout = 30 * time.Second
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	log.Info("co-signer starting", "version", version, "revision", revision)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 

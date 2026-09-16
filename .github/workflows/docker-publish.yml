@@ -54,19 +54,39 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check release identity and derive publication route
+      - name: Derive publication metadata
         id: release
         env:
           IMAGE: ${{ steps.image.outputs.name }}
           REF: ${{ github.ref }}
           REVISION: ${{ github.sha }}
         run: |
-          ./scripts/check-release-identity.sh \
-            --ref "$REF" \
-            --image "$IMAGE" \
-            --revision "$REVISION" \
-            --version-file VERSION \
-            --output "$GITHUB_OUTPUT"
+          version=$(<VERSION)
+          if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "VERSION must contain plain SemVer, got: '$version'" >&2
+            exit 1
+          fi
+
+          case "$REF" in
+            refs/heads/main)
+              tags="$IMAGE:latest,$IMAGE:sha-$REVISION"
+              ;;
+            refs/tags/v*)
+              if [[ "$REF" != "refs/tags/v$version" ]]; then
+                echo "Git tag must match VERSION: got '$REF', expected 'refs/tags/v$version'" >&2
+                exit 1
+              fi
+              tags="$IMAGE:v$version"
+              ;;
+            *)
+              echo "Unsupported publication ref: $REF" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "revision=$REVISION" >> "$GITHUB_OUTPUT"
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
         id: build
@@ -79,6 +99,7 @@ jobs:
           tags: ${{ steps.release.outputs.tags }}
           build-args: |
             VERSION=${{ steps.release.outputs.version }}
+            REVISION=${{ steps.release.outputs.revision }}
           labels: |
             org.opencontainers.image.version=${{ steps.release.outputs.version }}
             org.opencontainers.image.revision=${{ steps.release.outputs.revision }}

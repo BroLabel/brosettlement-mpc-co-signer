@@ -93,6 +93,10 @@ func TestApplicationHealthReportsBuildVersion(t *testing.T) {
 	if want == "" {
 		want = "dev"
 	}
+	wantRevision := os.Getenv("EXPECTED_REVISION")
+	if wantRevision == "" {
+		wantRevision = "unknown"
+	}
 
 	readiness := health.NewReadiness()
 	readiness.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
@@ -105,13 +109,17 @@ func TestApplicationHealthReportsBuildVersion(t *testing.T) {
 	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	var body struct {
-		Version string `json:"version"`
+		Version  string `json:"version"`
+		Revision string `json:"revision"`
 	}
 	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
 		t.Fatalf("decode health response: %v", err)
 	}
 	if body.Version != want {
 		t.Fatalf("health version = %q, want %q", body.Version, want)
+	}
+	if body.Revision != wantRevision {
+		t.Fatalf("health revision = %q, want %q", body.Revision, wantRevision)
 	}
 }
 

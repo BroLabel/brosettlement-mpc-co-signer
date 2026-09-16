@@ -199,6 +199,7 @@ func newApplicationHealthServer(
 		Addr: addr,
 		Handler: health.NewLifecycleHandlerWithReadinessProbes(
 			version,
+			revision,
 			primarySharesDir,
 			readiness,
 			resources.signingReady,
