@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"runtime/debug"
+	"testing"
+)
 
 func TestResolveBuildIdentityDerivesLocalVersionFromVCS(t *testing.T) {
 	const fullRevision = "0123456789abcdef0123456789abcdef01234567"
@@ -39,5 +42,37 @@ func TestResolveBuildIdentityKeepsFallbacksWithoutVCSMetadata(t *testing.T) {
 
 	if identity.version != "dev" || identity.revision != "unknown" {
 		t.Fatalf("identity = %#v, want dev/unknown", identity)
+	}
+}
+
+func TestResolveCurrentBuildIdentityRejectsMetadataFromContainingRepository(t *testing.T) {
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "v1.0.1-0.20260903194100-dedf05f4c609"},
+		Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: "dedf05f4c60987decae008541677a25035e53223"},
+		},
+	}
+
+	identity := resolveCurrentBuildIdentity("dev", "unknown", info, true)
+
+	if identity.version != "dev" || identity.revision != "unknown" {
+		t.Fatalf("identity = %#v, want dev/unknown", identity)
+	}
+}
+
+func TestResolveCurrentBuildIdentityUsesDevelopmentModuleMetadata(t *testing.T) {
+	const fullRevision = "0123456789abcdef0123456789abcdef01234567"
+	info := &debug.BuildInfo{
+		Main: debug.Module{Version: "(devel)"},
+		Settings: []debug.BuildSetting{
+			{Key: "vcs.revision", Value: fullRevision},
+			{Key: "vcs.modified", Value: "true"},
+		},
+	}
+
+	identity := resolveCurrentBuildIdentity("dev", "unknown", info, true)
+
+	if identity.version != "dev+0123456789ab.dirty" || identity.revision != fullRevision {
+		t.Fatalf("identity = %#v, want derived dirty development identity", identity)
 	}
 }

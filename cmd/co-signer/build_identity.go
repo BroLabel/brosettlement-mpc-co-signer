@@ -10,20 +10,31 @@ type buildIdentity struct {
 }
 
 func currentBuildIdentity() buildIdentity {
-	var vcsRevision string
-	var vcsModified bool
-	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, setting := range info.Settings {
-			switch setting.Key {
-			case "vcs.revision":
-				vcsRevision = setting.Value
-			case "vcs.modified":
-				vcsModified = setting.Value == "true"
-			}
-		}
+	info, ok := debug.ReadBuildInfo()
+	return resolveCurrentBuildIdentity(version, revision, info, ok)
+}
+
+func resolveCurrentBuildIdentity(
+	configuredVersion,
+	configuredRevision string,
+	info *debug.BuildInfo,
+	ok bool,
+) buildIdentity {
+	if !ok || info == nil || info.Main.Version != "(devel)" {
+		return buildIdentity{version: configuredVersion, revision: configuredRevision}
 	}
 
-	return resolveBuildIdentity(version, revision, vcsRevision, vcsModified)
+	var vcsRevision string
+	var vcsModified bool
+	for _, setting := range info.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			vcsRevision = setting.Value
+		case "vcs.modified":
+			vcsModified = setting.Value == "true"
+		}
+	}
+	return resolveBuildIdentity(configuredVersion, configuredRevision, vcsRevision, vcsModified)
 }
 
 func resolveBuildIdentity(
