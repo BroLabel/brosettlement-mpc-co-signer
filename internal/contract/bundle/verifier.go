@@ -18,9 +18,11 @@ import (
 )
 
 const (
-	signerBundleIdentity = "dRgKBw7Y392uHY7AkBj5dkahjKmwYcFYhjtYv62-5mA"
-	httpBundleIdentity   = "FTDwFxMF6H-johDYeeyMVxb2kxPcszVN8crqaKoqClA"
-	HTTP_PRODUCER_COMMIT = "26552e0578527216a037fae3efd189d865b28910"
+	// These pins identify the exact cross-repository contract fixtures that this
+	// Co-Signer version supports. They are integrity checks, not runtime config.
+	expectedSignerBundleIdentity = "dRgKBw7Y392uHY7AkBj5dkahjKmwYcFYhjtYv62-5mA"
+	expectedHTTPBundleIdentity   = "FTDwFxMF6H-johDYeeyMVxb2kxPcszVN8crqaKoqClA"
+	expectedHTTPProducerCommit   = "26552e0578527216a037fae3efd189d865b28910"
 )
 
 var (
@@ -73,13 +75,13 @@ func VerifySignerBundle(root string) (string, error) {
 		return "", err
 	}
 	_ = files
-	if identity := digest(manifestBytes); identity != signerBundleIdentity {
+	if identity := digest(manifestBytes); identity != expectedSignerBundleIdentity {
 		return "", fmt.Errorf("unexpected signer bundle identity %q", identity)
 	}
 	if err := verifySignerVectors(root); err != nil {
 		return "", err
 	}
-	return signerBundleIdentity, nil
+	return expectedSignerBundleIdentity, nil
 }
 
 // VerifyHTTPBundle checks the backend-owned fixture corpus and all cross-fixture bindings.
@@ -89,7 +91,7 @@ func VerifyHTTPBundle(root string) (string, error) {
 		if err := decodeClosed(raw, &manifest, []string{"backendSourceCommit", "bundleVersion", "files"}); err != nil {
 			return err
 		}
-		if manifest.BundleVersion != 1 || manifest.BackendSourceCommit != HTTP_PRODUCER_COMMIT || !gitCommitPattern.MatchString(manifest.BackendSourceCommit) {
+		if manifest.BundleVersion != 1 || manifest.BackendSourceCommit != expectedHTTPProducerCommit || !gitCommitPattern.MatchString(manifest.BackendSourceCommit) {
 			return fmt.Errorf("invalid HTTP manifest schema")
 		}
 		return verifyManifestEntries(root, manifest.Files, httpPaths)
@@ -97,13 +99,13 @@ func VerifyHTTPBundle(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if identity := digest(manifestBytes); identity != httpBundleIdentity {
+	if identity := digest(manifestBytes); identity != expectedHTTPBundleIdentity {
 		return "", fmt.Errorf("unexpected HTTP bundle identity %q", identity)
 	}
 	if err := verifyHTTPFixtures(root); err != nil {
 		return "", err
 	}
-	return httpBundleIdentity, nil
+	return expectedHTTPBundleIdentity, nil
 }
 
 func verifySignerVectors(root string) error {
