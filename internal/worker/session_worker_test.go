@@ -471,6 +471,40 @@ func TestSignExecutionBudgetMatchesSignerBoundaries(t *testing.T) {
 	}
 }
 
+func TestReadinessAcceptsSlowRunningResponseWithinOperationDeadline(t *testing.T) {
+	intent := validSignIntent(t)
+	intent.ExpiresAt = time.Now().Add(time.Hour)
+	start := time.Now()
+	expiry := start.Add(300 * time.Second)
+	client := &stubClient{poll: func(ctx context.Context, _ string, _ uint64) (monolith.MessagesResult, error) {
+		timer := time.NewTimer(600 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return monolith.MessagesResult{}, ctx.Err()
+		case <-timer.C:
+			return monolith.MessagesResult{Session: monolith.SessionLifecycle{
+				SessionID: intent.SessionID, Status: "RUNNING", Deadline: intent.ExpiresAt,
+				StartedAt: &start, ExecutionExpiresAt: &expiry,
+			}}, nil
+		}
+	}}
+	parent, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	active, cancel, session, err := waitForSignReadiness(parent, client, intent, time.Millisecond, realReadinessClock())
+	if err != nil {
+		t.Fatalf("valid RUNNING response was not accepted: %v", err)
+	}
+	defer cancel()
+	if session.Status != "RUNNING" || active.Err() != nil {
+		t.Fatalf("invalid readiness: session=%+v context=%v", session, active.Err())
+	}
+	stop()
+	if !errors.Is(active.Err(), context.Canceled) {
+		t.Fatalf("execution context ignored parent cancellation: %v", active.Err())
+	}
+}
+
 func TestReadinessBindsOneMonotonicTimerBeforeDispatchDelay(t *testing.T) {
 	wall := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
 	mono := time.Now()

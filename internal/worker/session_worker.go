@@ -302,9 +302,7 @@ func claimWithRecovery(ctx context.Context, client sessionClient, intent monolit
 		if err := claimCtx.Err(); err != nil {
 			return monolith.ClaimResult{}, err
 		}
-		requestCtx, cancel := context.WithTimeout(claimCtx, 400*time.Millisecond)
-		claim, err := client.ClaimIntent(requestCtx, intent.Type, intent.IntentID)
-		cancel()
+		claim, err := client.ClaimIntent(claimCtx, intent.Type, intent.IntentID)
 		if first {
 			first = false
 			if (err == nil || errors.Is(err, monolith.ErrClaimOutcomeUnknown) || errors.Is(err, context.DeadlineExceeded)) && dispatched != nil {

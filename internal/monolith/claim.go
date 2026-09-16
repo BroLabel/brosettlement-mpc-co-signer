@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 )
 
 func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (ClaimResult, error) {
@@ -15,8 +14,6 @@ func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (
 	if err != nil {
 		return ClaimResult{}, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
-	defer cancel()
 	path := "/api/v1/co-signer/intents/" + pathType + "/" + url.PathEscape(intentID) + "/claim"
 	var out ClaimResult
 	if err := c.doJSONAttempts(ctx, http.MethodPost, path, nil, intentID, &out, http.StatusOK, 1); err != nil {

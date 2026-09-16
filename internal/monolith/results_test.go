@@ -172,8 +172,8 @@ func TestSignResultRetriesFrozenExactBytesWithFreshAuthentication(t *testing.T) 
 		if r.Header.Get("X-Idempotency-Key") != "intent-1" {
 			t.Fatal("result request identity changed")
 		}
-		if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > time.Second {
-			t.Fatal("result request lacks short budget")
+		if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > client.httpClient.Timeout {
+			t.Fatal("result request lacks configured HTTP deadline")
 		}
 		if len(bodies) == 1 {
 			return nil, io.ErrUnexpectedEOF

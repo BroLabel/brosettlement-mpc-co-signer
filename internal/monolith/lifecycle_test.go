@@ -158,6 +158,9 @@ func TestMessagesOneBoundedAttemptAndCancellation(t *testing.T) {
 			defer server.Close()
 			client, _ := newTestClient(t, server.URL)
 			client.httpClient.Timeout = 30 * time.Second
+			if mode == "request deadline" {
+				client.httpClient.Timeout = 50 * time.Millisecond
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			done := make(chan error, 1)
@@ -173,7 +176,7 @@ func TestMessagesOneBoundedAttemptAndCancellation(t *testing.T) {
 					t.Fatal("request unexpectedly succeeded")
 				}
 			case <-time.After(time.Second):
-				t.Fatal("poll inherited 30s HTTP retry budget")
+				t.Fatal("poll ignored configured timeout or cancellation")
 			}
 			if len(calls) != 0 {
 				t.Fatal("poll performed nested retries")

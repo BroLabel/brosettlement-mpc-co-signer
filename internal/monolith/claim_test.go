@@ -422,8 +422,8 @@ func TestClaimIntentReturnsOutcomeUnknownAfterOneBoundedAttempt(t *testing.T) {
 	seenSignatures := make(map[string]bool)
 	client.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		attempts++
-		if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > time.Second {
-			t.Error("claim transport lacks short request deadline")
+		if deadline, ok := r.Context().Deadline(); !ok || time.Until(deadline) > client.httpClient.Timeout {
+			t.Error("claim transport lacks configured HTTP deadline")
 		}
 		if r.Header.Get("X-Api-Timestamp") == "" {
 			t.Fatal("retry request is missing X-Api-Timestamp")

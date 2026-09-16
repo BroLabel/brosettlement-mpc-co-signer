@@ -312,8 +312,9 @@ func TestLostClaimRetainsOwnerAndRecoversAfterRunning(t *testing.T) {
 		if kind != "SIGN" || id != discovery.IntentID {
 			t.Errorf("claim identity changed: %s %s", kind, id)
 		}
-		if deadline, ok := c.Deadline(); !ok || time.Until(deadline) > time.Second {
-			t.Error("claim request has no short bound")
+		parentDeadline, _ := ctx.Deadline()
+		if deadline, ok := c.Deadline(); !ok || deadline.After(parentDeadline) || deadline.After(discovery.ExpiresAt) {
+			t.Error("claim request exceeds parent or intent deadline")
 		}
 		if calls.Add(1) == 1 {
 			return monolith.ClaimResult{}, monolith.ErrClaimOutcomeUnknown

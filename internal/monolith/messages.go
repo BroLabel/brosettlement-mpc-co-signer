@@ -16,8 +16,6 @@ func (c *Client) PostMessage(ctx context.Context, sessionID string, frame Outbou
 }
 
 func (c *Client) GetMessages(ctx context.Context, sessionID string, afterSeq uint64) (MessagesResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
-	defer cancel()
 	path := fmt.Sprintf("/api/v1/co-signer/sessions/%s/messages?afterSeq=%d", url.PathEscape(sessionID), afterSeq)
 	// One bounded attempt: the existing polling loop owns retries and cadence.
 	req, err := c.newRequest(ctx, http.MethodGet, path, nil)

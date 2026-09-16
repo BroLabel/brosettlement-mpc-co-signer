@@ -127,15 +127,11 @@ func deliverSignResult(
 	}
 
 	for {
-		requestCtx, cancel := context.WithTimeout(postCtx, 400*time.Millisecond)
-		err := client.PostSignResult(requestCtx, intentID, request)
-		cancel()
+		err := client.PostSignResult(postCtx, intentID, request)
 		if err == nil || errors.Is(err, monolith.ErrTerminalConflict) {
 			return
 		}
-		pollCtx, stopPoll := context.WithTimeout(postCtx, 400*time.Millisecond)
-		observed, pollErr := client.GetMessages(pollCtx, intent.SessionID, 0)
-		stopPoll()
+		observed, pollErr := client.GetMessages(postCtx, intent.SessionID, 0)
 		if pollErr == nil && observed.Session.Validate("SIGN", intent.SessionID, intent.ExpiresAt) == nil &&
 			(intent.Session.StartedAt == nil || observed.Session.StartedAt != nil && observed.Session.ExecutionExpiresAt != nil &&
 				observed.Session.StartedAt.Equal(*intent.Session.StartedAt) && intent.Session.ExecutionExpiresAt != nil &&

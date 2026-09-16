@@ -21,9 +21,7 @@ func (t *HTTPTransport) poll(ctx context.Context) {
 			return
 		}
 
-		pollCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
-		result, err := t.client.GetMessages(pollCtx, sessionID, afterSeq)
-		cancel()
+		result, err := t.client.GetMessages(ctx, sessionID, afterSeq)
 		if t.isDone(ctx) {
 			return
 		}

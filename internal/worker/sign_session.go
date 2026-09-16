@@ -31,9 +31,7 @@ func waitForSignReadiness(ctx context.Context, client sessionClient, intent mono
 		if err := ctx.Err(); err != nil {
 			return ctx, nil, monolith.SessionLifecycle{}, err
 		}
-		pollCtx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
-		result, err := client.GetMessages(pollCtx, intent.SessionID, 0)
-		cancel()
+		result, err := client.GetMessages(ctx, intent.SessionID, 0)
 		if errors.Is(err, monolith.ErrInvalidLifecycle) {
 			return ctx, nil, result.Session, err
 		}

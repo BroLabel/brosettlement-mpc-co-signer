@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"time"
 )
 
 func (c *Client) PostResult(ctx context.Context, intentID string, result IntentResult) error {
@@ -32,8 +31,6 @@ func NewSignResultRequest(result IntentResult) (SignResultRequest, error) {
 func (r SignResultRequest) MarshalJSON() ([]byte, error) { return []byte(r.body), nil }
 
 func (c *Client) PostSignResult(ctx context.Context, intentID string, result SignResultRequest) error {
-	ctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
-	defer cancel()
 	path := "/api/v1/co-signer/intents/sign/" + url.PathEscape(intentID) + "/result"
 	body, err := result.MarshalJSON()
 	if err != nil {
