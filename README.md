@@ -134,6 +134,16 @@ installations using the same organization credentials can claim or replay the
 same work and cause a self-inflicted availability failure. During upgrades,
 stop the old process before starting the new one.
 
+### DKG readiness and time bounds
+
+After a claim, the Co-Signer polls until the monolith reports the exact
+authoritative `RUNNING` lifecycle before starting either local DKG party. Time
+spent queued in `PENDING` is therefore not MPC protocol idle time. Once the
+session is `RUNNING`, the signer watchdog measures missing MPC progress, while
+the immutable DKG session deadline remains the overall limit. A longer watchdog
+setting can accommodate normal startup and relay latency; it does not guarantee
+DKG completion under unlimited queueing or load.
+
 ## Configuration
 
 ### Required variables
