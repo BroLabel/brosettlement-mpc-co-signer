@@ -69,15 +69,17 @@ func (s *stubClient) GetMessages(ctx context.Context, id string, seq uint64) (mo
 		return s.poll(ctx, id, seq)
 	}
 	lifecycle := s.claimResult.Session
-	if lifecycle.Status == "PENDING" && s.claimResult.Type == "SIGN" {
+	if lifecycle.Status == "PENDING" {
 		start := time.Now()
-		expiry := start.Add(300 * time.Second)
-		if lifecycle.Deadline.Before(expiry) {
-			expiry = lifecycle.Deadline
-		}
 		lifecycle.Status = "RUNNING"
 		lifecycle.StartedAt = &start
-		lifecycle.ExecutionExpiresAt = &expiry
+		if s.claimResult.Type == "SIGN" {
+			expiry := start.Add(300 * time.Second)
+			if lifecycle.Deadline.Before(expiry) {
+				expiry = lifecycle.Deadline
+			}
+			lifecycle.ExecutionExpiresAt = &expiry
+		}
 		s.claimResult.Session = lifecycle
 	}
 	return monolith.MessagesResult{Session: lifecycle}, nil
@@ -247,6 +249,46 @@ func TestRunSessionRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 	}
 	if client.lastResult.Status != "" {
 		t.Fatalf("DKG used legacy result endpoint: %+v", client.lastResult)
+	}
+}
+
+func TestRunSessionWaitsForExactRunningBeforeDispatchingDKG(t *testing.T) {
+	intent := authoritativeDKGIntent()
+	claim := claimResultForIntent(intent)
+	polls := 0
+	client := &stubClient{
+		claimResult: claim,
+		poll: func(context.Context, string, uint64) (monolith.MessagesResult, error) {
+			polls++
+			lifecycle := claim.Session
+			if polls == 2 {
+				startedAt := time.Now()
+				lifecycle.Status = "RUNNING"
+				lifecycle.StartedAt = &startedAt
+			}
+			return monolith.MessagesResult{Session: lifecycle}, nil
+		},
+	}
+	dkgExecutor := &capturingDKGExecutor{result: completeDKGResultForIntent(t, intent)}
+	sem := make(chan struct{}, 1)
+	sem <- struct{}{}
+
+	runSessionWithExecutorsForTest(
+		context.Background(),
+		intent,
+		client,
+		&capturingRunner{},
+		dkgExecutor,
+		acceptingTerminalPublisher(nil),
+		"co-signer",
+		time.Millisecond,
+		sem,
+		nil,
+		slog.Default(),
+	)
+
+	if polls != 2 || dkgExecutor.calls != 1 {
+		t.Fatalf("readiness polls = %d, DKG calls = %d; want 2 polls and one dispatch", polls, dkgExecutor.calls)
 	}
 }
 
@@ -491,7 +533,7 @@ func TestReadinessAcceptsSlowRunningResponseWithinOperationDeadline(t *testing.T
 	}}
 	parent, stop := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stop()
-	active, cancel, session, err := waitForSignReadiness(parent, client, intent, time.Millisecond, realReadinessClock())
+	active, cancel, session, err := waitForSessionReadiness(parent, client, intent, time.Millisecond, realReadinessClock())
 	if err != nil {
 		t.Fatalf("valid RUNNING response was not accepted: %v", err)
 	}
@@ -524,7 +566,7 @@ func TestReadinessBindsOneMonotonicTimerBeforeDispatchDelay(t *testing.T) {
 		}
 		return context.WithDeadline(parent, at)
 	}}
-	active, cancel, _, err := waitForSignReadiness(context.Background(), client, intent, time.Millisecond, clock)
+	active, cancel, _, err := waitForSessionReadiness(context.Background(), client, intent, time.Millisecond, clock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +607,7 @@ func TestReadinessBoundaryRejectsDispatchAndHonorsEarlierCancellation(t *testing
 			defer stop()
 			clock := realReadinessClock()
 			clock.sample = func() (time.Time, time.Time) { return wall, wall }
-			active, cancel, _, err := waitForSignReadiness(parent, client, intent, time.Millisecond, clock)
+			active, cancel, _, err := waitForSessionReadiness(parent, client, intent, time.Millisecond, clock)
 			if remaining <= 2*time.Second {
 				if err == nil {
 					cancel()

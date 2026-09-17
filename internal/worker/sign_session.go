@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
@@ -26,7 +27,8 @@ func signExecutionBudget(expiresAt, wall time.Time) time.Duration {
 	return min(300*time.Second, expiresAt.Add(-2*time.Second).Sub(wall))
 }
 
-func waitForSignReadiness(ctx context.Context, client sessionClient, intent monolith.Intent, interval time.Duration, clock readinessClock) (context.Context, context.CancelFunc, monolith.SessionLifecycle, error) {
+func waitForSessionReadiness(ctx context.Context, client sessionClient, intent monolith.Intent, interval time.Duration, clock readinessClock) (context.Context, context.CancelFunc, monolith.SessionLifecycle, error) {
+	kind := strings.ToUpper(strings.TrimSpace(intent.Type))
 	for {
 		if err := ctx.Err(); err != nil {
 			return ctx, nil, monolith.SessionLifecycle{}, err
@@ -36,14 +38,18 @@ func waitForSignReadiness(ctx context.Context, client sessionClient, intent mono
 			return ctx, nil, result.Session, err
 		}
 		if err == nil {
-			if err := result.Session.Validate("SIGN", intent.SessionID, intent.ExpiresAt); err != nil {
+			if err := result.Session.Validate(kind, intent.SessionID, intent.ExpiresAt); err != nil {
 				return ctx, nil, result.Session, err
 			}
 			switch result.Session.Status {
 			case "PENDING":
 			case "RUNNING":
-				if intent.Session.StartedAt != nil && (!result.Session.StartedAt.Equal(*intent.Session.StartedAt) || intent.Session.ExecutionExpiresAt == nil || !result.Session.ExecutionExpiresAt.Equal(*intent.Session.ExecutionExpiresAt)) {
+				if intent.Session.StartedAt != nil && (!result.Session.StartedAt.Equal(*intent.Session.StartedAt) || !sameOptionalTime(result.Session.ExecutionExpiresAt, intent.Session.ExecutionExpiresAt)) {
 					return ctx, nil, result.Session, monolith.ErrInvalidLifecycle
+				}
+				if kind == "DKG" {
+					active, stop := context.WithCancel(ctx)
+					return active, stop, result.Session, nil
 				}
 				wall, mono := clock.sample()
 				budget := signExecutionBudget(*result.Session.ExecutionExpiresAt, wall)
@@ -68,6 +74,10 @@ func waitForSignReadiness(ctx context.Context, client sessionClient, intent mono
 		case <-timer.C:
 		}
 	}
+}
+
+func sameOptionalTime(left, right *time.Time) bool {
+	return left == nil && right == nil || left != nil && right != nil && left.Equal(*right)
 }
 
 // runSignProtocol joins Core before returning, including after transport stop or cancellation.

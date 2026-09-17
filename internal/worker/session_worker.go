@@ -227,22 +227,20 @@ func runSessionWithClock(
 	}
 
 	operationCtx, cancel := context.WithDeadline(ctx, deadline)
-	executionCtx := operationCtx
 	defer cancel()
-	if admittedKind == intentKindSIGN {
-		var readyCancel context.CancelFunc
-		var readyLifecycle monolith.SessionLifecycle
-		var err error
-		executionCtx, readyCancel, readyLifecycle, err = waitForSignReadiness(operationCtx, client, intent, framePollInterval, clock)
-		if err != nil {
+	executionCtx, readyCancel, readyLifecycle, err := waitForSessionReadiness(operationCtx, client, intent, framePollInterval, clock)
+	if err != nil {
+		if admittedKind == intentKindSIGN {
 			deliverSignResult(ctx, client, intent, BuildResult(err, executionCtx), log)
-			return
+		} else {
+			publishClaimedDKGFailure(ctx, terminalPublisher, intent, log)
 		}
-		// A rejected observation must never replace the trusted claim identity
-		// used to reconcile an ambiguous failure publication.
-		intent.Session = readyLifecycle
-		defer readyCancel()
+		return
 	}
+	defer readyCancel()
+	// A rejected observation must never replace the trusted claim identity
+	// used to reconcile an ambiguous failure publication.
+	intent.Session = readyLifecycle
 
 	frameCtx := transport.FrameContext{
 		Session:   intent.Session,
