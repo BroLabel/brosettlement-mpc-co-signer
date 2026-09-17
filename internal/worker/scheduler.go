@@ -84,6 +84,7 @@ func NewScheduler(
 	}
 	scheduler.launch = scheduler.launchSession
 	scheduler.forwardWakeups = scheduler.forwardProvisioningWakeups
+	metrics.SetJobCapacity(maxConcurrent)
 	metrics.SetDKGAdmission(false)
 	metrics.SetDKGGuard(false)
 	return scheduler
@@ -210,6 +211,7 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 			if !s.provisioningReady() {
 				if s.cfg.PreparamsHint != nil && !s.cfg.PreparamsHint() {
 					metrics.ObserveDKGSkippedPreparams()
+					metrics.ObserveAdmission("DKG", "preparams_unavailable")
 				}
 				continue
 			}
@@ -219,9 +221,11 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 			}
 			permits := s.permits.tryAcquireDKG()
 			if permits == nil {
+				metrics.ObserveAdmission("DKG", "capacity_full")
 				releaseIntent()
 				continue
 			}
+			metrics.ObserveAdmission("DKG", "admitted")
 			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits, releaseIntent)) {
 				return
 			}
@@ -232,9 +236,11 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 			}
 			permits := s.permits.tryAcquireSIGN()
 			if permits == nil {
+				metrics.ObserveAdmission("SIGN", "capacity_full")
 				releaseIntent()
 				continue
 			}
+			metrics.ObserveAdmission("SIGN", "admitted")
 			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits, releaseIntent)) {
 				return
 			}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -22,10 +23,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/config"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/worker"
 )
+
+func TestEffectiveCapacityIsLoggedWithoutSecrets(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	logEffectiveConfig(logger, config.Config{MaxConcurrent: 3, PreParamsGenerationParallelism: 2})
+
+	var record map[string]any
+	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record["CO_SIGNER_MAX_CONCURRENT"] != float64(3) || record["CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM"] != float64(2) {
+		t.Fatalf("effective capacity fields = %#v", record)
+	}
+}
 
 type blockedSignDelivery struct {
 	listed                     atomic.Bool

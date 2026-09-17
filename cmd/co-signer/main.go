@@ -40,6 +40,7 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("config error: %w", err)
 	}
+	logEffectiveConfig(log, cfg)
 	privateKey, err := decodePrivateKey(cfg.APIPrivateKey)
 	if err != nil {
 		return fmt.Errorf("failed to decode API private key: %w", err)
@@ -63,4 +64,12 @@ func run(ctx context.Context, log *slog.Logger) error {
 	}
 	log.Info("shutdown complete")
 	return nil
+}
+
+func logEffectiveConfig(log *slog.Logger, cfg config.Config) {
+	log.Info(
+		"co-signer configuration initialized",
+		"CO_SIGNER_MAX_CONCURRENT", cfg.MaxConcurrent,
+		"CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM", cfg.PreParamsGenerationParallelism,
+	)
 }

@@ -478,6 +478,29 @@ func TestSchedulerAttemptsAtMostOneDKGPerBatchAndContinuesSIGN(t *testing.T) {
 	}
 }
 
+func TestSchedulerExportsCapacityAndAdmissionPressure(t *testing.T) {
+	metrics.Default = metrics.NewRegistry()
+	s := newDeterministicScheduler(t, 1, func() bool { return true })
+	var launched []launchedSession
+	s.launch = captureLaunches(&launched)
+	s.dispatchBatch(context.Background(), []monolith.Intent{
+		{IntentID: "sign-1", Type: "SIGN"},
+		{IntentID: "sign-2", Type: "SIGN"},
+	})
+	defer releaseLaunches(launched)
+
+	snapshot := metrics.Default.Snapshot()
+	if got := snapshot["co_signer_job_capacity"][""]; got != 1 {
+		t.Fatalf("job capacity = %v, want 1", got)
+	}
+	if got := snapshot["co_signer_admission_total"]["outcome=admitted,type=SIGN"]; got != 1 {
+		t.Fatalf("admitted SIGN count = %v, want 1", got)
+	}
+	if got := snapshot["co_signer_admission_total"]["outcome=capacity_full,type=SIGN"]; got != 1 {
+		t.Fatalf("capacity-full SIGN count = %v, want 1", got)
+	}
+}
+
 func TestSchedulerSkipsDKGWhenAdmissionOrProvisioningIsClosed(t *testing.T) {
 	tests := []struct {
 		name      string
