@@ -12,8 +12,8 @@ if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
 fi
 
 core_version="$(GOWORK=off go list -m -f '{{.Version}}' github.com/BroLabel/brosettlement-mpc-core)"
-if [ "$core_version" != "v0.4.5" ]; then
-	echo "mpc-core must resolve exactly v0.4.5" >&2
+if [ "$core_version" != "v0.4.6" ]; then
+	echo "mpc-core must resolve exactly v0.4.6" >&2
 	exit 1
 fi
 
