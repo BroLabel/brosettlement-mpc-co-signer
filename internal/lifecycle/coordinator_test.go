@@ -7,12 +7,231 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/reconcile"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/worker"
 )
+
+type blockedSignDelivery struct {
+	listed                     atomic.Bool
+	entered, canceled, release chan struct{}
+}
+
+func (c *blockedSignDelivery) GetPendingIntents(context.Context) ([]monolith.Intent, error) {
+	if c.listed.Swap(true) {
+		return nil, nil
+	}
+	return []monolith.Intent{{Type: "SIGN", IntentID: "orphan", SessionID: "session", DiscoveryStatus: "CLAIMED"}}, nil
+}
+func (*blockedSignDelivery) ClaimIntent(context.Context, string, string) (monolith.ClaimResult, error) {
+	panic("orphan must not claim")
+}
+func (c *blockedSignDelivery) PostSignResult(ctx context.Context, _ string, _ monolith.SignResultRequest) error {
+	close(c.entered)
+	<-ctx.Done()
+	close(c.canceled)
+	<-c.release
+	return nil
+}
+func (*blockedSignDelivery) PostMessage(context.Context, string, monolith.OutboundFrame) error {
+	return nil
+}
+func (*blockedSignDelivery) GetMessages(context.Context, string, uint64) (monolith.MessagesResult, error) {
+	return monolith.MessagesResult{}, errors.New("unavailable")
+}
+
+func TestCoordinatorExpiredDrainRetainsLockUntilSignDeliveryStops(t *testing.T) {
+	var events eventLog
+	deps := successfulDependencies(&events, reconcile.Result{Disposition: reconcile.DispositionEligible})
+	client := &blockedSignDelivery{entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
+	scheduler := worker.NewScheduler(client, nil, nil, "co-signer-primary", time.Millisecond, worker.SchedulerConfig{MinInterval: time.Millisecond}, nil, 1)
+	schedulerDone := make(chan struct{})
+	closeEntered := make(chan struct{})
+	deps.StartScheduler = func(ctx context.Context) { go func() { scheduler.Run(ctx); close(schedulerDone) }() }
+	deps.OpenCapabilities = func(context.Context) (io.Closer, error) {
+		return closeFunc(func() error { close(closeEntered); <-schedulerDone; events.Add("capabilities-close"); return nil }), nil
+	}
+	deps.Drain = func(ctx context.Context) error { return ctx.Err() }
+	diagnostic := make(chan error, 1)
+	var diagnostics atomic.Int32
+	deps.ReportDrainError = func(err error) {
+		diagnostics.Add(1)
+		if events.Contains("publisher-wait") || events.Contains("capabilities-close") || events.Contains("lock-close") {
+			t.Error("drain failure reported after completion barriers")
+		}
+		diagnostic <- err
+	}
+	coordinator := mustCoordinator(t, deps)
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-client.entered
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- coordinator.Shutdown(expired) }()
+	<-client.canceled
+	select {
+	case err := <-diagnostic:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("diagnostic error = %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		close(client.release)
+		<-done
+		t.Fatal("expired drain had no diagnostic before blocked SIGN delivery was released")
+	}
+	<-closeEntered
+	select {
+	case err := <-done:
+		close(client.release)
+		t.Fatalf("shutdown returned before SIGN delivery stopped: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if events.Contains("lock-close") || events.Contains("capabilities-close") {
+		t.Fatal("resources or lifetime lock released while SIGN remained live")
+	}
+	close(client.release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("shutdown error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("shutdown did not join stopped delivery")
+	}
+	if err := coordinator.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, event := range events.Copy() {
+		counts[event]++
+	}
+	if counts["lock-close"] != 1 || counts["capabilities-close"] != 1 {
+		t.Fatalf("resource release counts=%v", counts)
+	}
+	if diagnostics.Load() != 1 {
+		t.Fatalf("drain diagnostics = %d, want exactly one", diagnostics.Load())
+	}
+}
+
+func TestCoordinatorDrainDiagnosticLifecycleCases(t *testing.T) {
+	for _, name := range []string{"nil callback", "startup abort", "successful drain"} {
+		t.Run(name, func(t *testing.T) {
+			var events eventLog
+			deps := successfulDependencies(&events, reconcile.Result{Disposition: reconcile.DispositionEligible})
+			var diagnosticCount int
+			drainErr := error(context.DeadlineExceeded)
+			if name == "successful drain" {
+				drainErr = nil
+			}
+			deps.Drain = func(context.Context) error { return drainErr }
+			if name != "nil callback" {
+				deps.ReportDrainError = func(err error) {
+					diagnosticCount++
+					if !errors.Is(err, drainErr) {
+						t.Errorf("diagnostic=%v", err)
+					}
+				}
+			}
+			startupErr := errors.New("intake startup failed")
+			if name == "startup abort" {
+				deps.StartIntake = func(context.Context) error { return startupErr }
+			}
+			coordinator := mustCoordinator(t, deps)
+			err := coordinator.Start(context.Background())
+			if name == "startup abort" {
+				if !errors.Is(err, startupErr) || !errors.Is(err, drainErr) {
+					t.Fatalf("startup errors=%v", err)
+				}
+				if diagnosticCount != 1 {
+					t.Fatalf("startup diagnostic count=%d", diagnosticCount)
+				}
+			} else {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := coordinator.Shutdown(context.Background()); !errors.Is(err, drainErr) {
+					t.Fatalf("shutdown error=%v", err)
+				}
+				if diagnosticCount != 0 {
+					t.Fatalf("unexpected drain diagnostic count=%d", diagnosticCount)
+				}
+			}
+			if events.Last() != "lock-close" {
+				t.Fatalf("final shutdown event=%s", events.Last())
+			}
+		})
+	}
+}
+
+func TestCoordinatorSlowDrainDiagnosticPreservesShutdownOwnership(t *testing.T) {
+	var events eventLog
+	deps := successfulDependencies(&events, reconcile.Result{Disposition: reconcile.DispositionEligible})
+	deps.Drain = func(context.Context) error { return context.DeadlineExceeded }
+	entered, release := make(chan struct{}), make(chan struct{})
+	deps.ReportDrainError = func(error) { close(entered); <-release }
+	coordinator := mustCoordinator(t, deps)
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- coordinator.Shutdown(context.Background()) }()
+	<-entered
+	if events.Contains("publisher-wait") || events.Contains("capabilities-close") || events.Contains("lock-close") {
+		t.Fatal("slow diagnostic bypassed shutdown ownership")
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("diagnostic completion deadlocked shutdown")
+	}
+	if events.Last() != "lock-close" {
+		t.Fatalf("final event=%s", events.Last())
+	}
+}
+
+func TestCoordinatorDrainDiagnosticPanicUsesExistingCallbackConvention(t *testing.T) {
+	var events eventLog
+	deps := successfulDependencies(&events, reconcile.Result{Disposition: reconcile.DispositionEligible})
+	deps.Drain = func(context.Context) error { return context.DeadlineExceeded }
+	deps.ReportDrainError = func(error) { panic("diagnostic callback panic") }
+	coordinator := mustCoordinator(t, deps)
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	panicked := make(chan any, 1)
+	go func() {
+		defer func() { panicked <- recover() }()
+		_ = coordinator.Shutdown(context.Background())
+	}()
+	select {
+	case value := <-panicked:
+		if value != "diagnostic callback panic" {
+			t.Fatalf("callback panic = %v", value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("callback panic deadlocked shutdown")
+	}
+	// Other lifecycle dependencies also propagate panics. The test recovers
+	// only to verify that no normal completion or early unlock was fabricated.
+	if events.Contains("publisher-wait") || events.Contains("capabilities-close") || events.Contains("lock-close") {
+		t.Fatal("panic was treated as completed shutdown")
+	}
+	coordinator.deps.ReportDrainError = nil
+	if err := coordinator.shutdown(context.Background(), false); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+}
 
 func TestCoordinatorStartsLockFirstAndPublishesReadinessAfterIntake(t *testing.T) {
 	var events eventLog

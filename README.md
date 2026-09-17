@@ -62,10 +62,16 @@ for the Ed25519 key and request-signing contract.
 git clone https://github.com/BroLabel/brosettlement-mpc-co-signer.git
 cd brosettlement-mpc-co-signer
 
-GOWORK=off go mod download
-mkdir -p bin
-GOWORK=off go build -o ./bin/co-signer ./cmd/co-signer
+make build
 ```
+
+`make build` reads `VERSION` and the current Git commit automatically. Clients
+do not need to supply build metadata. The binary reports both values in its
+startup log and as `/health.version` and `/health.revision`.
+
+For official container releases, CI additionally requires the Git tag to match
+`v<VERSION>`. Release operators use the published manifest digest as the
+immutable deployment identity; clients do not need to manage it manually.
 
 ### Configure
 
