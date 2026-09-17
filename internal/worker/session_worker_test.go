@@ -1410,7 +1410,7 @@ func TestPrimarySigningArtifactFailuresEmitRedactedCriticalAlertAndDoNotDegradeR
 			intent.IntentID = "intent-secret-canary"
 			intent.SessionID = "session-secret-canary"
 			intent.Payload.KeyID = "key-secret-canary"
-			intent.Payload.Digest = []byte("ciphertext-secret-canary")
+			intent.Payload.Digest = bytes.Repeat([]byte{0x42}, 32)
 			client := &stubClient{claimResult: claimResultForIntent(intent)}
 			handler := &alertCapturingHandler{}
 			sem := make(chan struct{}, 1)
@@ -1666,8 +1666,8 @@ func TestBuildSignRequestMapsHDPayload(t *testing.T) {
 
 	if req.Session.OrgID != "org-1" ||
 		req.Session.KeyID != "key-1" ||
-		req.Session.Chain != "ethereum" ||
-		!sameBytes(req.Digest, []byte{1, 2, 3}) {
+		req.Session.Chain != "tron:mainnet" ||
+		!sameBytes(req.Digest, make([]byte, 32)) {
 		t.Fatalf("unexpected sign request = %+v", req)
 	}
 	if req.DerivationContext == nil {
@@ -1675,13 +1675,13 @@ func TestBuildSignRequestMapsHDPayload(t *testing.T) {
 	}
 	ctx := req.DerivationContext
 	if ctx.ProfileID != "profile-1" ||
-		ctx.ProfileTemplateID != "ethereum-default" ||
-		ctx.Chain != "ethereum" ||
+		ctx.ProfileTemplateID != "tron-bip44-account" ||
+		ctx.Chain != "tron:mainnet" ||
 		ctx.Algorithm != "ecdsa" ||
 		ctx.Curve != "secp256k1" ||
 		ctx.Scheme != coretss.DerivationSchemeBIP32Secp256k1 ||
 		ctx.PublicKeyFormat != coretss.PublicKeyFormatUncompressedHex ||
-		ctx.FullPath != "m/44'/60'/0'/0/15" ||
+		ctx.FullPath != "m/44'/195'/0'/0/15" ||
 		ctx.DerivedPublicKey != intent.Payload.DerivationContext.ExpectedPublicKey ||
 		ctx.DescriptorVersion != 7 ||
 		ctx.ProfileVersion != 3 ||
@@ -1849,16 +1849,17 @@ func validSignIntent(t *testing.T) monolith.Intent {
 
 	ctx := monolith.DerivationContext{
 		ProfileID:         "profile-1",
-		ProfileTemplateID: "ethereum-default",
-		Chain:             "ethereum",
+		ProfileTemplateID: "tron-bip44-account",
+		Chain:             "tron:mainnet",
 		Algorithm:         "ecdsa",
 		Curve:             "secp256k1",
 		Scheme:            coretss.DerivationSchemeBIP32Secp256k1,
-		AccountPath:       "m/44'/60'/0'",
+		AccountPath:       "m/44'/195'/0'",
 		ChildPath:         "/0/15",
-		FullPath:          "m/44'/60'/0'/0/15",
+		FullPath:          "m/44'/195'/0'/0/15",
 		ExpectedPublicKey: "042f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4d8ac222636e5e3d6d4dba9dda6c9c426f788271bab0d6840dca87d3aa6ac62d6",
 		PublicKeyFormat:   coretss.PublicKeyFormatUncompressedHex,
+		AddressEncoding:   "base58check",
 		DescriptorVersion: 7,
 		ProfileVersion:    3,
 		KeyVersion:        1,
@@ -1879,16 +1880,16 @@ func validSignIntent(t *testing.T) monolith.Intent {
 			KeyID:                 "key-1",
 			ProfileID:             "profile-1",
 			ProfileVersion:        3,
-			ProfileTemplateID:     "ethereum-default",
+			ProfileTemplateID:     "tron-bip44-account",
 			Parties:               []string{coordinatorPlatformParty, coordinatorPrimaryParty},
 			Threshold:             2,
 			Algorithm:             "ECDSA",
 			Curve:                 "secp256k1",
-			Chain:                 "ethereum",
-			Digest:                []byte{1, 2, 3},
-			DigestType:            "transaction_hash",
+			Chain:                 "tron:mainnet",
+			Digest:                make([]byte, 32),
+			DigestType:            "transaction",
 			HashAlgorithm:         "sha256",
-			SigningPayloadType:    "ethereum_transaction",
+			SigningPayloadType:    "tron-transaction",
 			DerivationContextHash: hash,
 			PartyID:               coordinatorPrimaryParty,
 			DerivationContext:     &ctx,
