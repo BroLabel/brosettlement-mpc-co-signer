@@ -254,14 +254,24 @@ func TestRunSessionRoutesDKGOnlyThroughCoordinator(t *testing.T) {
 
 func TestRunSessionWaitsForExactRunningBeforeDispatchingDKG(t *testing.T) {
 	intent := authoritativeDKGIntent()
+	// Model time spent behind admission without sleeping through the watchdog.
+	intent.ExpiresAt = time.Now().Add(10 * time.Minute)
 	claim := claimResultForIntent(intent)
 	polls := 0
+	dkgExecutor := &capturingDKGExecutor{result: completeDKGResultForIntent(t, intent)}
 	client := &stubClient{
 		claimResult: claim,
 		poll: func(context.Context, string, uint64) (monolith.MessagesResult, error) {
 			polls++
 			lifecycle := claim.Session
-			if polls == 2 {
+			if polls < 4 {
+				if lifecycle.StartedAt != nil || lifecycle.ExecutionExpiresAt != nil {
+					t.Fatalf("PENDING lifecycle timestamps = started=%v expiry=%v, want nil", lifecycle.StartedAt, lifecycle.ExecutionExpiresAt)
+				}
+				if dkgExecutor.calls != 0 {
+					t.Fatalf("DKG dispatched while lifecycle is PENDING: calls=%d", dkgExecutor.calls)
+				}
+			} else {
 				startedAt := time.Now()
 				lifecycle.Status = "RUNNING"
 				lifecycle.StartedAt = &startedAt
@@ -269,7 +279,6 @@ func TestRunSessionWaitsForExactRunningBeforeDispatchingDKG(t *testing.T) {
 			return monolith.MessagesResult{Session: lifecycle}, nil
 		},
 	}
-	dkgExecutor := &capturingDKGExecutor{result: completeDKGResultForIntent(t, intent)}
 	sem := make(chan struct{}, 1)
 	sem <- struct{}{}
 
@@ -287,8 +296,8 @@ func TestRunSessionWaitsForExactRunningBeforeDispatchingDKG(t *testing.T) {
 		slog.Default(),
 	)
 
-	if polls != 2 || dkgExecutor.calls != 1 {
-		t.Fatalf("readiness polls = %d, DKG calls = %d; want 2 polls and one dispatch", polls, dkgExecutor.calls)
+	if polls != 4 || dkgExecutor.calls != 1 {
+		t.Fatalf("readiness polls = %d, DKG calls = %d; want 4 polls and one dispatch", polls, dkgExecutor.calls)
 	}
 }
 
@@ -654,32 +663,44 @@ func TestFreshReadinessCannotReplaceAlreadyObservedStart(t *testing.T) {
 }
 
 func TestInvalidDKGLifecyclePreservesTerminalPublisherOwnership(t *testing.T) {
-	intent := authoritativeDKGIntent()
-	claim := claimResultForIntent(intent)
-	claim.Session = monolith.SessionLifecycle{}
-	client := &stubClient{claimResult: claim}
-	sem := make(chan struct{}, 1)
-	sem <- struct{}{}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		runSessionWithExecutorsForTest(ctx, intent, client, &stubRunner{}, &capturingDKGExecutor{}, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
-	}()
-	select {
-	case <-done:
-		t.Error("invalid DKG released ownership without terminal publisher")
-	case <-time.After(20 * time.Millisecond):
-	}
-	if len(sem) != 1 {
-		t.Error("DKG permit was released without terminal resolution")
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("DKG shutdown did not release worker")
+	for name, mutate := range map[string]func(*monolith.SessionLifecycle){
+		"missing":       func(lifecycle *monolith.SessionLifecycle) { *lifecycle = monolith.SessionLifecycle{} },
+		"invalid":       func(lifecycle *monolith.SessionLifecycle) { lifecycle.Status = "CREATED" },
+		"wrong session": func(lifecycle *monolith.SessionLifecycle) { lifecycle.SessionID = "other-dkg-session" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			intent := authoritativeDKGIntent()
+			claim := claimResultForIntent(intent)
+			mutate(&claim.Session)
+			client := &stubClient{claimResult: claim}
+			dkgExecutor := &capturingDKGExecutor{}
+			sem := make(chan struct{}, 1)
+			sem <- struct{}{}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				runSessionWithExecutorsForTest(ctx, intent, client, &stubRunner{}, dkgExecutor, nil, "co-signer", time.Millisecond, sem, nil, slog.Default())
+			}()
+			select {
+			case <-done:
+				t.Error("invalid DKG released ownership without terminal publisher")
+			case <-time.After(20 * time.Millisecond):
+			}
+			if dkgExecutor.calls != 0 {
+				t.Fatalf("invalid lifecycle started DKG: calls=%d", dkgExecutor.calls)
+			}
+			if len(sem) != 1 {
+				t.Error("DKG permit was released without terminal resolution")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("DKG shutdown did not release worker")
+			}
+		})
 	}
 }
 
