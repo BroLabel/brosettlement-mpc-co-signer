@@ -25,6 +25,22 @@ func TestVerifierAcceptsClosedProducerBundles(t *testing.T) {
 	}
 }
 
+func TestHTTPFixtureValidatorAcceptsClosedEthereumSignPolicyVariants(t *testing.T) {
+	for _, fixture := range []string{"sign-claim-eth.json", "sign-claim-erc20.json"} {
+		t.Run(fixture, func(t *testing.T) {
+			root := copyBundle(t, filepath.Join("..", "..", "..", "testdata", "mpc-co-signer-http", "v1"))
+			raw, err := os.ReadFile(filepath.Join("..", "..", "..", "testdata", "ethereum-wallet-v1", fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(t, filepath.Join(root, "sign-claim-response.json"), raw)
+			if err := verifyHTTPFixtures(root); err != nil {
+				t.Fatalf("verifyHTTPFixtures() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestHTTPVerifierRejectsInvalidLifecycleSemantics(t *testing.T) {
 	for _, name := range []string{"absent", "null", "unknown", "wrong session", "wrong deadline", "pending start", "start equals deadline", "start after deadline", "zero start", "missing expiry", "wrong expiry"} {
 		t.Run(name, func(t *testing.T) {
