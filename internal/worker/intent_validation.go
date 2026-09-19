@@ -156,6 +156,9 @@ func validateSignPayload(payload monolith.IntentPayload) error {
 	if err := validateSignMetadata(payload); err != nil {
 		return err
 	}
+	if err := validateSignTuple(payload); err != nil {
+		return err
+	}
 	if strings.TrimSpace(payload.ChainCode) != "" {
 		return fmt.Errorf("%w: chain code is not allowed for SIGN", errInvalidIntent)
 	}
@@ -230,10 +233,36 @@ func validateSignMetadata(payload monolith.IntentPayload) error {
 	if payload.ProfileVersion == 0 {
 		return fmt.Errorf("%w: profile version is required for SIGN", errInvalidIntent)
 	}
-	if len(payload.Digest) == 0 {
-		return fmt.Errorf("%w: digest is required for SIGN", errInvalidIntent)
+	if len(payload.Digest) != sha256.Size {
+		return fmt.Errorf("%w: digest must be 32 bytes for SIGN", errInvalidIntent)
 	}
 	return nil
+}
+
+func validateSignTuple(payload monolith.IntentPayload) error {
+	algorithm := strings.ToLower(strings.TrimSpace(payload.Algorithm))
+	curve := strings.ToLower(strings.TrimSpace(payload.Curve))
+	chain := strings.TrimSpace(payload.Chain)
+	digestType := strings.TrimSpace(payload.DigestType)
+	hashAlgorithm := strings.TrimSpace(payload.HashAlgorithm)
+	payloadType := strings.TrimSpace(payload.SigningPayloadType)
+	addressEncoding := ""
+	if payload.DerivationContext != nil {
+		addressEncoding = strings.TrimSpace(payload.DerivationContext.AddressEncoding)
+	}
+
+	if algorithm != "ecdsa" || curve != "secp256k1" {
+		return fmt.Errorf("%w: unsupported signing tuple", errInvalidIntent)
+	}
+	if (chain == "tron:mainnet" || chain == "tron:nile") && digestType == "transaction" && hashAlgorithm == "sha256" &&
+		payloadType == "tron-transaction" && (addressEncoding == "tron_base58" || addressEncoding == "base58check" || addressEncoding == "tron_base58check") {
+		return nil
+	}
+	if (chain == "ethereum:mainnet" || chain == "ethereum:sepolia") && digestType == "transaction" &&
+		hashAlgorithm == "keccak256" && payloadType == "ethereum-transaction" && addressEncoding == "evm_hex" {
+		return nil
+	}
+	return fmt.Errorf("%w: unsupported signing tuple", errInvalidIntent)
 }
 
 func validateChainCodeHash(chainCodeHex, expectedHash string) error {

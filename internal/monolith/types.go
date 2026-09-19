@@ -179,12 +179,19 @@ type SignPolicyContext struct {
 	AmountAtomic           string  `json:"amountAtomic"`
 	Asset                  string  `json:"asset"`
 	Chain                  string  `json:"chain"`
+	ChainID                string  `json:"chainId,omitempty"`
 	FeeLimitSun            *string `json:"feeLimitSun"`
 	FromAddress            string  `json:"fromAddress"`
+	GasLimit               string  `json:"gasLimit,omitempty"`
+	MaxFeePerGas           string  `json:"maxFeePerGas,omitempty"`
+	MaxPriorityFeePerGas   string  `json:"maxPriorityFeePerGas,omitempty"`
+	Nonce                  string  `json:"nonce,omitempty"`
 	ToAddress              string  `json:"toAddress"`
 	TokenContractCanonical *string `json:"tokenContractCanonical"`
 	TokenDecimals          *int64  `json:"tokenDecimals"`
 	TokenStandard          *string `json:"tokenStandard"`
+	TransactionType        uint32  `json:"transactionType,omitempty"`
+	Version                uint32  `json:"version,omitempty"`
 }
 
 func (c *SignPolicyContext) UnmarshalJSON(raw []byte) error {
@@ -192,9 +199,18 @@ func (c *SignPolicyContext) UnmarshalJSON(raw []byte) error {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
-	expected := []string{
+	tronExpected := []string{
 		"amountAtomic", "asset", "chain", "feeLimitSun", "fromAddress", "toAddress",
 		"tokenContractCanonical", "tokenDecimals", "tokenStandard",
+	}
+	ethereumExpected := []string{
+		"amountAtomic", "asset", "chain", "chainId", "fromAddress", "gasLimit", "maxFeePerGas",
+		"maxPriorityFeePerGas", "nonce", "toAddress", "tokenContractCanonical", "tokenDecimals",
+		"tokenStandard", "transactionType", "version",
+	}
+	expected := tronExpected
+	if _, ok := fields["version"]; ok {
+		expected = ethereumExpected
 	}
 	if len(fields) != len(expected) {
 		return errors.New("SIGN policy context has invalid fields")
