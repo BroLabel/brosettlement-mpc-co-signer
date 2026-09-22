@@ -18,6 +18,9 @@ case "$REF" in
   refs/heads/main)
     tags="$IMAGE:latest,$IMAGE:sha-$REVISION"
     ;;
+  refs/heads/eks-staging)
+    tags="$IMAGE:staging,$IMAGE:sha-$REVISION"
+    ;;
   refs/tags/v*)
     if [[ "$REF" != "refs/tags/v$version" ]]; then
       echo "Git tag must match VERSION: got '$REF', expected 'refs/tags/v$version'" >&2
