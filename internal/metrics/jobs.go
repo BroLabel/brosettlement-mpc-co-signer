@@ -1,15 +1,5 @@
 package metrics
 
-func SetJobCapacity(capacity int) {
-	if capacity > 0 {
-		Default.Set("co_signer_job_capacity", nil, float64(capacity))
-	}
-}
-
-func ObserveAdmission(kind, outcome string) {
-	Default.Inc("co_signer_admission_total", Labels{"type": kind, "outcome": outcome})
-}
-
 func JobStarted(kind string) {
 	if kind == "DKG" {
 		Default.Add("active_dkg_jobs", nil, 1)

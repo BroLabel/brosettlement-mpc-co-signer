@@ -65,7 +65,6 @@ type response struct {
 	ProvisioningReady  bool                   `json:"provisioningReady"`
 	ProvisioningReason Reason                 `json:"provisioningReason,omitempty"`
 	Version            string                 `json:"version"`
-	Revision           string                 `json:"revision"`
 	Timestamp          string                 `json:"timestamp"`
 	Capabilities       map[string]bool        `json:"capabilities"`
 	Checks             map[string]checkResult `json:"checks"`
@@ -73,7 +72,6 @@ type response struct {
 
 type Handler struct {
 	version           string
-	revision          string
 	sharesDir         string
 	readiness         *Readiness
 	signingProbe      func() bool
@@ -82,7 +80,6 @@ type Handler struct {
 
 func NewLifecycleHandlerWithReadinessProbes(
 	version,
-	revision,
 	sharesDir string,
 	readiness *Readiness,
 	signingProbe,
@@ -90,7 +87,6 @@ func NewLifecycleHandlerWithReadinessProbes(
 ) http.Handler {
 	return &Handler{
 		version:           version,
-		revision:          revision,
 		sharesDir:         sharesDir,
 		readiness:         readiness,
 		signingProbe:      signingProbe,
@@ -151,7 +147,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ProvisioningReady:  snapshot.ProvisioningReady,
 		ProvisioningReason: snapshot.ProvisioningReason,
 		Version:            h.version,
-		Revision:           h.revision,
 		Timestamp:          time.Now().UTC().Format(time.RFC3339),
 		Capabilities: map[string]bool{
 			"sign": snapshot.SigningReady,

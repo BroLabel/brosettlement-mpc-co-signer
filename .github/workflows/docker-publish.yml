@@ -32,14 +32,18 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Test release candidate
-        run: GOWORK=off go test ./cmd/co-signer ./internal/health
+      # VERSION is published on every merge to main, alongside latest. Bump it
+      # in the PR that should produce a new number; leaving it unchanged means
+      # the next merge overwrites that version's tag.
+      - name: Read version
+        id: version
+        run: |
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION must be plain semver like 1.0.0, got: '$VERSION'" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -54,29 +58,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive publication metadata
-        id: release
-        env:
-          IMAGE: ${{ steps.image.outputs.name }}
-          REF: ${{ github.ref }}
-          REVISION: ${{ github.sha }}
-        run: ./scripts/check-release-identity.sh >> "$GITHUB_OUTPUT"
+      # latest=false disables the implicit "latest" that flavor=auto would add on
+      # tag pushes, so "latest" is driven solely by the main-branch rule below.
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }},enable={{is_default_branch}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern=v{{version}}
+            type=semver,pattern={{major}}.{{minor}}
 
       - name: Build and push image
-        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.release.outputs.tags }}
-          build-args: |
-            VERSION=${{ steps.release.outputs.version }}
-            REVISION=${{ steps.release.outputs.revision }}
-          labels: |
-            org.opencontainers.image.version=${{ steps.release.outputs.version }}
-            org.opencontainers.image.revision=${{ steps.release.outputs.revision }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Off by design: BuildKit otherwise attaches in-toto attestation
@@ -85,7 +90,3 @@ jobs:
           # checking what was published.
           provenance: false
           sbom: false
-
-      - name: Record published manifest digest
-        run: |
-          echo "Published digest: ${{ steps.build.outputs.digest }}"

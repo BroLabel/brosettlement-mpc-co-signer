@@ -10,7 +10,6 @@ func TestContractContainsOnlySafeBoundedMetrics(t *testing.T) {
 	want := []string{
 		"co_signer_lifecycle_lock_held", "co_signer_reconciliation_duration_seconds", "co_signer_reconciliation_failures_total",
 		"co_signer_process_ready", "co_signer_signing_ready", "co_signer_provisioning_ready",
-		"co_signer_job_capacity", "co_signer_admission_total",
 		"dkg_guard_occupied", "dkg_admission_open", "dkg_claim_conflicts_total", "oldest_pending_dkg_age_seconds",
 		"oldest_pending_sign_age_seconds", "pending_batch_items", "intent_claims_total", "dkg_terminal_unconfirmed",
 		"dkg_terminal_publish_attempts_total", "dkg_terminal_conflicts_total", "preparams_pool_size",

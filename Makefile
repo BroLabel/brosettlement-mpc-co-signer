@@ -1,13 +1,4 @@
-.PHONY: build verify-contracts build-recovery-proof verify-recovery-proof verify-mpc-2of3
-
-VERSION := $(shell cat VERSION)
-REVISION := $(shell git rev-parse --verify HEAD)
-
-build:
-	@mkdir -p bin
-	GOWORK=off go build -trimpath \
-		-ldflags="-s -w -X main.version=$(VERSION) -X main.revision=$(REVISION)" \
-		-o ./bin/co-signer ./cmd/co-signer
+.PHONY: verify-contracts build-recovery-proof verify-recovery-proof verify-mpc-2of3
 
 verify-contracts:
 	GOWORK=off go run ./cmd/mpc-contracts verify
