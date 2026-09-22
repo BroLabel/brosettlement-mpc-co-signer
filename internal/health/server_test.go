@@ -96,7 +96,7 @@ func TestHealthReportsSplitLifecycleReadiness(t *testing.T) {
 		ProvisioningReady:  false,
 		ProvisioningReason: health.ReasonDKGTerminalUnconfirmed,
 	})
-	h := health.NewLifecycleHandlerWithReadinessProbes("0.1.0", "test-revision", dir, state, nil, nil)
+	h := health.NewLifecycleHandlerWithReadinessProbes("0.1.0", dir, state, nil, nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
@@ -129,7 +129,7 @@ func TestHealthClosesProcessAndSigningForSystemicPrimaryProbeLoss(t *testing.T) 
 	state := health.NewReadiness()
 	state.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
 	available := true
-	h := health.NewLifecycleHandlerWithReadinessProbes("0.1.0", "test-revision", t.TempDir(), state, func() bool { return available }, nil)
+	h := health.NewLifecycleHandlerWithReadinessProbes("0.1.0", t.TempDir(), state, func() bool { return available }, nil)
 	available = false
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
@@ -158,7 +158,6 @@ func TestHealthRefreshesProvisioningCapabilityAfterStartup(t *testing.T) {
 	provisioningReady := false
 	h := health.NewLifecycleHandlerWithReadinessProbes(
 		"0.1.0",
-		"test-revision",
 		t.TempDir(),
 		state,
 		func() bool { return true },
@@ -190,7 +189,6 @@ func TestHealthClosesOnlyProvisioningWhenDynamicCapabilityFalls(t *testing.T) {
 	provisioningReady := true
 	h := health.NewLifecycleHandlerWithReadinessProbes(
 		"0.1.0",
-		"test-revision",
 		t.TempDir(),
 		state,
 		func() bool { return true },
@@ -234,7 +232,6 @@ func TestHealthDynamicProvisioningProbeCannotOverrideLifecycleGates(t *testing.T
 			probeCalls := 0
 			h := health.NewLifecycleHandlerWithReadinessProbes(
 				"0.1.0",
-				"test-revision",
 				t.TempDir(),
 				state,
 				func() bool { return true },
@@ -261,7 +258,6 @@ func TestHealthSigningProbeOverridesDynamicProvisioningCapability(t *testing.T) 
 	state.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
 	h := health.NewLifecycleHandlerWithReadinessProbes(
 		"0.1.0",
-		"test-revision",
 		t.TempDir(),
 		state,
 		func() bool { return false },
@@ -289,7 +285,6 @@ func TestHealthDynamicProbeCannotReopenReadinessDuringShutdown(t *testing.T) {
 	releaseProbe := make(chan struct{})
 	h := health.NewLifecycleHandlerWithReadinessProbes(
 		"0.1.0",
-		"test-revision",
 		t.TempDir(),
 		state,
 		func() bool { return true },
@@ -353,7 +348,7 @@ func TestHealthProcessReadinessClosesDuringShutdown(t *testing.T) {
 	state.Set(health.Snapshot{})
 
 	rec := httptest.NewRecorder()
-	health.NewLifecycleHandlerWithReadinessProbes("0.1.0", "test-revision", dir, state, nil, nil).
+	health.NewLifecycleHandlerWithReadinessProbes("0.1.0", dir, state, nil, nil).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
 
 	if rec.Code != http.StatusServiceUnavailable {
@@ -371,5 +366,5 @@ func TestHealthProcessReadinessClosesDuringShutdown(t *testing.T) {
 func newReadyHandler(version, sharesDir string) http.Handler {
 	readiness := health.NewReadiness()
 	readiness.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
-	return health.NewLifecycleHandlerWithReadinessProbes(version, "test-revision", sharesDir, readiness, nil, nil)
+	return health.NewLifecycleHandlerWithReadinessProbes(version, sharesDir, readiness, nil, nil)
 }

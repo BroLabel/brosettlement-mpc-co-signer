@@ -62,16 +62,10 @@ for the Ed25519 key and request-signing contract.
 git clone https://github.com/BroLabel/brosettlement-mpc-co-signer.git
 cd brosettlement-mpc-co-signer
 
-make build
+GOWORK=off go mod download
+mkdir -p bin
+GOWORK=off go build -o ./bin/co-signer ./cmd/co-signer
 ```
-
-`make build` reads `VERSION` and the current Git commit automatically. Clients
-do not need to supply build metadata. The binary reports both values in its
-startup log and as `/health.version` and `/health.revision`.
-
-For official container releases, CI additionally requires the Git tag to match
-`v<VERSION>`. Release operators use the published manifest digest as the
-immutable deployment identity; clients do not need to manage it manually.
 
 ### Configure
 
@@ -133,16 +127,6 @@ Run exactly one active Co-Signer installation per organization. Two
 installations using the same organization credentials can claim or replay the
 same work and cause a self-inflicted availability failure. During upgrades,
 stop the old process before starting the new one.
-
-### DKG readiness and time bounds
-
-After a claim, the Co-Signer polls until the monolith reports the exact
-authoritative `RUNNING` lifecycle before starting either local DKG party. Time
-spent queued in `PENDING` is therefore not MPC protocol idle time. Once the
-session is `RUNNING`, the signer watchdog measures missing MPC progress, while
-the immutable DKG session deadline remains the overall limit. A longer watchdog
-setting can accommodate normal startup and relay latency; it does not guarantee
-DKG completion under unlimited queueing or load.
 
 ## Configuration
 

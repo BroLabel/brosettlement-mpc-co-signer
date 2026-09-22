@@ -20,47 +20,8 @@ func TestVerifierAcceptsClosedProducerBundles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VerifyHTTPBundle() error = %v", err)
 	}
-	if httpID != "FTDwFxMF6H-johDYeeyMVxb2kxPcszVN8crqaKoqClA" {
+	if httpID != "On6HEeLx2VhbeA6d5070_gopkJdgDkdfwYSlrg1RLFY" {
 		t.Fatalf("HTTP identity = %q", httpID)
-	}
-}
-
-func TestHTTPVerifierRejectsInvalidLifecycleSemantics(t *testing.T) {
-	for _, name := range []string{"absent", "null", "unknown", "wrong session", "wrong deadline", "pending start", "start equals deadline", "start after deadline", "zero start", "missing expiry", "wrong expiry"} {
-		t.Run(name, func(t *testing.T) {
-			root := copyBundle(t, filepath.Join("..", "..", "..", "testdata", "mpc-co-signer-http", "v1"))
-			mutateJSONFixture(t, root, "sign-claim-response.json", func(v map[string]any) {
-				s := v["session"].(map[string]any)
-				switch name {
-				case "absent":
-					delete(v, "session")
-				case "null":
-					v["session"] = nil
-				case "unknown":
-					s["status"] = "UNKNOWN"
-				case "wrong session":
-					s["sessionId"] = "20000000-0000-4000-8000-000000000099"
-				case "wrong deadline":
-					s["deadline"] = "2026-08-30T00:00:00.000Z"
-				case "pending start":
-					s["status"] = "PENDING"
-					s["startedAt"] = "2026-07-29T00:00:00.500Z"
-				case "start equals deadline":
-					s["startedAt"] = s["deadline"]
-				case "start after deadline":
-					s["startedAt"] = "2026-08-30T00:00:00.000Z"
-				case "zero start":
-					s["startedAt"] = "1970-01-01T00:00:00.000Z"
-				case "missing expiry":
-					delete(s, "executionExpiresAt")
-				case "wrong expiry":
-					s["executionExpiresAt"] = "2026-07-29T00:04:59.000Z"
-				}
-			})
-			if err := verifyHTTPFixtures(root); err == nil {
-				t.Fatal("semantic verifier accepted malformed lifecycle")
-			}
-		})
 	}
 }
 

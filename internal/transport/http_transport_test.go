@@ -16,7 +16,6 @@ import (
 )
 
 type stubClient struct {
-	poll         func(context.Context, string, uint64) (monolith.MessagesResult, error)
 	mu           sync.Mutex
 	inbound      []monolith.InboundMessage
 	lastAfterSeq uint64
@@ -33,252 +32,19 @@ func (s *stubClient) PostMessage(_ context.Context, _ string, frame monolith.Out
 	return nil
 }
 
-func (s *stubClient) GetMessages(ctx context.Context, id string, afterSeq uint64) (monolith.MessagesResult, error) {
-	if s.poll != nil {
-		return s.poll(ctx, id, afterSeq)
-	}
+func (s *stubClient) GetMessages(_ context.Context, _ string, afterSeq uint64) ([]monolith.InboundMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.lastAfterSeq = afterSeq
 	s.getCalls++
+	if len(s.inbound) == 0 {
+		return nil, nil
+	}
+
 	msgs := s.inbound
 	s.inbound = nil
-	return monolith.MessagesResult{Session: monolith.SessionLifecycle{SessionID: id, Status: "PENDING", Deadline: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)}, Messages: msgs}, nil
-}
-
-func TestCloseWaitsForBlockedPoller(t *testing.T) {
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	canceled := make(chan struct{})
-	client := &stubClient{poll: func(ctx context.Context, _ string, _ uint64) (monolith.MessagesResult, error) {
-		close(entered)
-		<-ctx.Done()
-		close(canceled)
-		<-release
-		return monolith.MessagesResult{}, ctx.Err()
-	}}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	tr := transport.NewHTTPTransport(client, transport.FrameContext{SessionID: "session-1", Stage: "dkg"}, time.Millisecond, slog.Default())
-	tr.Start(ctx)
-	<-entered
-	done := make(chan struct{})
-	go func() { tr.Close(); close(done) }()
-	select {
-	case <-done:
-		close(release)
-		t.Fatal("Close returned before poller stopped")
-	case <-canceled:
-	case <-time.After(time.Second):
-		cancel()
-		close(release)
-		t.Fatal("Close did not cancel active poll")
-	}
-	select {
-	case <-done:
-		t.Error("Close returned while poller was blocked")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(release)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Close did not join released poller")
-	}
-}
-
-func TestCloseBeforeStartPreventsPolling(t *testing.T) {
-	client := &stubClient{}
-	tr := transport.NewHTTPTransport(client, transport.FrameContext{}, time.Millisecond, slog.Default())
-	tr.Close()
-	tr.Start(context.Background())
-	tr.Close()
-
-	client.mu.Lock()
-	defer client.mu.Unlock()
-	if client.getCalls != 0 {
-		t.Fatalf("poll requests after Close = %d, want 0", client.getCalls)
-	}
-	if _, err := tr.RecvFrame(context.Background()); !errors.Is(err, transport.ErrTransportClosed) {
-		t.Fatalf("RecvFrame after Close = %v", err)
-	}
-}
-
-func TestConcurrentStartAndCloseOwnAtMostOnePoller(t *testing.T) {
-	for iteration := 0; iteration < 40; iteration++ {
-		var mu sync.Mutex
-		calls, exits := 0, 0
-		client := &stubClient{poll: func(ctx context.Context, _ string, _ uint64) (monolith.MessagesResult, error) {
-			mu.Lock()
-			calls++
-			mu.Unlock()
-			<-ctx.Done()
-			mu.Lock()
-			exits++
-			mu.Unlock()
-			return monolith.MessagesResult{}, ctx.Err()
-		}}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		tr := transport.NewHTTPTransport(client, transport.FrameContext{}, time.Millisecond, slog.Default())
-		start := make(chan struct{})
-		var workers sync.WaitGroup
-		for i := 0; i < 8; i++ {
-			workers.Add(2)
-			go func() {
-				defer workers.Done()
-				<-start
-				tr.Start(ctx)
-			}()
-			go func() {
-				defer workers.Done()
-				<-start
-				tr.Close()
-			}()
-		}
-		close(start)
-		workers.Wait()
-		cancel()
-		tr.Start(context.Background())
-		tr.Close()
-		mu.Lock()
-		gotCalls, gotExits := calls, exits
-		mu.Unlock()
-		if gotCalls > 1 || gotExits != gotCalls {
-			t.Fatalf("iteration %d: calls=%d exits=%d, want at most one joined poller", iteration, gotCalls, gotExits)
-		}
-	}
-}
-
-func TestPollRejectsChangedLifecycleBeforeDeliveringHistoricalFrames(t *testing.T) {
-	for _, mutation := range []string{"terminal", "pending", "changed deadline", "changed start", "expired", "missing"} {
-		t.Run(mutation, func(t *testing.T) {
-			start := time.Now()
-			deadline := start.Add(time.Hour)
-			expiry := start.Add(300 * time.Second)
-			baseline := monolith.SessionLifecycle{SessionID: "session-1", Status: "RUNNING", StartedAt: &start, Deadline: deadline, ExecutionExpiresAt: &expiry}
-			changed := baseline
-			switch mutation {
-			case "terminal":
-				changed.Status = "COMPLETED"
-			case "pending":
-				changed.Status = "PENDING"
-				changed.StartedAt = nil
-				changed.ExecutionExpiresAt = nil
-			case "changed deadline":
-				changed.Deadline = deadline.Add(time.Second)
-			case "changed start":
-				v := start.Add(time.Second)
-				e := expiry.Add(time.Second)
-				changed.StartedAt = &v
-				changed.ExecutionExpiresAt = &e
-			case "expired":
-				v := start.Add(-301 * time.Second)
-				e := v.Add(300 * time.Second)
-				changed.StartedAt = &v
-				changed.ExecutionExpiresAt = &e
-			case "missing":
-				changed = monolith.SessionLifecycle{}
-			}
-			calls := 0
-			client := &stubClient{poll: func(_ context.Context, _ string, seq uint64) (monolith.MessagesResult, error) {
-				calls++
-				if seq != 0 {
-					t.Errorf("advanced invalid cursor=%d", seq)
-				}
-				return monolith.MessagesResult{Session: changed, Messages: []monolith.InboundMessage{{DeliverySeq: 99, Payload: []byte("historical")}}}, nil
-			}}
-			tr := transport.NewHTTPTransport(client, transport.FrameContext{SessionID: "session-1", Stage: "sign", Session: baseline}, time.Millisecond, slog.Default())
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			tr.Start(ctx)
-			defer tr.Close()
-			if frame, err := tr.RecvFrame(ctx); err == nil {
-				t.Fatalf("delivered invalid lifecycle frame %+v", frame)
-			}
-			tr.Close()
-			if !errors.Is(tr.Err(), monolith.ErrInvalidLifecycle) || calls != 1 {
-				t.Fatalf("error=%v calls=%d", tr.Err(), calls)
-			}
-		})
-	}
-}
-
-func TestLatePollResponseAfterCloseCannotDeliverFrame(t *testing.T) {
-	for i := 0; i < 20; i++ {
-		entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-		client := &stubClient{poll: func(ctx context.Context, id string, _ uint64) (monolith.MessagesResult, error) {
-			close(entered)
-			<-ctx.Done()
-			close(canceled)
-			<-release
-			return monolith.MessagesResult{Session: monolith.SessionLifecycle{SessionID: id, Status: "PENDING", Deadline: time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC)}, Messages: []monolith.InboundMessage{{DeliverySeq: 1, Payload: []byte("late")}}}, nil
-		}}
-		tr := transport.NewHTTPTransport(client, transport.FrameContext{SessionID: "session-1", Stage: "dkg"}, time.Millisecond, slog.Default())
-		tr.Start(context.Background())
-		<-entered
-		done := make(chan struct{})
-		go func() { tr.Close(); close(done) }()
-		<-canceled
-		close(release)
-		<-done
-		for j := 0; j < 10; j++ {
-			if frame, err := tr.RecvFrame(context.Background()); err == nil {
-				t.Fatalf("iteration %d delivered frame after completed Close: %+v", i, frame)
-			}
-		}
-	}
-}
-
-func TestDispatchWinnerIsCanceledSynchronouslyByStop(t *testing.T) {
-	tr := transport.NewHTTPTransport(&stubClient{}, transport.FrameContext{SessionID: "session-1", Stage: "sign"}, time.Millisecond, slog.Default())
-	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- tr.Dispatch(context.Background(), func(ctx context.Context) error {
-			close(entered)
-			<-ctx.Done()
-			close(canceled)
-			<-release
-			return ctx.Err()
-		})
-	}()
-	<-entered
-	// Close must acquire the stop/dispatch mutex while execution is still
-	// blocked; a mutex held throughout Core would deadlock here.
-	closed := make(chan struct{})
-	go func() { tr.Close(); close(closed) }()
-	select {
-	case <-closed:
-	case <-time.After(time.Second):
-		close(release)
-		t.Fatal("Close blocked on running execution")
-	}
-	select {
-	case <-canceled:
-	case <-time.After(time.Second):
-		close(release)
-		t.Fatal("stop did not synchronously cancel owned execution")
-	}
-	if err := tr.Dispatch(context.Background(), func(context.Context) error { t.Error("second dispatch executed"); return nil }); !errors.Is(err, transport.ErrTransportClosed) {
-		t.Fatalf("second dispatch=%v", err)
-	}
-	close(release)
-	if err := <-done; !errors.Is(err, context.Canceled) {
-		t.Fatalf("dispatch result=%v", err)
-	}
-	tr.Close()
-}
-
-func TestOnlyOneDispatchCanOwnOpenTransport(t *testing.T) {
-	tr := transport.NewHTTPTransport(&stubClient{}, transport.FrameContext{}, time.Millisecond, slog.Default())
-	defer tr.Close()
-	if err := tr.Dispatch(context.Background(), func(context.Context) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if err := tr.Dispatch(context.Background(), func(context.Context) error { t.Error("second execution admitted"); return nil }); !errors.Is(err, transport.ErrAlreadyDispatched) {
-		t.Fatalf("duplicate=%v", err)
-	}
+	return msgs, nil
 }
 
 func TestRecvFramePollsAndPreservesProtocolFields(t *testing.T) {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -19,125 +18,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/config"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
-	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
-	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/worker"
 )
-
-func TestEffectiveCapacityIsLoggedWithoutSecrets(t *testing.T) {
-	var output bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&output, nil))
-	logEffectiveConfig(logger, config.Config{MaxConcurrent: 3, PreParamsGenerationParallelism: 2})
-
-	var record map[string]any
-	if err := json.Unmarshal(output.Bytes(), &record); err != nil {
-		t.Fatal(err)
-	}
-	if record["CO_SIGNER_MAX_CONCURRENT"] != float64(3) || record["CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM"] != float64(2) {
-		t.Fatalf("effective capacity fields = %#v", record)
-	}
-}
-
-type blockedSignDelivery struct {
-	listed                     atomic.Bool
-	entered, canceled, release chan struct{}
-}
-
-func (c *blockedSignDelivery) GetPendingIntents(context.Context) ([]monolith.Intent, error) {
-	if c.listed.Swap(true) {
-		return nil, nil
-	}
-	return []monolith.Intent{{Type: "SIGN", IntentID: "orphan", SessionID: "session", DiscoveryStatus: "CLAIMED"}}, nil
-}
-func (*blockedSignDelivery) ClaimIntent(context.Context, string, string) (monolith.ClaimResult, error) {
-	panic("orphan must not claim")
-}
-func (c *blockedSignDelivery) PostSignResult(ctx context.Context, _ string, _ monolith.SignResultRequest) error {
-	close(c.entered)
-	<-ctx.Done()
-	close(c.canceled)
-	<-c.release
-	return nil
-}
-func (*blockedSignDelivery) PostMessage(context.Context, string, monolith.OutboundFrame) error {
-	return nil
-}
-func (*blockedSignDelivery) GetMessages(context.Context, string, uint64) (monolith.MessagesResult, error) {
-	return monolith.MessagesResult{}, errors.New("unavailable")
-}
-
-func TestApplicationExpiredDrainStillJoinsSignDelivery(t *testing.T) {
-	client := &blockedSignDelivery{entered: make(chan struct{}), canceled: make(chan struct{}), release: make(chan struct{})}
-	resources := &applicationResources{scheduler: worker.NewScheduler(client, nil, nil, "co-signer-primary", time.Millisecond, worker.SchedulerConfig{MinInterval: time.Millisecond}, nil, 1)}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	resources.startScheduler(ctx)
-	<-client.entered
-	cancel()
-	<-client.canceled
-	expired, stop := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
-	defer stop()
-	if err := drainWorkers(expired, resources.scheduler.Semaphore()); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("drain error=%v", err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- resources.Close() }()
-	select {
-	case err := <-done:
-		close(client.release)
-		t.Fatalf("resources closed before SIGN stopped: %v", err)
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(client.release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("resource close did not join stopped delivery")
-	}
-}
-
-func TestApplicationHealthReportsBuildVersion(t *testing.T) {
-	want := os.Getenv("EXPECTED_VERSION")
-	if want == "" {
-		want = "dev"
-	}
-	wantRevision := os.Getenv("EXPECTED_REVISION")
-	if wantRevision == "" {
-		wantRevision = "unknown"
-	}
-
-	readiness := health.NewReadiness()
-	readiness.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})
-	resources := &applicationResources{
-		signingReady:      func() bool { return true },
-		provisioningReady: func() bool { return true },
-	}
-	server := newApplicationHealthServer("127.0.0.1:0", t.TempDir(), readiness, resources)
-	recorder := httptest.NewRecorder()
-	server.Handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/health", nil))
-
-	var body struct {
-		Version  string `json:"version"`
-		Revision string `json:"revision"`
-	}
-	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
-		t.Fatalf("decode health response: %v", err)
-	}
-	if body.Version != want {
-		t.Fatalf("health version = %q, want %q", body.Version, want)
-	}
-	if body.Revision != wantRevision {
-		t.Fatalf("health revision = %q, want %q", body.Revision, wantRevision)
-	}
-}
 
 func TestProbeArtifactStoresFailsClosedOnFirstUnavailableCapability(t *testing.T) {
 	wantErr := errors.New("renameat2 unavailable")
@@ -204,15 +89,15 @@ func TestVerifyMPC2of3RejectsPreviousMPCorePin(t *testing.T) {
 	}
 	writeCommand("uname", "echo Linux")
 	writeCommand("grep", "exit 1")
-	writeCommand("go", "echo v0.4.6")
+	writeCommand("go", "echo v0.4.3")
 	command := exec.Command("/bin/sh", filepath.Join("..", "..", "scripts", "verify-mpc-2of3.sh"))
 	command.Env = append(os.Environ(), "PATH="+bin, "GOWORK=on")
 	output, err := command.CombinedOutput()
 	if err == nil {
 		t.Fatal("verify script accepted the previous mpc-core pin")
 	}
-	if !strings.Contains(string(output), "mpc-core must resolve exactly v0.4.7") {
-		t.Fatalf("output = %s, want rejection of v0.4.6", output)
+	if !strings.Contains(string(output), "mpc-core must resolve exactly v0.4.4") {
+		t.Fatalf("output = %s, want rejection of v0.4.3", output)
 	}
 }
 

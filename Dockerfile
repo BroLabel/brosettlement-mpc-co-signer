@@ -27,13 +27,8 @@ COPY internal/ ./internal/
 
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION
-ARG REVISION
-RUN test -n "${VERSION}" || { echo 'VERSION is required' >&2; exit 1; } \
-    && test -n "${REVISION}" || { echo 'REVISION is required' >&2; exit 1; }
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -buildvcs=false \
-        -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" \
+    go build -trimpath -buildvcs=false -ldflags='-s -w' \
         -o /out/co-signer ./cmd/co-signer
 
 # The share stores must exist and be private before startup: sharestore rejects
