@@ -245,3 +245,16 @@ report sensitive findings according to [SECURITY.md](SECURITY.md).
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+## Network compatibility and MPC Core
+
+Co-Signer owns transaction intent validation, including the chain, sender,
+recipient, amount and digest. Protocol rules and golden vectors live here rather
+than in Core. Core accepts the verified digest and an opaque chain/context
+binding; it does not encode addresses or register networks. The existing v1
+context commitment is unchanged.
+
+DKG completion uses persisted share evidence and public keys. Core no longer
+returns a network address or reports `ErrMissingDKGAddress`. Upgrades preserve
+existing key shares and do not require another DKG. Signer and Co-Signer must pin
+the same reviewed Core revision, without local module replacements in builds.

@@ -19,7 +19,6 @@ const (
 	ErrorCodeInvalidSharePayload = "INVALID_SHARE_PAYLOAD"
 	ErrorCodeShareMetadata       = "SHARE_METADATA_MISMATCH"
 	ErrorCodeMissingPublicKey    = "DKG_MISSING_PUBLIC_KEY"
-	ErrorCodeMissingAddress      = "DKG_MISSING_ADDRESS"
 	ErrorCodeProtocol            = "MPC_PROTOCOL_ERROR"
 	ErrorCodeInternal            = "INTERNAL_ERROR"
 )
@@ -61,8 +60,6 @@ func BuildResult(runErr error, sessionCtx context.Context) monolith.IntentResult
 		return failedResult(ErrorCodeShareMetadata, runErr)
 	case errors.Is(runErr, coretss.ErrMissingDKGPublicKey):
 		return failedResult(ErrorCodeMissingPublicKey, runErr)
-	case errors.Is(runErr, coretss.ErrMissingDKGAddress):
-		return failedResult(ErrorCodeMissingAddress, runErr)
 	case errors.Is(runErr, errMPCProtocol), isProtocolError(runErr):
 		return failedResult(ErrorCodeProtocol, runErr)
 	case sessionCtx != nil && errors.Is(sessionCtx.Err(), context.DeadlineExceeded):
