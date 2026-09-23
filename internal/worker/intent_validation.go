@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
@@ -240,29 +241,18 @@ func validateSignMetadata(payload monolith.IntentPayload) error {
 }
 
 func validateSignTuple(payload monolith.IntentPayload) error {
-	algorithm := strings.ToLower(strings.TrimSpace(payload.Algorithm))
-	curve := strings.ToLower(strings.TrimSpace(payload.Curve))
-	chain := strings.TrimSpace(payload.Chain)
-	digestType := strings.TrimSpace(payload.DigestType)
-	hashAlgorithm := strings.TrimSpace(payload.HashAlgorithm)
-	payloadType := strings.TrimSpace(payload.SigningPayloadType)
 	addressEncoding := ""
 	if payload.DerivationContext != nil {
-		addressEncoding = strings.TrimSpace(payload.DerivationContext.AddressEncoding)
+		addressEncoding = payload.DerivationContext.AddressEncoding
 	}
-
-	if algorithm != "ecdsa" || curve != "secp256k1" {
-		return fmt.Errorf("%w: unsupported signing tuple", errInvalidIntent)
+	if err := signingpolicy.ValidateTuple(signingpolicy.Tuple{
+		Algorithm: payload.Algorithm, Curve: payload.Curve, Chain: payload.Chain,
+		DigestType: payload.DigestType, HashAlgorithm: payload.HashAlgorithm,
+		PayloadType: payload.SigningPayloadType, AddressEncoding: addressEncoding,
+	}); err != nil {
+		return fmt.Errorf("%w: %v", errInvalidIntent, err)
 	}
-	if (chain == "tron:mainnet" || chain == "tron:nile") && digestType == "transaction" && hashAlgorithm == "sha256" &&
-		payloadType == "tron-transaction" && (addressEncoding == "tron_base58" || addressEncoding == "base58check" || addressEncoding == "tron_base58check") {
-		return nil
-	}
-	if (chain == "ethereum:mainnet" || chain == "ethereum:sepolia") && digestType == "transaction" &&
-		hashAlgorithm == "keccak256" && payloadType == "ethereum-transaction" && addressEncoding == "evm_hex" {
-		return nil
-	}
-	return fmt.Errorf("%w: unsupported signing tuple", errInvalidIntent)
+	return nil
 }
 
 func validateChainCodeHash(chainCodeHex, expectedHash string) error {

@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 )
 
 func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (ClaimResult, error) {
@@ -77,7 +78,7 @@ func validateSignClaimResult(claim ClaimResult) error {
 	if err := validateSignDerivationContext(claim.Payload); err != nil {
 		return err
 	}
-	return ValidateSignPolicyContext(claim.Payload)
+	return signingpolicy.ValidateContext(claim.Payload.PolicyContext, claim.Payload.Chain, claim.Payload.SigningPayloadType, claim.Payload.DerivationContext.ExpectedAddress)
 }
 
 func validateSignClaimPayload(claim ClaimResult) error {
@@ -107,84 +108,6 @@ func validateSignDerivationContext(payload IntentPayload) error {
 		return errors.New("SIGN claim derivation context mismatch")
 	}
 	return nil
-}
-
-// ValidateSignPolicyContext validates the closed policy variant against the
-// authenticated signing and derivation identity carried by the same claim.
-func ValidateSignPolicyContext(payload IntentPayload) error {
-	policy := payload.PolicyContext
-	if policy == nil || policy.Asset == "" || policy.AmountAtomic == "" || policy.FromAddress == "" || policy.ToAddress == "" || policy.Chain == "" {
-		return errors.New("SIGN claim policy context is incomplete")
-	}
-	if policy.Chain != payload.Chain || policy.FromAddress != payload.DerivationContext.ExpectedAddress {
-		return errors.New("SIGN claim policy context mismatch")
-	}
-	if payload.SigningPayloadType == "tron-transaction" {
-		if policy.Version != 0 || policy.TransactionType != 0 || policy.ChainID != "" || policy.Nonce != "" || policy.GasLimit != "" ||
-			policy.MaxFeePerGas != "" || policy.MaxPriorityFeePerGas != "" {
-			return errors.New("SIGN claim policy context mismatch")
-		}
-		return nil
-	}
-	if payload.SigningPayloadType != "ethereum-transaction" {
-		return nil
-	}
-	wantChainID := map[string]string{"ethereum:mainnet": "1", "ethereum:sepolia": "11155111"}[policy.Chain]
-	if policy.Version != 1 || policy.TransactionType != 2 || wantChainID == "" || policy.ChainID != wantChainID ||
-		!canonicalUint(policy.AmountAtomic) || !canonicalUint(policy.Nonce) || !canonicalPositiveUint(policy.GasLimit) ||
-		!canonicalPositiveUint(policy.MaxFeePerGas) || !canonicalUint(policy.MaxPriorityFeePerGas) ||
-		compareUint(policy.MaxPriorityFeePerGas, policy.MaxFeePerGas) > 0 || !canonicalEVMAddress(policy.FromAddress) || !canonicalEVMAddress(policy.ToAddress) {
-		return errors.New("SIGN claim Ethereum policy context is invalid")
-	}
-	if policy.TokenStandard == nil {
-		if policy.Asset != "ETH" || policy.TokenContractCanonical != nil || policy.TokenDecimals != nil {
-			return errors.New("SIGN claim Ethereum native asset context is invalid")
-		}
-		return nil
-	}
-	if *policy.TokenStandard != "erc20" || policy.TokenContractCanonical == nil || !canonicalEVMAddress(*policy.TokenContractCanonical) ||
-		policy.TokenDecimals == nil || *policy.TokenDecimals < 0 || *policy.TokenDecimals > 255 || policy.Asset == "ETH" {
-		return errors.New("SIGN claim Ethereum token context is invalid")
-	}
-	return nil
-}
-
-func canonicalUint(value string) bool {
-	if value == "0" {
-		return true
-	}
-	if value == "" || value[0] < '1' || value[0] > '9' {
-		return false
-	}
-	for i := 1; i < len(value); i++ {
-		if value[i] < '0' || value[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func canonicalPositiveUint(value string) bool { return value != "0" && canonicalUint(value) }
-
-func compareUint(left, right string) int {
-	leftInt, leftOK := new(big.Int).SetString(left, 10)
-	rightInt, rightOK := new(big.Int).SetString(right, 10)
-	if !leftOK || !rightOK {
-		return 1
-	}
-	return leftInt.Cmp(rightInt)
-}
-
-func canonicalEVMAddress(value string) bool {
-	if len(value) != 42 || !strings.HasPrefix(value, "0x") {
-		return false
-	}
-	for _, character := range value[2:] {
-		if character < '0' || character > '9' && (character < 'a' || character > 'f') {
-			return false
-		}
-	}
-	return true
 }
 
 func intentTypePath(intentType string) (string, error) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
@@ -579,19 +580,11 @@ func validateSignClaim(fields map[string]json.RawMessage, listed signDiscoveryFi
 	if len(payload["policyContext"]) > 2_048 {
 		return fmt.Errorf("invalid SIGN policy context schema")
 	}
-	var policy monolith.SignPolicyContext
+	var policy signingpolicy.Context
 	if err := strictjson.DecodeClosed(payload["policyContext"], &policy); err != nil {
 		return fmt.Errorf("invalid SIGN policy context schema: %w", err)
 	}
-	if err := monolith.ValidateSignPolicyContext(monolith.IntentPayload{
-		Chain:              stringMust(payload, "chain"),
-		SigningPayloadType: stringMust(payload, "signingPayloadType"),
-		DerivationContext:  &monolith.DerivationContext{ExpectedAddress: stringMust(contextFields, "expectedAddress")},
-		PolicyContext:      &policy,
-	}); err != nil {
-		return err
-	}
-	return nil
+	return signingpolicy.ValidateContext(&policy, stringMust(payload, "chain"), stringMust(payload, "signingPayloadType"), stringMust(contextFields, "expectedAddress"))
 }
 
 func validateSignTerminalFixtures(root string) error {

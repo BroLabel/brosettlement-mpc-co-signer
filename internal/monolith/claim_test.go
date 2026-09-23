@@ -497,18 +497,24 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 				"threshold":2,
 				"algorithm":"ECDSA",
 				"curve":"secp256k1",
-				"chain":"ethereum",
+				"chain":"ethereum:mainnet",
 				"digest":"AQID",
-				"digestType":"transaction_hash",
-				"hashAlgorithm":"sha256",
-				"signingPayloadType":"ethereum_transaction",
+				"digestType":"transaction",
+				"hashAlgorithm":"keccak256",
+				"signingPayloadType":"ethereum-transaction",
 				"policyContext":{
 					"amountAtomic":"1",
 					"asset":"ETH",
-					"chain":"ethereum",
-					"feeLimitSun":null,
-					"fromAddress":"0x1234",
-					"toAddress":"0x5678",
+					"chain":"ethereum:mainnet",
+					"version":1,
+                    "transactionType":2,
+                    "chainId":"1",
+                    "nonce":"0",
+                    "gasLimit":"21000",
+                    "maxFeePerGas":"30000000000",
+                    "maxPriorityFeePerGas":"1000000000",
+					"fromAddress":"0x1111111111111111111111111111111111111111",
+					"toAddress":"0x2222222222222222222222222222222222222222",
 					"tokenContractCanonical":null,
 					"tokenDecimals":null,
 					"tokenStandard":null
@@ -518,14 +524,14 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 				"derivationContext":{
 					"profileId":"profile-1",
 					"profileTemplateId":"ethereum-default",
-					"chain":"ethereum",
+					"chain":"ethereum:mainnet",
 					"algorithm":"ecdsa",
 					"curve":"secp256k1",
 					"scheme":"bip32_secp256k1",
 					"accountPath":"m/44'/60'/0'",
 					"childPath":"/0/15",
 					"fullPath":"m/44'/60'/0'/0/15",
-					"expectedAddress":"0x1234",
+					"expectedAddress":"0x1111111111111111111111111111111111111111",
 					"expectedPublicKey":"04abcdef",
 					"publicKeyFormat":"uncompressed_hex",
 					"descriptorVersion":7,
@@ -551,9 +557,9 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 		payload.ProfileID != "profile-1" ||
 		payload.ProfileVersion != 3 ||
 		payload.ProfileTemplateID != "ethereum-default" ||
-		payload.DigestType != "transaction_hash" ||
-		payload.HashAlgorithm != "sha256" ||
-		payload.SigningPayloadType != "ethereum_transaction" ||
+		payload.DigestType != "transaction" ||
+		payload.HashAlgorithm != "keccak256" ||
+		payload.SigningPayloadType != "ethereum-transaction" ||
 		payload.DerivationContextHash != "context-hash" ||
 		payload.PartyID != "co-signer" {
 		t.Fatalf("unexpected HD payload = %+v", payload)
@@ -564,7 +570,7 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 	ctx := payload.DerivationContext
 	if ctx.ProfileID != "profile-1" ||
 		ctx.ProfileTemplateID != "ethereum-default" ||
-		ctx.Chain != "ethereum" ||
+		ctx.Chain != "ethereum:mainnet" ||
 		ctx.Algorithm != "ecdsa" ||
 		ctx.Curve != "secp256k1" ||
 		ctx.Scheme != "bip32_secp256k1" ||
@@ -615,5 +621,22 @@ func TestClaimIntentReturnsOutcomeUnknownAfterOneBoundedAttempt(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want one attempt owned by worker", attempts)
+	}
+}
+
+func TestClaimIntentRejectsUnknownSigningPayloadType(t *testing.T) {
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/sign-claim-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	malformed := bytes.Replace(fixture, []byte(`"signingPayloadType":"tron-transaction"`), []byte(`"signingPayloadType":"unknown-transaction"`), 1)
+	if bytes.Equal(malformed, fixture) {
+		t.Fatal("fixture did not contain the expected signing payload type")
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(malformed) }))
+	defer srv.Close()
+	client, _ := newTestClient(t, srv.URL)
+	if _, err := client.ClaimIntent(context.Background(), "SIGN", "30000000-0000-4000-8000-000000000005"); err == nil {
+		t.Fatal("ClaimIntent() accepted an unsupported signing payload type")
 	}
 }
