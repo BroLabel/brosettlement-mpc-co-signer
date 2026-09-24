@@ -3,7 +3,7 @@ module github.com/BroLabel/brosettlement-mpc-co-signer
 go 1.24.0
 
 require (
-	github.com/BroLabel/brosettlement-mpc-core v0.4.8-0.20260923110038-df3d1b08d6fd
+	github.com/BroLabel/brosettlement-mpc-core v0.5.0
 	github.com/btcsuite/btcd v0.20.1-beta
 	github.com/gowebpki/jcs v1.0.1
 )
