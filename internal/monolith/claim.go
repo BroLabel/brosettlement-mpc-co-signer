@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 )
 
 func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (ClaimResult, error) {
@@ -76,7 +78,7 @@ func validateSignClaimResult(claim ClaimResult) error {
 	if err := validateSignDerivationContext(claim.Payload); err != nil {
 		return err
 	}
-	return validateSignPolicyContext(claim.Payload)
+	return signingpolicy.ValidateContext(claim.Payload.PolicyContext, claim.Payload.Chain, claim.Payload.SigningPayloadType, claim.Payload.DerivationContext.ExpectedAddress)
 }
 
 func validateSignClaimPayload(claim ClaimResult) error {
@@ -104,17 +106,6 @@ func validateSignDerivationContext(payload IntentPayload) error {
 	if payload.ProfileID != derivation.ProfileID || payload.ProfileTemplateID != derivation.ProfileTemplateID || payload.ProfileVersion != derivation.ProfileVersion ||
 		payload.Chain != derivation.Chain || !strings.EqualFold(payload.Algorithm, derivation.Algorithm) || !strings.EqualFold(payload.Curve, derivation.Curve) {
 		return errors.New("SIGN claim derivation context mismatch")
-	}
-	return nil
-}
-
-func validateSignPolicyContext(payload IntentPayload) error {
-	policy := payload.PolicyContext
-	if policy == nil || policy.Asset == "" || policy.AmountAtomic == "" || policy.FromAddress == "" || policy.ToAddress == "" || policy.Chain == "" {
-		return errors.New("SIGN claim policy context is incomplete")
-	}
-	if policy.Chain != payload.Chain || policy.FromAddress != payload.DerivationContext.ExpectedAddress {
-		return errors.New("SIGN claim policy context mismatch")
 	}
 	return nil
 }

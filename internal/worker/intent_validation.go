@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
@@ -156,6 +157,9 @@ func validateSignPayload(payload monolith.IntentPayload) error {
 	if err := validateSignMetadata(payload); err != nil {
 		return err
 	}
+	if err := validateSignTuple(payload); err != nil {
+		return err
+	}
 	if strings.TrimSpace(payload.ChainCode) != "" {
 		return fmt.Errorf("%w: chain code is not allowed for SIGN", errInvalidIntent)
 	}
@@ -230,8 +234,23 @@ func validateSignMetadata(payload monolith.IntentPayload) error {
 	if payload.ProfileVersion == 0 {
 		return fmt.Errorf("%w: profile version is required for SIGN", errInvalidIntent)
 	}
-	if len(payload.Digest) == 0 {
-		return fmt.Errorf("%w: digest is required for SIGN", errInvalidIntent)
+	if len(payload.Digest) != sha256.Size {
+		return fmt.Errorf("%w: digest must be 32 bytes for SIGN", errInvalidIntent)
+	}
+	return nil
+}
+
+func validateSignTuple(payload monolith.IntentPayload) error {
+	addressEncoding := ""
+	if payload.DerivationContext != nil {
+		addressEncoding = payload.DerivationContext.AddressEncoding
+	}
+	if err := signingpolicy.ValidateTuple(signingpolicy.Tuple{
+		Algorithm: payload.Algorithm, Curve: payload.Curve, Chain: payload.Chain,
+		DigestType: payload.DigestType, HashAlgorithm: payload.HashAlgorithm,
+		PayloadType: payload.SigningPayloadType, AddressEncoding: addressEncoding,
+	}); err != nil {
+		return fmt.Errorf("%w: %v", errInvalidIntent, err)
 	}
 	return nil
 }

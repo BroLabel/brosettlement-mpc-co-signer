@@ -14,6 +14,7 @@ import (
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
@@ -576,28 +577,14 @@ func validateSignClaim(fields map[string]json.RawMessage, listed signDiscoveryFi
 			return fmt.Errorf("invalid SIGN derivation context %s", key)
 		}
 	}
-	policyFields := objectRaw(payload["policyContext"])
-	policyExpected := []string{"amountAtomic", "asset", "chain", "feeLimitSun", "fromAddress", "toAddress", "tokenContractCanonical", "tokenDecimals", "tokenStandard"}
-	if !sameKeys(policyFields, policyExpected) || len(payload["policyContext"]) > 2_048 {
+	if len(payload["policyContext"]) > 2_048 {
 		return fmt.Errorf("invalid SIGN policy context schema")
 	}
-	for _, key := range []string{"amountAtomic", "asset", "chain", "fromAddress", "toAddress"} {
-		if stringMust(policyFields, key) == "" {
-			return fmt.Errorf("invalid SIGN policy context %s", key)
-		}
+	var policy signingpolicy.Context
+	if err := strictjson.DecodeClosed(payload["policyContext"], &policy); err != nil {
+		return fmt.Errorf("invalid SIGN policy context schema: %w", err)
 	}
-	for _, key := range []string{"feeLimitSun", "tokenContractCanonical", "tokenStandard"} {
-		if !nullOrString(policyFields[key]) {
-			return fmt.Errorf("invalid SIGN policy context %s", key)
-		}
-	}
-	if !nullOrInteger(policyFields["tokenDecimals"]) {
-		return fmt.Errorf("invalid SIGN policy context tokenDecimals")
-	}
-	if stringMust(policyFields, "chain") != stringMust(payload, "chain") || stringMust(policyFields, "fromAddress") != stringMust(contextFields, "expectedAddress") {
-		return fmt.Errorf("SIGN policy context is not bound to derivation context")
-	}
-	return nil
+	return signingpolicy.ValidateContext(&policy, stringMust(payload, "chain"), stringMust(payload, "signingPayloadType"), stringMust(contextFields, "expectedAddress"))
 }
 
 func validateSignTerminalFixtures(root string) error {
@@ -699,20 +686,6 @@ func boolean(fields map[string]json.RawMessage, key string) (bool, error) {
 	var value bool
 	err := json.Unmarshal(fields[key], &value)
 	return value, err
-}
-func nullOrString(raw json.RawMessage) bool {
-	if string(raw) == "null" {
-		return true
-	}
-	var value string
-	return json.Unmarshal(raw, &value) == nil
-}
-func nullOrInteger(raw json.RawMessage) bool {
-	if string(raw) == "null" {
-		return true
-	}
-	var value int64
-	return json.Unmarshal(raw, &value) == nil
 }
 func identifier(value, label, prefix string) bool {
 	return len(value) > 0 && len(value) <= 255 && identifierPattern.MatchString(value) && (prefix == "" || (len(value) > len(prefix) && value[:len(prefix)] == prefix))
