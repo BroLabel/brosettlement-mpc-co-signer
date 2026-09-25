@@ -97,12 +97,16 @@ install -d -m 0700 "$PWD/.local/co-signer/primary"
 install -d -m 0700 "$PWD/.local/co-signer/recovery"
 ```
 
+The configuration below targets production. For an explicitly selected staging
+preview, set `CO_SIGNER_MONOLITH_URL` to
+`https://brosettlement-staging-api.brolabel.io` and use staging credentials.
+
 Set the required environment variables. Generate
 `CO_SIGNER_SHARE_ENCRYPTION_KEY` once, store it in a secrets manager, and keep
 the same value and key ID for the lifetime of every encrypted artifact.
 
 ```bash
-export CO_SIGNER_MONOLITH_URL="https://brosettlement-staging-api.brolabel.io"
+export CO_SIGNER_MONOLITH_URL="https://brosettlement-api.brolabel.io"
 export CO_SIGNER_API_KEY_ID="<api-key-id>"
 export CO_SIGNER_API_PRIVATE_KEY="<Ed25519 PKCS#8 PEM, hex, or Base64 private key>"
 
