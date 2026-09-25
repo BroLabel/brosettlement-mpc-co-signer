@@ -30,7 +30,8 @@ golangci-lint run
 If your change needs a local container image, build it with:
 
 ```bash
-docker build -t mpc-co-signer:dev .
+docker build --build-arg VERSION="$(cat VERSION)" \
+  --build-arg REVISION="$(git rev-parse HEAD)" -t mpc-co-signer:dev .
 ```
 
 ## Making Changes
