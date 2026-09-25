@@ -1,92 +1,122 @@
 name: Publish container image
 
 on:
+  pull_request:
+    branches: [main, eks-staging]
   push:
-    branches:
-      - main
-    tags:
-      - 'v*.*.*'
+    branches: [main, eks-staging]
+    tags: ['v*.*.*']
 
 permissions:
   contents: read
-  packages: write
-
-concurrency:
-  group: docker-publish-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Verify release channels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test release boundaries
+        run: |
+          ./scripts/check-release-identity.test.sh
+          ./scripts/check-image-tag-available.test.sh
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test Co-Signer
+        run: GOWORK=off go test ./...
+
   publish:
     name: Build and publish to GHCR
+    needs: verify
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
+      packages: write
+    # Serialize checks and writes to versioned tags and the stable channel.
+    concurrency:
+      group: co-signer-image-publication
+      cancel-in-progress: false
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      # GHCR rejects uppercase image paths and this repository lives under the
-      # mixed-case "BroLabel" org, so normalize the owner instead of hardcoding it.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Resolve image name
         id: image
         env:
           REPOSITORY: ${{ github.repository }}
         run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
-      # VERSION is published on every merge to main, alongside latest. Bump it
-      # in the PR that should produce a new number; leaving it unchanged means
-      # the next merge overwrites that version's tag.
-      - name: Read version
-        id: version
+      - name: Derive publication metadata
+        id: release
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          REF: ${{ github.ref }}
         run: |
-          VERSION=$(tr -d ' \t\r\n' < VERSION)
-          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "VERSION must be plain semver like 1.0.0, got: '$VERSION'" >&2
-            exit 1
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+          git fetch origin main eks-staging
+          export REVISION=$(git rev-parse HEAD)
+          ./scripts/check-release-identity.sh >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      # latest=false disables the implicit "latest" that flavor=auto would add on
-      # tag pushes, so "latest" is driven solely by the main-branch rule below.
-      - name: Derive tags and labels
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ steps.image.outputs.name }}
-          flavor: latest=false
-          tags: |
-            type=raw,value=${{ steps.version.outputs.version }},enable={{is_default_branch}}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern=v{{version}}
-            type=semver,pattern={{major}}.{{minor}}
-
+      - name: Reject previously published version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: ./scripts/check-image-tag-available.sh "$IMAGE:v$VERSION"
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          annotations: ${{ steps.meta.outputs.annotations }}
+          tags: ${{ steps.release.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            REVISION=${{ steps.release.outputs.revision }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.release.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.release.outputs.revision }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Off by design: BuildKit otherwise attaches in-toto attestation
-          # manifests that GHCR lists as untagged "unknown/unknown" versions
-          # alongside the real image, which is actively misleading when
-          # checking what was published.
           provenance: false
           sbom: false
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          latest=false
+          channel=staging
+          if [[ "$PRERELEASE" == false ]]; then
+            latest=true
+            channel=production
+          fi
+          printf 'Channel: %s\n\nContainer: `%s@%s`\n' "$channel" "$IMAGE" "$DIGEST" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --prerelease="$PRERELEASE" --latest="$latest" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+      - name: Promote stable image to latest
+        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.prerelease == 'false'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+      - name: Record published manifest digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "Published digest: $DIGEST" >> "$GITHUB_STEP_SUMMARY"

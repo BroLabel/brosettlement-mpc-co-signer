@@ -56,16 +56,37 @@ and credentials issued for your environment in production. See
 [API authentication](https://www.brolabel.io/en/api-reference/authentication)
 for the Ed25519 key and request-signing contract.
 
-### Build
+### Choose a release and build
+
+Production installations use the latest **stable release**. Staging previews
+must be selected explicitly; neither a branch checkout nor the `staging` image
+is a production release. See [release channels](docs/release-channels.md).
+
+Install and authenticate the GitHub CLI (`gh`) with repository access, then
+resolve the stable version once and check out that exact tag:
 
 ```bash
-git clone https://github.com/BroLabel/brosettlement-mpc-co-signer.git
+COSIGNER_VERSION=$(gh release view --repo BroLabel/brosettlement-mpc-co-signer --json tagName --jq '.tagName')
+git clone --branch "$COSIGNER_VERSION" --depth 1 https://github.com/BroLabel/brosettlement-mpc-co-signer.git
 cd brosettlement-mpc-co-signer
 
 GOWORK=off go mod download
 mkdir -p bin
-GOWORK=off go build -o ./bin/co-signer ./cmd/co-signer
+GOWORK=off go build -trimpath \
+  -ldflags="-X main.version=${COSIGNER_VERSION#v}" \
+  -o ./bin/co-signer ./cmd/co-signer
 ```
+
+For staging, replace the first command with an explicitly approved preview tag
+(for the current staging backend, `COSIGNER_VERSION=v2.1.0`). Future previews use
+`vX.Y.Z-rc.N`. Match the API URL and credentials below to the selected environment.
+The [Latest release](https://github.com/BroLabel/brosettlement-mpc-co-signer/releases/latest)
+is reserved for the production-compatible version.
+
+Containers follow the same selection: pull
+`ghcr.io/brolabel/brosettlement-mpc-co-signer:$COSIGNER_VERSION` and pin its digest
+in deployment configuration. `latest` tracks stable releases; `staging` tracks
+staging development. Publishing a release does not update an installed client.
 
 ### Configure
 
