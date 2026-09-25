@@ -35,9 +35,9 @@ jobs:
     permissions:
       contents: write
       packages: write
-    # Serialize checks and writes to versioned tags and the stable channel.
+    # Serialize releases separately so branch pushes cannot evict a queued release.
     concurrency:
-      group: co-signer-image-publication
+      group: co-signer-publication-${{ startsWith(github.ref, 'refs/tags/') && 'releases' || github.ref }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
