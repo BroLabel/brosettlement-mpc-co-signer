@@ -60,7 +60,8 @@ the highest Git tag or assume the default branch is the supported release.
 
 ## Failed publication
 
-Versioned image publication is serialized. An existing image blocks a rebuild,
+Publication is serialized per ref; stable releases share a separate queue.
+An existing image blocks a rebuild,
 including a rerun; network or authentication errors also block publication.
 If an image was pushed but GitHub release creation or `latest` promotion failed,
 verify its digest and source revision from the original workflow, then finish
