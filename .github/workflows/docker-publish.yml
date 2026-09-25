@@ -1,68 +1,75 @@
 name: Publish container image
 
 on:
+  pull_request:
+    branches: [main, eks-staging]
   push:
-    branches:
-      - main
-      - eks-staging
-    tags:
-      - 'v*.*.*'
+    branches: [main, eks-staging]
+    tags: ['v*.*.*']
 
 permissions:
   contents: read
-  packages: write
-
-concurrency:
-  group: docker-publish-${{ github.ref }}
-  cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Verify release channels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test release boundaries
+        run: |
+          ./scripts/check-release-identity.test.sh
+          ./scripts/check-image-tag-available.test.sh
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test Co-Signer
+        run: GOWORK=off go test ./...
+
   publish:
     name: Build and publish to GHCR
+    needs: verify
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
+      packages: write
+    # Serialize checks and writes to versioned tags and the stable channel.
+    concurrency:
+      group: co-signer-image-publication
+      cancel-in-progress: false
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v5
-
-      # GHCR rejects uppercase image paths and this repository lives under the
-      # mixed-case "BroLabel" org, so normalize the owner instead of hardcoding it.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - name: Resolve image name
         id: image
         env:
           REPOSITORY: ${{ github.repository }}
         run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Test release candidate
-        run: GOWORK=off go test ./cmd/co-signer ./internal/health
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Derive publication metadata
         id: release
         env:
           IMAGE: ${{ steps.image.outputs.name }}
           REF: ${{ github.ref }}
-          REVISION: ${{ github.sha }}
-        run: ./scripts/check-release-identity.sh >> "$GITHUB_OUTPUT"
-
+        run: |
+          git fetch origin main eks-staging
+          export REVISION=$(git rev-parse HEAD)
+          ./scripts/check-release-identity.sh >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reject previously published version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: ./scripts/check-image-tag-available.sh "$IMAGE:v$VERSION"
       - name: Build and push image
         id: build
         uses: docker/build-push-action@v6
@@ -80,13 +87,36 @@ jobs:
             org.opencontainers.image.revision=${{ steps.release.outputs.revision }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          # Off by design: BuildKit otherwise attaches in-toto attestation
-          # manifests that GHCR lists as untagged "unknown/unknown" versions
-          # alongside the real image, which is actively misleading when
-          # checking what was published.
           provenance: false
           sbom: false
-
-      - name: Record published manifest digest
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          echo "Published digest: ${{ steps.build.outputs.digest }}"
+          latest=false
+          channel=staging
+          if [[ "$PRERELEASE" == false ]]; then
+            latest=true
+            channel=production
+          fi
+          printf 'Channel: %s\n\nContainer: `%s@%s`\n' "$channel" "$IMAGE" "$DIGEST" > "$RUNNER_TEMP/release-notes.md"
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --prerelease="$PRERELEASE" --latest="$latest" \
+            --notes-file "$RUNNER_TEMP/release-notes.md"
+      - name: Promote stable image to latest
+        if: startsWith(github.ref, 'refs/tags/') && steps.release.outputs.prerelease == 'false'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"
+      - name: Record published manifest digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "Published digest: $DIGEST" >> "$GITHUB_STEP_SUMMARY"
