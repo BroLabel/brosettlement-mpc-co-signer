@@ -25,14 +25,6 @@ func ethereumChainID(chain string) string {
 	}
 }
 
-// AddressValidationError provides a safe diagnostic without retaining the address.
-type AddressValidationError struct {
-	Field  string
-	Reason string
-}
-
-func (e *AddressValidationError) Error() string { return e.Field + ": " + e.Reason }
-
 func validateEthereumAddresses(policy *Context) error {
 	for _, address := range []struct{ field, value string }{
 		{"fromAddress", policy.FromAddress},

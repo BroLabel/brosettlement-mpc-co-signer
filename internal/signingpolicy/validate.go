@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+// AddressValidationError provides a safe diagnostic without retaining the address.
+type AddressValidationError struct {
+	Field  string
+	Reason string
+}
+
+func (e *AddressValidationError) Error() string { return e.Field + ": " + e.Reason }
+
 // Tuple identifies the protocol and cryptographic format of a signing request.
 type Tuple struct {
 	Algorithm       string
