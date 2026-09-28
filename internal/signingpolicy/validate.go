@@ -47,6 +47,11 @@ func ValidateContext(policy *Context, chain, payloadType, expectedAddress string
 	if policy == nil || policy.Asset == "" || policy.AmountAtomic == "" || policy.FromAddress == "" || policy.ToAddress == "" || policy.Chain == "" {
 		return errors.New("SIGN claim policy context is incomplete")
 	}
+	if payloadType == ethereumPayloadType {
+		if err := validateEthereumAddresses(policy); err != nil {
+			return err
+		}
+	}
 	if policy.Chain != chain || policy.FromAddress != expectedAddress {
 		return errors.New("SIGN claim policy context mismatch")
 	}
