@@ -334,9 +334,7 @@ func claimWithRecovery(ctx context.Context, client sessionClient, intent monolit
 				if errors.As(err, &addressError) {
 					field, reason = addressError.Field, addressError.Reason
 				}
-				if !validationLogged {
-					logClaimRejection(log, claimed, field, reason)
-				}
+				logClaimRejection(log, claimed, field, reason)
 				return claim, err
 			}
 		}

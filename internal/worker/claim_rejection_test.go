@@ -20,9 +20,19 @@ import (
 // Exercise the HTTP claim decoder and worker together: a policy rejection must
 // reach terminal delivery without re-claiming or entering the MPC protocol.
 func TestClaimPolicyRejectionDeliversWithoutReclaim(t *testing.T) {
-	for _, fixture := range []string{"sign-claim-eth.json", "sign-claim-erc20.json"} {
-		t.Run(fixture, func(t *testing.T) {
-			raw, err := os.ReadFile("../../testdata/ethereum-wallet-v1/" + fixture)
+	for _, tt := range []struct {
+		name                 string
+		fixture              string
+		priorInvalidEnvelope bool
+		wantClaims           int32
+		wantLogs             int
+	}{
+		{name: "native ETH", fixture: "sign-claim-eth.json", wantClaims: 1, wantLogs: 1},
+		{name: "ERC20", fixture: "sign-claim-erc20.json", wantClaims: 1, wantLogs: 1},
+		{name: "policy rejection after invalid envelope", fixture: "sign-claim-eth.json", priorInvalidEnvelope: true, wantClaims: 2, wantLogs: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := os.ReadFile("../../testdata/ethereum-wallet-v1/" + tt.fixture)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -34,6 +44,12 @@ func TestClaimPolicyRejectionDeliversWithoutReclaim(t *testing.T) {
 			wire["deadline"] = deadline.Format(time.RFC3339)
 			wire["session"].(map[string]any)["deadline"] = wire["deadline"]
 			wire["payload"].(map[string]any)["policyContext"].(map[string]any)["toAddress"] = "0x222222222222222222222222222222222222222A"
+			wire["httpStatus"] = 201
+			invalidEnvelope, err := json.Marshal(wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire["httpStatus"] = 200
 			raw, _ = json.Marshal(wire)
 			var claim monolith.ClaimResult
 			if err := json.Unmarshal(raw, &claim); err != nil {
@@ -44,7 +60,10 @@ func TestClaimPolicyRejectionDeliversWithoutReclaim(t *testing.T) {
 			intent.Payload = monolith.IntentPayload{OrgID: intent.Payload.OrgID, KeyID: intent.Payload.KeyID}
 			var claims, posts atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				claims.Add(1)
+				if claims.Add(1) == 1 && tt.priorInvalidEnvelope {
+					_, _ = w.Write(invalidEnvelope)
+					return
+				}
 				_, _ = w.Write(raw)
 			}))
 			defer srv.Close()
@@ -90,8 +109,8 @@ func TestClaimPolicyRejectionDeliversWithoutReclaim(t *testing.T) {
 			defer cancel()
 			var dispatched atomic.Int32
 			runSessionWithPermits(ctx, intent, client, runner, nil, nil, primaryPartyID, time.Millisecond, lease, slog.New(handler), func() { dispatched.Add(1) })
-			if claims.Load() != 1 || posts.Load() != 2 || runner.calls != 0 {
-				t.Fatalf("claims=%d posts=%d MPC=%d; want 1, 2, 0", claims.Load(), posts.Load(), runner.calls)
+			if claims.Load() != tt.wantClaims || posts.Load() != 2 || runner.calls != 0 {
+				t.Fatalf("claims=%d posts=%d MPC=%d; want %d, 2, 0", claims.Load(), posts.Load(), runner.calls, tt.wantClaims)
 			}
 			if dispatched.Load() != 1 || len(permits.general.slots) != 0 {
 				t.Fatalf("dispatch=%d retained permits=%d", dispatched.Load(), len(permits.general.slots))
@@ -104,8 +123,8 @@ func TestClaimPolicyRejectionDeliversWithoutReclaim(t *testing.T) {
 					}
 				}
 			}
-			if rejected != 1 {
-				t.Fatalf("rejection logs=%d, want one", rejected)
+			if rejected != tt.wantLogs {
+				t.Fatalf("rejection logs=%d, want %d", rejected, tt.wantLogs)
 			}
 		})
 	}
