@@ -25,12 +25,27 @@ func ethereumChainID(chain string) string {
 	}
 }
 
+func validateEthereumAddresses(policy *Context) error {
+	for _, address := range []struct{ field, value string }{
+		{"fromAddress", policy.FromAddress},
+		{"toAddress", policy.ToAddress},
+	} {
+		if !canonicalEVMAddress(address.value) {
+			return &AddressValidationError{Field: "payload.policyContext." + address.field, Reason: "noncanonical_address"}
+		}
+	}
+	if policy.TokenStandard != nil && policy.TokenContractCanonical != nil && !canonicalEVMAddress(*policy.TokenContractCanonical) {
+		return &AddressValidationError{Field: "payload.policyContext.tokenContractCanonical", Reason: "noncanonical_address"}
+	}
+	return nil
+}
+
 func validateEthereumContext(policy *Context) error {
 	wantChainID := ethereumChainID(policy.Chain)
 	if policy.Version != 1 || policy.TransactionType != 2 || wantChainID == "" || policy.ChainID != wantChainID ||
 		!canonicalUint(policy.AmountAtomic) || !canonicalUint(policy.Nonce) || !canonicalPositiveUint(policy.GasLimit) ||
 		!canonicalPositiveUint(policy.MaxFeePerGas) || !canonicalUint(policy.MaxPriorityFeePerGas) ||
-		compareUint(policy.MaxPriorityFeePerGas, policy.MaxFeePerGas) > 0 || !canonicalEVMAddress(policy.FromAddress) || !canonicalEVMAddress(policy.ToAddress) {
+		compareUint(policy.MaxPriorityFeePerGas, policy.MaxFeePerGas) > 0 {
 		return errors.New("SIGN claim Ethereum policy context is invalid")
 	}
 	if policy.TokenStandard == nil {
@@ -39,7 +54,7 @@ func validateEthereumContext(policy *Context) error {
 		}
 		return nil
 	}
-	if *policy.TokenStandard != "erc20" || policy.TokenContractCanonical == nil || !canonicalEVMAddress(*policy.TokenContractCanonical) ||
+	if *policy.TokenStandard != "erc20" || policy.TokenContractCanonical == nil ||
 		policy.TokenDecimals == nil || *policy.TokenDecimals < 0 || *policy.TokenDecimals > 255 || policy.Asset == "ETH" {
 		return errors.New("SIGN claim Ethereum token context is invalid")
 	}

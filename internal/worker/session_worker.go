@@ -11,6 +11,7 @@ import (
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/terminal"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/transport"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
@@ -137,7 +138,14 @@ func runSessionWithClock(
 		deliverSignResult(ctx, client, intent, failedResult(ErrorCodeWorkerShutdown, errors.New("orphaned SIGN claim")), log)
 		return
 	}
-	claim, err := claimWithRecovery(ctx, client, intent, notifyDispatch)
+	claim, err := claimWithRecovery(ctx, client, intent, notifyDispatch, log)
+	if errors.Is(err, monolith.ErrSignClaimRejected) {
+		// A deterministic rejection with verified identity is terminal delivery,
+		// never claim recovery. Retain the permit until delivery resolves.
+		metrics.ObserveClaim(metricKind, "failed")
+		deliverSignResult(ctx, client, claim.Intent(), failedResult(ErrorCodeInvalidIntent, err), log)
+		return
+	}
 	if err != nil {
 		if (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errClaimCleanup)) && ctx.Err() == nil {
 			if admittedKind == intentKindSIGN {
@@ -287,7 +295,7 @@ func runSessionWithClock(
 	deliverSignResult(ctx, client, intent, result, log)
 }
 
-func claimWithRecovery(ctx context.Context, client sessionClient, intent monolith.Intent, dispatched func()) (monolith.ClaimResult, error) {
+func claimWithRecovery(ctx context.Context, client sessionClient, intent monolith.Intent, dispatched func(), log *slog.Logger) (monolith.ClaimResult, error) {
 	claimCtx := ctx
 	if !intent.ExpiresAt.IsZero() {
 		var cancel context.CancelFunc
@@ -296,6 +304,7 @@ func claimWithRecovery(ctx context.Context, client sessionClient, intent monolit
 	}
 	first := true
 	uncertain := false
+	validationLogged := false
 	for {
 		if err := claimCtx.Err(); err != nil {
 			return monolith.ClaimResult{}, err
@@ -303,8 +312,30 @@ func claimWithRecovery(ctx context.Context, client sessionClient, intent monolit
 		claim, err := client.ClaimIntent(claimCtx, intent.Type, intent.IntentID)
 		if first {
 			first = false
-			if (err == nil || errors.Is(err, monolith.ErrClaimOutcomeUnknown) || errors.Is(err, context.DeadlineExceeded)) && dispatched != nil {
+			if (err == nil || errors.Is(err, monolith.ErrClaimOutcomeUnknown) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, monolith.ErrSignClaimRejected)) && dispatched != nil {
 				dispatched()
+			}
+		}
+		if errors.Is(err, monolith.ErrClaimEnvelopeInvalid) && strings.EqualFold(intent.Type, "SIGN") && !validationLogged {
+			logClaimRejection(log, intent, "claim", "invalid_envelope")
+			validationLogged = true
+		}
+		if errors.Is(err, monolith.ErrSignClaimRejected) {
+			claimed := claim.Intent()
+			if claimed.Type != "SIGN" || !strings.EqualFold(intent.Type, "SIGN") || validateClaimIdentity(intent, claimed, claim, intentKindSIGN) != nil {
+				if !validationLogged {
+					logClaimRejection(log, intent, "claim.binding", "identity_mismatch")
+					validationLogged = true
+				}
+				err = monolith.ErrClaimOutcomeUnknown
+			} else {
+				field, reason := "payload", "invalid_payload"
+				var addressError *signingpolicy.AddressValidationError
+				if errors.As(err, &addressError) {
+					field, reason = addressError.Field, addressError.Reason
+				}
+				logClaimRejection(log, claimed, field, reason)
+				return claim, err
 			}
 		}
 		if err == nil || errors.Is(err, monolith.ErrAlreadyClaimed) || errors.Is(err, monolith.ErrNotFound) {
@@ -335,4 +366,11 @@ func waitDeliveryRetry(ctx context.Context) bool {
 	case <-timer.C:
 		return true
 	}
+}
+
+func logClaimRejection(log *slog.Logger, intent monolith.Intent, field, reason string) {
+	log.Warn("claimed SIGN rejected locally", "event", "claim_validation_rejected",
+		"intent_id", intent.IntentID, "session_id", intent.SessionID,
+		"stage", "claim_validation", "field", field, "reason", reason,
+		"error_code", ErrorCodeInvalidIntent)
 }

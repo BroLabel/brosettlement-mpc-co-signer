@@ -640,3 +640,36 @@ func TestClaimIntentRejectsUnknownSigningPayloadType(t *testing.T) {
 		t.Fatal("ClaimIntent() accepted an unsupported signing payload type")
 	}
 }
+
+func TestClaimIntentRetainsDeterministicSignPolicyRejection(t *testing.T) {
+	for _, field := range []string{"fromAddress", "toAddress", "tokenContractCanonical"} {
+		t.Run(field, func(t *testing.T) {
+			fixture := "sign-claim-eth.json"
+			if field == "tokenContractCanonical" {
+				fixture = "sign-claim-erc20.json"
+			}
+			raw, err := os.ReadFile("../../testdata/ethereum-wallet-v1/" + fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var wire map[string]any
+			if err := json.Unmarshal(raw, &wire); err != nil {
+				t.Fatal(err)
+			}
+			payload := wire["payload"].(map[string]any)
+			payload["policyContext"].(map[string]any)[field] = "0x222222222222222222222222222222222222222A"
+			raw, _ = json.Marshal(wire)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(raw) }))
+			defer srv.Close()
+			client, _ := newTestClient(t, srv.URL)
+			claim, err := client.ClaimIntent(context.Background(), "SIGN", wire["intentId"].(string))
+			if err == nil || errors.Is(err, ErrClaimOutcomeUnknown) || claim.IntentID != wire["intentId"] || claim.SessionID == "" {
+				t.Fatalf("deterministic rejection lost: claim identity=%s/%s err=%v", claim.IntentID, claim.SessionID, err)
+			}
+			// Diagnostics contain a field and a stable reason, never the policy value.
+			if !strings.Contains(err.Error(), "payload.policyContext."+field) || !strings.Contains(err.Error(), "noncanonical_address") || strings.Contains(err.Error(), "222222") {
+				t.Fatalf("unsafe or imprecise diagnostic: %v", err)
+			}
+		})
+	}
+}

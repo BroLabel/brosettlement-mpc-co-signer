@@ -11,6 +11,13 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 )
 
+// ErrSignClaimRejected marks a decoded, claimed SIGN payload rejected locally.
+// The worker must verify its binding before publishing a terminal failure.
+var ErrSignClaimRejected = errors.New("SIGN claim payload rejected")
+
+// ErrClaimEnvelopeInvalid retains uncertainty while identifying local validation.
+var ErrClaimEnvelopeInvalid = errors.New("claim envelope invalid")
+
 func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (ClaimResult, error) {
 	pathType, err := intentTypePath(intentType)
 	if err != nil {
@@ -31,15 +38,23 @@ func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (
 		}
 	}
 	if out.HTTPStatus != http.StatusOK {
-		return ClaimResult{}, fmt.Errorf("%w: claim response body HTTP status mismatch", ErrClaimOutcomeUnknown)
+		return ClaimResult{}, fmt.Errorf("%w: %w: claim response body HTTP status mismatch", ErrClaimOutcomeUnknown, ErrClaimEnvelopeInvalid)
 	}
-	if err := validateClaimResult(out, intentType); err != nil {
-		return ClaimResult{}, fmt.Errorf("%w: %w", ErrClaimOutcomeUnknown, err)
+	if strings.EqualFold(intentType, "SIGN") && out.IntentID != intentID {
+		return ClaimResult{}, fmt.Errorf("%w: %w: claim intent identity mismatch", ErrClaimOutcomeUnknown, ErrClaimEnvelopeInvalid)
+	}
+	if err := validateClaimEnvelope(out, intentType); err != nil {
+		return ClaimResult{}, fmt.Errorf("%w: %w: %w", ErrClaimOutcomeUnknown, ErrClaimEnvelopeInvalid, err)
+	}
+	if out.Intent().Type == "SIGN" {
+		if err := validateSignClaimResult(out); err != nil {
+			return out, errors.Join(ErrSignClaimRejected, err)
+		}
 	}
 	return out, nil
 }
 
-func validateClaimResult(claim ClaimResult, expectedType string) error {
+func validateClaimEnvelope(claim ClaimResult, expectedType string) error {
 	if claim.SessionID == "" {
 		return errors.New("claim session identity is required")
 	}
@@ -57,7 +72,7 @@ func validateClaimResult(claim ClaimResult, expectedType string) error {
 		return errors.New("claim response kind does not match requested intent type")
 	}
 	if actualType == "SIGN" {
-		return validateSignClaimResult(claim)
+		return nil
 	}
 	if actualType == "DKG" {
 		if claim.Payload.Type != "" && claim.Payload.Type != "DKG" {

@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+// AddressValidationError provides a safe diagnostic without retaining the address.
+type AddressValidationError struct {
+	Field  string
+	Reason string
+}
+
+func (e *AddressValidationError) Error() string { return e.Field + ": " + e.Reason }
+
 // Tuple identifies the protocol and cryptographic format of a signing request.
 type Tuple struct {
 	Algorithm       string
@@ -46,6 +54,11 @@ func ValidateTuple(tuple Tuple) error {
 func ValidateContext(policy *Context, chain, payloadType, expectedAddress string) error {
 	if policy == nil || policy.Asset == "" || policy.AmountAtomic == "" || policy.FromAddress == "" || policy.ToAddress == "" || policy.Chain == "" {
 		return errors.New("SIGN claim policy context is incomplete")
+	}
+	if payloadType == ethereumPayloadType {
+		if err := validateEthereumAddresses(policy); err != nil {
+			return err
+		}
 	}
 	if policy.Chain != chain || policy.FromAddress != expectedAddress {
 		return errors.New("SIGN claim policy context mismatch")
