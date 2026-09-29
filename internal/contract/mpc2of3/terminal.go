@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
-	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/btcec/v2"
 )
 
 const (
@@ -121,7 +121,7 @@ func (r TerminalResultV1) validate(hasResult bool) error {
 	if err != nil || (publicKey[0] != 2 && publicKey[0] != 3) {
 		return fmt.Errorf("invalid compressed public key")
 	}
-	if _, err := btcec.ParsePubKey(publicKey, btcec.S256()); err != nil {
+	if _, err := btcec.ParsePubKey(publicKey); err != nil {
 		return fmt.Errorf("invalid compressed public key")
 	}
 	want := [][2]string{{"co-signer-primary", "primary"}, {"co-signer-recovery", "recovery"}}

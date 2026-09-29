@@ -24,11 +24,11 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
-	"github.com/bnb-chain/tss-lib/common"
-	tsscrypto "github.com/bnb-chain/tss-lib/crypto"
-	ecdsakeygen "github.com/bnb-chain/tss-lib/ecdsa/keygen"
-	tsslib "github.com/bnb-chain/tss-lib/tss"
-	"github.com/btcsuite/btcd/btcec"
+	"github.com/bnb-chain/tss-lib/v3/common"
+	tsscrypto "github.com/bnb-chain/tss-lib/v3/crypto"
+	ecdsakeygen "github.com/bnb-chain/tss-lib/v3/ecdsa/keygen"
+	tsslib "github.com/bnb-chain/tss-lib/v3/tss"
+	"github.com/btcsuite/btcd/btcec/v2"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -88,6 +88,7 @@ type recoveryProofInput struct {
 
 type recoveryProofFixture struct {
 	encodedKey              string
+	keyRef                  string
 	descriptor              []byte
 	sessionID               string
 	primaryArtifact         []byte
@@ -116,6 +117,31 @@ func TestIsolatedRecoveryProof(t *testing.T) {
 		}
 		return
 	}
+
+	// The old writer ran in a separate process and has already exited. This
+	// subtest copies frozen ciphertext; it never calls DKG or a candidate writer.
+	t.Run("frozen legacy B+C", func(t *testing.T) {
+		manifest, descriptor, artifacts := readLegacyFixture(t)
+		fixture := recoveryProofFixture{encodedKey: manifest.EncodedKey, keyRef: manifest.KeyRef,
+			descriptor: descriptor, sessionID: manifest.SessionID,
+			primaryArtifact: artifacts[0], recoveryArtifact: artifacts[1]}
+		inputPath := prepareIsolatedRecoveryProof(t, fixture, recoveryProofCase{wantSuccess: true})
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		command := exec.CommandContext(ctx, os.Args[0], "-test.run", "^TestIsolatedRecoveryProof$")
+		command.Env = []string{recoveryProofInputEnv + "=" + inputPath}
+		command.Dir = filepath.Dir(inputPath)
+		if _, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("frozen legacy recovery rejected: %v", err)
+		}
+		for _, item := range manifest.Artifacts {
+			after, err := os.ReadFile(filepath.Join(filepath.Dir(inputPath), item.File))
+			if err != nil || legacySHA256(after) != item.SHA256 {
+				t.Fatal("isolated recovery changed frozen legacy ciphertext")
+			}
+			t.Logf("%s pre/post envelope SHA-256: %s", item.PartyID, item.SHA256)
+		}
+	})
 
 	fixture := generateRecoveryProofFixture(t)
 	t.Cleanup(func() {
@@ -328,6 +354,9 @@ func prepareIsolatedRecoveryProof(t *testing.T, fixture recoveryProofFixture, te
 		encodedKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0xa5}, encryptionKeyBytes))
 	}
 	keyRef := recoveryProofKeyRef
+	if fixture.keyRef != "" {
+		keyRef = fixture.keyRef
+	}
 	if testCase.wrongKeyRef {
 		keyRef = "wrong-recovery-proof-key-ref"
 	}
@@ -393,6 +422,14 @@ func runIsolatedRecoveryProof(inputPath string) error {
 	if err != nil && !errors.Is(err, ErrUnsupportedPublishPlatform) {
 		return errors.New("open recovery proof recovery store")
 	}
+	// Runtime loading/signing must not invoke either publication capability.
+	publicationCalled := false
+	for _, store := range []*Store{primaryStore, recoveryStore} {
+		store.publishFile = func(string, []byte) error {
+			publicationCalled = true
+			return errors.New("unexpected recovery artifact publication")
+		}
+	}
 	expected := ExpectedArtifactContext{SessionID: input.SessionID, KeyID: input.KeyID, DescriptorBytes: descriptor}
 	primaryEvidence, err := primaryStore.InspectExisting(context.Background(), expected)
 	if err != nil {
@@ -425,14 +462,29 @@ func runIsolatedRecoveryProof(inputPath string) error {
 		return errors.New("load recovery proof recovery share")
 	}
 	clear(recoveryShare.Blob)
-	return proveRecoveryProofSignatures(input.KeyID, primaryEvidence.AccountPublicKey, chainCode, primaryReader, recoveryReader)
+	if err := proveRecoveryProofSignatures(input.KeyID, primaryEvidence.AccountPublicKey, chainCode, primaryReader, recoveryReader); err != nil {
+		return err
+	}
+	if publicationCalled {
+		return errors.New("recovery attempted an artifact rewrite")
+	}
+	for _, pair := range []struct {
+		store  *Store
+		before ArtifactEvidence
+	}{{primaryStore, primaryEvidence}, {recoveryStore, recoveryEvidence}} {
+		after, err := pair.store.InspectExisting(context.Background(), expected)
+		if err != nil || after.ArtifactFingerprint != pair.before.ArtifactFingerprint {
+			return errors.New("recovery artifact fingerprint changed")
+		}
+	}
+	return nil
 }
 
 func proveRecoveryProofSignatures(keyID string, accountPublicKey, chainCode []byte, primaryReader, recoveryReader coretss.ShareReader) error {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	primaryService := coretss.NewBnbService(logger, coretss.WithShareReader(primaryReader))
 	recoveryService := coretss.NewBnbService(logger, coretss.WithShareReader(recoveryReader))
-	accountPoint, err := btcec.ParsePubKey(accountPublicKey, btcec.S256())
+	accountPoint, err := btcec.ParsePubKey(accountPublicKey)
 	if err != nil {
 		return errors.New("validate recovery proof account public output")
 	}
@@ -524,7 +576,7 @@ func verifyRecoveryProofSignature(signature *common.SignatureData, publicKeyHex 
 	if err != nil {
 		return errors.New("decode recovery proof public output")
 	}
-	publicKey, err := btcec.ParsePubKey(publicKeyBytes, btcec.S256())
+	publicKey, err := btcec.ParsePubKey(publicKeyBytes)
 	if err != nil {
 		return errors.New("parse recovery proof public output")
 	}

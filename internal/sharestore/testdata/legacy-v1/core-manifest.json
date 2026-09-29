@@ -1,0 +1,136 @@
+{
+  "Warning": "TEST ONLY — NEVER FUND",
+  "CodecVersion": 2,
+  "GoVersion": "go1.24.0",
+  "Producers": [
+    {
+      "Module": "github.com/BroLabel/brosettlement-mpc-core",
+      "Version": "v0.5.0",
+      "Revision": "22d2e09211a702daad8b9f5a44a810d7eafda39c",
+      "Sum": "h1:tfg+FCuhunr/zerGbvDEfStND1tPqGFIlqyjabLGBS4="
+    },
+    {
+      "Module": "github.com/bnb-chain/tss-lib",
+      "Version": "v1.5.0",
+      "Revision": "3d95e54c2c9e26211ec0599f90772e8eb260c62b",
+      "Sum": "h1:fuP69k0c4K9kaWCrG+FPH4GDdGZpMRhLyAaA+TyGn0w="
+    }
+  ],
+  "Preparams": [
+    {
+      "File": "preparams/public-test-only-0.json",
+      "SHA256": "26b0cbfab4b155397557f0ee91575f13367368a451b2bc572a21805985f75334",
+      "UpstreamFile": "test/_ecdsa_fixtures/keygen_data_0.json"
+    },
+    {
+      "File": "preparams/public-test-only-1.json",
+      "SHA256": "19af7d2faf4ad73847dee4a1c1e139443c1b9593d578f285a0abeba3d9b73646",
+      "UpstreamFile": "test/_ecdsa_fixtures/keygen_data_1.json"
+    },
+    {
+      "File": "preparams/public-test-only-2.json",
+      "SHA256": "4a8b30b221a10449fedd2512ec4109cdb776b9b4b8b9167adcfe5b29e515e7d6",
+      "UpstreamFile": "test/_ecdsa_fixtures/keygen_data_2.json"
+    }
+  ],
+  "RootPublicKey": "04ded96323908e20920a653bc4d982f1b885dacc141c56ccb17caf1618e78d57ea6d68d103fd9d9abefd07cc18dc3e1b377d3cf943bd1b51cee901d9a86419bc29",
+  "ChainCode": "62e300052f6d9e585de005bdb90dcbbf3eadf3b39f62c7fcf97fe31bb2c6cd1b",
+  "Participants": [
+    {
+      "Role": "A",
+      "PartyID": "mpc-signer",
+      "ShareID": "11819798748401669041199445719613477382076529330586521123040306890032532487031",
+      "Blob": "codec-v2/mpc-signer.gob",
+      "SHA256": "a31a697a36efd80d689ea447930b23cd11ae8fd44c0da9594c4ff8d27dc69362",
+      "SortedIndex": 1
+    },
+    {
+      "Role": "B",
+      "PartyID": "co-signer-primary",
+      "ShareID": "5703915595329436605029842418740302423567297331208187356941182063405440901593",
+      "Blob": "codec-v2/co-signer-primary.gob",
+      "SHA256": "9171c2cc0d017e87c03003c2ff8106603932c95554cde82b17a2dc026480e00c",
+      "SortedIndex": 0
+    },
+    {
+      "Role": "C",
+      "PartyID": "co-signer-recovery",
+      "ShareID": "13442558426219004862923640647655225160901840943391525354374455569657496105918",
+      "Blob": "codec-v2/co-signer-recovery.gob",
+      "SHA256": "9c195a9fc141ca49b5feaab70be032cf2ce519a33adb5b16c7d47359e22080e3",
+      "SortedIndex": 2
+    }
+  ],
+  "Children": [
+    {
+      "Path": "/0/0",
+      "PublicKey": "0476ffa9deb6483c132f4ed3ab2b58f706b8a496a74f1fdda12d209c55d21f5a0229aa5135bf8e3514244cf7ff9088d418acfae018e0b9e76fcc10b5a89eafc759"
+    },
+    {
+      "Path": "/1/7",
+      "PublicKey": "043d278ddaded496caf940e9c362efb9669aedbca108ca428078c400b14b58f958ae73f3397522434ec5f9d69d2259e8b0c8db43b07791e0c485af447feafbc3d6"
+    }
+  ],
+  "Signatures": [
+    {
+      "Parties": [
+        "mpc-signer",
+        "co-signer-primary"
+      ],
+      "Path": "/0/0",
+      "Digest": "009192a7ac2078ce496ab2627ee3097c8190e8f9f9462731ea908f5418055ac3",
+      "R": "ad5e6c47d9e2349747a4641109effe2acf4bdb2242b74bbf7a893153d1252593",
+      "S": "254819f39daede9eab044df7ff68d9c2e80f00cb0d445eefefad89e12360ea5d"
+    },
+    {
+      "Parties": [
+        "mpc-signer",
+        "co-signer-primary"
+      ],
+      "Path": "/1/7",
+      "Digest": "00022767fc567ffb0cab0403796345af40eaa9451a9eb284ee5908a01726cddd",
+      "R": "9580c3f14303cc662566277322cac50485034de825c091cbe6119e8d848e615f",
+      "S": "3c0719245e567a6345ce82bf0faed1dd4b51de398cd7a26ea4d5ab72d71f284f"
+    },
+    {
+      "Parties": [
+        "mpc-signer",
+        "co-signer-recovery"
+      ],
+      "Path": "/0/0",
+      "Digest": "009c646c73b60269083530acc753633d4633723e7b741d349ab7f3aef75a3afb",
+      "R": "30679dfc7ae9bce1cd600efb6b3b89b5c5b216af226bb1b2e02699f1aa928dc1",
+      "S": "313a71e86a411690eb7f8bc4c09f5ed52574f5bcea91c305109afd48034741cf"
+    },
+    {
+      "Parties": [
+        "mpc-signer",
+        "co-signer-recovery"
+      ],
+      "Path": "/1/7",
+      "Digest": "00624977447910e9342debd2c8346251b0b1d76bb9a058ada811d14e0de1192a",
+      "R": "1d0d0a96761b7b0ec0227a73d4e2d4e669e97d983f2e47ce7c6969bbc0915593",
+      "S": "2465d5eb724903056024baee454cb49e2d492ec998ec45eee10a3a799572ecfc"
+    },
+    {
+      "Parties": [
+        "co-signer-primary",
+        "co-signer-recovery"
+      ],
+      "Path": "/0/0",
+      "Digest": "0036f551bc7cfbe78aa531cb133ee900480ea2e53da26158541e0eccb11f99ac",
+      "R": "ed016a3632ffde11eb734a5eb409e64531dd37b598144fc9b682395f294dbea3",
+      "S": "6ef3f84892f612c1b5def6cb03696deba75381b4e5278d1c28b154b868eea7cc"
+    },
+    {
+      "Parties": [
+        "co-signer-primary",
+        "co-signer-recovery"
+      ],
+      "Path": "/1/7",
+      "Digest": "0058dbb8cf9ee060086167fd3264640d450be33a3a262377db3a552540d5fca0",
+      "R": "ac4a16ca8bee2aa1d1b9b71658193c53465657d64bd138dd6869a8cbac941cc1",
+      "S": "14fbfa55f70a53579977478fe478dbd65a866936fe24fb000f9fea3a2bde3137"
+    }
+  ]
+}

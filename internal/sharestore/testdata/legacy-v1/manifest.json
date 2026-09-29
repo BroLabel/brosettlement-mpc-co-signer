@@ -1,0 +1,53 @@
+{
+  "artifacts": [
+    {
+      "blobSHA256": "9171c2cc0d017e87c03003c2ff8106603932c95554cde82b17a2dc026480e00c",
+      "ciphertextSHA256": "a6f61172376e216ebfa3a424980f42e4e024b47e04f8e2c7d112e44c7b6baff4",
+      "file": "primary/mpc_key_123e4567-e89b-42d3-a456-426614174000.primary.json",
+      "fingerprint": "14VMb7dSw5UD5YM_HUrlmglKhEGzjPgfnpUq4grM1Ac",
+      "partyId": "co-signer-primary",
+      "purpose": "primary",
+      "sha256": "d7854c6fb752c39503e5833f1d4ae59a094a8441b38cf81f9e952ae20accd407"
+    },
+    {
+      "blobSHA256": "9c195a9fc141ca49b5feaab70be032cf2ce519a33adb5b16c7d47359e22080e3",
+      "ciphertextSHA256": "d688db1ddd38dacca9f384b14d5f8b878d0953d8ca90516d6eedd1b351180bef",
+      "file": "recovery/mpc_key_123e4567-e89b-42d3-a456-426614174000.recovery.json",
+      "fingerprint": "QnZQahw7Z6CkZq_C-VvE9f3SCYGC0tkjiHm04CJTuj8",
+      "partyId": "co-signer-recovery",
+      "purpose": "recovery",
+      "sha256": "4276506a1c3b67a0a466afc2f95bc4f5fdd2098182d2d9238879b4e02253ba3f"
+    }
+  ],
+  "chainCode": "62e300052f6d9e585de005bdb90dcbbf3eadf3b39f62c7fcf97fe31bb2c6cd1b",
+  "children": [
+    {
+      "Path": "/0/0",
+      "PublicKey": "0476ffa9deb6483c132f4ed3ab2b58f706b8a496a74f1fdda12d209c55d21f5a0229aa5135bf8e3514244cf7ff9088d418acfae018e0b9e76fcc10b5a89eafc759"
+    },
+    {
+      "Path": "/1/7",
+      "PublicKey": "043d278ddaded496caf940e9c362efb9669aedbca108ca428078c400b14b58f958ae73f3397522434ec5f9d69d2259e8b0c8db43b07791e0c485af447feafbc3d6"
+    }
+  ],
+  "coSignerRevision": "cf48fe4a51cc1adcff0c3994d124a0d59f7ae12c",
+  "coreManifestSHA256": "91ae7c590c5e1e87da9504aced91851fd435402450de7c39ff3f10294fa61b0e",
+  "coreVersion": "v0.5.0",
+  "descriptorSHA256": "9dfcb94e246512f49efab3b188ae51bbc00b89ffd86e5d2a9f59043cfc29a974",
+  "encodedKey": "R5CMCTajYVPnfa8jUM1B4V6kC3C7RiOol3xSlFoJ9cE=",
+  "keyId": "mpc_key_123e4567-e89b-42d3-a456-426614174000",
+  "keyRef": "legacy-v1-public-test-only-key",
+  "producerSHA256": {
+    "go.mod": "ead03871ce64817177309b4465ae4979759774292a917bcff36f048ecc54376c",
+    "go.sum": "afec73b817f98cfa76bfd5f754df4c67f33860592f1295580872d1bc3b5ba51f",
+    "internal/sharestore/artifact.go": "d46d6de5f47abbc24f92104ea1a5f1899f38d8ba9ce715998053db440ffb5b15",
+    "internal/sharestore/fs_linux.go": "fd98a7366490ada27dbbb8250d6d0225c8b010d261d16712be6af715a29d5aa2",
+    "internal/sharestore/publisher.go": "92ba9384ab45e92f6a1d8b356f177288ebb751d6aa2b5a2f1d747b5096e330e7",
+    "internal/sharestore/routing_writer.go": "426c1f30f706fabc19ceb9f1609a327647164ecaa792d11f0865595325807228"
+  },
+  "rootPublicKey": "04ded96323908e20920a653bc4d982f1b885dacc141c56ccb17caf1618e78d57ea6d68d103fd9d9abefd07cc18dc3e1b377d3cf943bd1b51cee901d9a86419bc29",
+  "sessionId": "synthetic-legacy-dkg",
+  "sourceKeyId": "synthetic-legacy-v1-never-fund",
+  "tssVersion": "v1.5.0",
+  "warning": "TEST ONLY — NEVER FUND"
+}

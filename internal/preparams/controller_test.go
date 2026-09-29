@@ -12,7 +12,7 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/metrics"
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
-	ecdsakeygen "github.com/bnb-chain/tss-lib/ecdsa/keygen"
+	ecdsakeygen "github.com/bnb-chain/tss-lib/v3/ecdsa/keygen"
 )
 
 func TestProductionPreParamsProfileIsStaticAndUsesExplicitParallelism(t *testing.T) {

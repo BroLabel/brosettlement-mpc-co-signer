@@ -6,16 +6,7 @@ if [ "$(uname -s)" != "Linux" ]; then
 	exit 1
 fi
 
-if grep -Eq '^[[:space:]]*replace([[:space:]]|\()' go.mod; then
-	echo "committed module replacements are forbidden" >&2
-	exit 1
-fi
-
-core_version="$(GOWORK=off go list -m -f '{{.Version}}' github.com/BroLabel/brosettlement-mpc-core)"
-if [ "$core_version" != "v0.5.0" ]; then
-	echo "mpc-core must resolve exactly v0.5.0" >&2
-	exit 1
-fi
+GOWORK=off go test ./cmd/mpc-contracts -run '^TestReleaseModuleGraph$' -count=1
 
 GOWORK=off go run ./cmd/mpc-contracts verify
 GOWORK=off go test -race ./... -count=1
