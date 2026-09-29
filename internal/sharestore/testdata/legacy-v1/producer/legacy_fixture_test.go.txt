@@ -1,0 +1,140 @@
+package sharestore
+
+// TEST ONLY — NEVER FUND. Run only in an archive of the pinned old Co-Signer.
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+	core "github.com/BroLabel/brosettlement-mpc-core/tss"
+)
+
+func TestProduceFrozenLegacyArtifacts(t *testing.T) {
+	corpus, output := os.Getenv("LEGACY_CORE_CORPUS"), os.Getenv("LEGACY_ARTIFACT_OUTPUT")
+	if corpus == "" || output == "" {
+		t.Fatal("explicit synthetic corpus and new output required")
+	}
+	if err := os.Mkdir(output, 0700); err != nil {
+		t.Fatal(err)
+	}
+	read := func(path string) []byte {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	write := func(path string, b []byte) {
+		if err := os.WriteFile(filepath.Join(output, path), b, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hash := func(b []byte) string { v := sha256.Sum256(b); return hex.EncodeToString(v[:]) }
+	manifestBytes := read(filepath.Join(corpus, "manifest.json"))
+	var source struct {
+		Warning, ChainCode, RootPublicKey string
+		Participants                      []struct{ PartyID, Blob, SHA256 string }
+		Children                          []struct{ Path, PublicKey string }
+	}
+	if err := json.Unmarshal(manifestBytes, &source); err != nil {
+		t.Fatal(err)
+	}
+	if source.Warning != "TEST ONLY — NEVER FUND" {
+		t.Fatal("not a synthetic K01 corpus")
+	}
+	keyID, sessionID, keyRef := "mpc_key_123e4567-e89b-42d3-a456-426614174000", "synthetic-legacy-dkg", "legacy-v1-public-test-only-key"
+	key := sha256.Sum256([]byte("TEST ONLY — NEVER FUND: legacy artifact AES key"))
+	encodedKey := base64.StdEncoding.EncodeToString(key[:])
+	provider, err := NewKeyProvider(encodedKey, keyRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := hex.DecodeString(source.ChainCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := []byte(`{"algorithm":"ECDSA","chainCodeHash":"` + mpc2of3.ChainCodeHashFor(chain).String() + `","curve":"secp256k1","derivationScheme":"bip32_secp256k1","descriptorKind":"mpc-key-descriptor","descriptorVersion":1,"keyId":"` + keyID + `","parties":[{"partyId":"mpc-signer","purpose":"platform"},{"partyId":"co-signer-primary","purpose":"primary"},{"partyId":"co-signer-recovery","purpose":"recovery"}],"protocolVersion":1,"publicKeyFormat":"compressed_sec1","threshold":2}`)
+	_, fingerprint, err := mpc2of3.ParseCanonicalDescriptor(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stores []*Store
+	for _, purpose := range []StorePurpose{StorePurposePrimary, StorePurposeRecovery} {
+		dir := filepath.Join(output, string(purpose))
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := NewStoreConfig(purpose, dir, provider)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, err := OpenStore(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stores = append(stores, store)
+	}
+	pair := NewActivePair()
+	lease, err := pair.RegisterPair(PairRegistration{SessionID: sessionID, KeyID: keyID, PrimaryPartyID: primaryPartyID, RecoveryPartyID: recoveryPartyID, DescriptorBytes: descriptor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Release()
+	writer, err := NewRoutingWriter(pair, stores[0], stores[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := []map[string]any{}
+	for _, participant := range source.Participants {
+		if participant.PartyID == "mpc-signer" {
+			continue
+		}
+		blob := read(filepath.Join(corpus, participant.Blob))
+		if hash(blob) != participant.SHA256 {
+			t.Fatal("K01 blob hash mismatch")
+		}
+		fp := [32]byte(fingerprint)
+		if err := writer.SaveShare(context.Background(), core.SaveShareInput{SessionID: sessionID, KeyID: keyID, LocalPartyID: participant.PartyID, OpaqueDescriptorFingerprint: fp[:], CodecBlob: blob}); err != nil {
+			t.Fatal(err)
+		}
+		purpose := "primary"
+		if participant.PartyID == recoveryPartyID {
+			purpose = "recovery"
+		}
+		file := purpose + "/" + keyID + "." + purpose + ".json"
+		envelopeBytes := read(filepath.Join(output, file))
+		var envelope artifactEnvelopeV1
+		if err := json.Unmarshal(envelopeBytes, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		ciphertext, err := base64.StdEncoding.DecodeString(envelope.Encryption.Ciphertext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifacts = append(artifacts, map[string]any{"partyId": participant.PartyID, "purpose": purpose, "file": file, "sha256": hash(envelopeBytes), "ciphertextSHA256": hash(ciphertext), "blobSHA256": participant.SHA256, "fingerprint": mpc2of3.ArtifactFingerprintFor(envelopeBytes).String()})
+	}
+	write("descriptor.json", descriptor)
+	write("core-manifest.json", manifestBytes)
+	producers := map[string]string{}
+	for _, file := range []string{"go.mod", "go.sum", "internal/sharestore/artifact.go", "internal/sharestore/routing_writer.go", "internal/sharestore/publisher.go", "internal/sharestore/fs_linux.go"} {
+		producers[file] = hash(read(filepath.Join("..", "..", file)))
+	}
+	manifest := map[string]any{"warning": source.Warning, "coSignerRevision": "cf48fe4a51cc1adcff0c3994d124a0d59f7ae12c", "coreVersion": "v0.5.0", "tssVersion": "v1.5.0", "sourceKeyId": "synthetic-legacy-v1-never-fund", "keyId": keyID, "sessionId": sessionID, "keyRef": keyRef, "encodedKey": encodedKey, "descriptorSHA256": hash(descriptor), "coreManifestSHA256": hash(manifestBytes), "rootPublicKey": source.RootPublicKey, "chainCode": source.ChainCode, "children": source.Children, "artifacts": artifacts, "producerSHA256": producers}
+	b, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("manifest.json", append(b, '\n'))
+	input := map[string]any{"version": 1, "keyRef": keyRef, "encodedKey": encodedKey, "keyId": keyID, "sessionId": sessionID, "descriptorBase64": base64.StdEncoding.EncodeToString(descriptor), "primaryDirectory": filepath.Join(output, "primary"), "recoveryDirectory": filepath.Join(output, "recovery")}
+	b, err = json.MarshalIndent(input, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write("proof-input.json", append(b, '\n'))
+}

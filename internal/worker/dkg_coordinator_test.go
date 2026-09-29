@@ -16,7 +16,7 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/BroLabel/brosettlement-mpc-core/protocol"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
-	ecdsakeygen "github.com/bnb-chain/tss-lib/ecdsa/keygen"
+	ecdsakeygen "github.com/bnb-chain/tss-lib/v3/ecdsa/keygen"
 )
 
 const (
@@ -150,16 +150,19 @@ func TestDKGCoordinatorAcquiresTwoPreParamsHandlesAndUsesOnlyHandleAwareRuns(t *
 
 func TestDKGCoordinatorCancelsSiblingAndJoinsBothParties(t *testing.T) {
 	intent := coordinatorIntent(t)
+	// Core's real-wire TestDKGRejectsInvalidProof owns cryptographic
+	// mutation coverage. This boundary double exercises its failed-result path.
 	runner := &failingDKGRunner{
 		failedParty: coordinatorPrimaryParty,
-		failure:     errors.New("primary failed"),
+		failure:     errors.New("v3 modulus proof verification failed"),
 		exited:      make(chan string, 2),
 	}
+	primary, recovery := &recordingArtifactInspector{}, &recordingArtifactInspector{}
 	coordinator, err := NewDKGCoordinator(
 		serviceForRunner(runner),
 		sharestore.NewActivePair(),
-		&recordingArtifactInspector{},
-		&recordingArtifactInspector{},
+		primary,
+		recovery,
 		DKGCoordinatorConfig{
 			PlatformPartyID: coordinatorPlatformParty,
 			PrimaryPartyID:  coordinatorPrimaryParty,
@@ -170,8 +173,12 @@ func TestDKGCoordinatorCancelsSiblingAndJoinsBothParties(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := coordinator.Run(context.Background(), intent, &blockingTransport{}); !errors.Is(err, runner.failure) {
+	result, err := coordinator.Run(context.Background(), intent, &blockingTransport{})
+	if !errors.Is(err, runner.failure) {
 		t.Fatalf("Run() error = %v, want primary failure", err)
+	}
+	if result.Primary.KeyID != "" || result.Recovery.KeyID != "" || primary.Calls() != 0 || recovery.Calls() != 0 {
+		t.Fatal("proof failure produced activation evidence or inspected partial artifacts")
 	}
 
 	exited := map[string]bool{}
