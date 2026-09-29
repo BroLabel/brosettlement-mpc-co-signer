@@ -193,7 +193,7 @@ func TestCoSignerStartupPreservesEarlyCapabilityErrorWithoutPanic(t *testing.T) 
 	}
 }
 
-func TestVerifyMPC2of3RejectsPreviousMPCorePin(t *testing.T) {
+func TestVerifyMPC2of3StopsOnModuleGraphFailure(t *testing.T) {
 	bin := t.TempDir()
 	writeCommand := func(name, body string) {
 		t.Helper()
@@ -203,16 +203,22 @@ func TestVerifyMPC2of3RejectsPreviousMPCorePin(t *testing.T) {
 		}
 	}
 	writeCommand("uname", "echo Linux")
-	writeCommand("grep", "exit 1")
-	writeCommand("go", "echo v0.4.7")
+	// Exact-version rejection is tested by cmd/mpc-contracts. This checks that
+	// the Linux release script invokes that gate first and preserves failure.
+	writeCommand("go", `if [ "$GOWORK" != off ] || [ "$*" != 'test ./cmd/mpc-contracts -run ^TestReleaseModuleGraph$ -count=1' ]; then
+echo 'unexpected gate invocation' >&2
+exit 2
+fi
+echo 'release module graph rejected' >&2
+exit 1`)
 	command := exec.Command("/bin/sh", filepath.Join("..", "..", "scripts", "verify-mpc-2of3.sh"))
 	command.Env = append(os.Environ(), "PATH="+bin, "GOWORK=on")
 	output, err := command.CombinedOutput()
 	if err == nil {
-		t.Fatal("verify script accepted the previous mpc-core pin")
+		t.Fatal("verify script ignored the module graph failure")
 	}
-	if !strings.Contains(string(output), "mpc-core must resolve exactly v0.5.0") {
-		t.Fatalf("output = %s, want rejection of v0.4.7", output)
+	if strings.TrimSpace(string(output)) != "release module graph rejected" {
+		t.Fatalf("output = %s, want immediate module graph rejection", output)
 	}
 }
 
