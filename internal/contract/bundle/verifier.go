@@ -13,12 +13,17 @@ import (
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
 const (
-	signerBundleIdentity = "dRgKBw7Y392uHY7AkBj5dkahjKmwYcFYhjtYv62-5mA"
-	httpBundleIdentity   = "On6HEeLx2VhbeA6d5070_gopkJdgDkdfwYSlrg1RLFY"
+	// These pins identify the exact cross-repository contract fixtures that this
+	// Co-Signer version supports. They are integrity checks, not runtime config.
+	expectedSignerBundleIdentity = "dRgKBw7Y392uHY7AkBj5dkahjKmwYcFYhjtYv62-5mA"
+	expectedHTTPBundleIdentity   = "FTDwFxMF6H-johDYeeyMVxb2kxPcszVN8crqaKoqClA"
+	expectedHTTPProducerCommit   = "26552e0578527216a037fae3efd189d865b28910"
 )
 
 var (
@@ -28,7 +33,7 @@ var (
 	}
 	httpPaths = []string{
 		"accepted-response.json", "claim-response.json", "conflict-response.json", "listing-response.json",
-		"mailbox-frame.json", "replay-response.json", "sign-claim-response.json", "sign-terminal-completed-request.json",
+		"mailbox-frame.json", "messages-response.json", "messages-terminal-response.json", "replay-response.json", "sign-claim-response.json", "sign-terminal-completed-request.json",
 		"sign-terminal-failed-request.json", "sign-terminal-timed-out-local.json", "terminal-completed-request.json", "terminal-failed-request.json",
 	}
 	identifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
@@ -71,13 +76,13 @@ func VerifySignerBundle(root string) (string, error) {
 		return "", err
 	}
 	_ = files
-	if identity := digest(manifestBytes); identity != signerBundleIdentity {
+	if identity := digest(manifestBytes); identity != expectedSignerBundleIdentity {
 		return "", fmt.Errorf("unexpected signer bundle identity %q", identity)
 	}
 	if err := verifySignerVectors(root); err != nil {
 		return "", err
 	}
-	return signerBundleIdentity, nil
+	return expectedSignerBundleIdentity, nil
 }
 
 // VerifyHTTPBundle checks the backend-owned fixture corpus and all cross-fixture bindings.
@@ -87,7 +92,7 @@ func VerifyHTTPBundle(root string) (string, error) {
 		if err := decodeClosed(raw, &manifest, []string{"backendSourceCommit", "bundleVersion", "files"}); err != nil {
 			return err
 		}
-		if manifest.BundleVersion != 1 || !gitCommitPattern.MatchString(manifest.BackendSourceCommit) {
+		if manifest.BundleVersion != 1 || manifest.BackendSourceCommit != expectedHTTPProducerCommit || !gitCommitPattern.MatchString(manifest.BackendSourceCommit) {
 			return fmt.Errorf("invalid HTTP manifest schema")
 		}
 		return verifyManifestEntries(root, manifest.Files, httpPaths)
@@ -95,13 +100,13 @@ func VerifyHTTPBundle(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if identity := digest(manifestBytes); identity != httpBundleIdentity {
+	if identity := digest(manifestBytes); identity != expectedHTTPBundleIdentity {
 		return "", fmt.Errorf("unexpected HTTP bundle identity %q", identity)
 	}
 	if err := verifyHTTPFixtures(root); err != nil {
 		return "", err
 	}
-	return httpBundleIdentity, nil
+	return expectedHTTPBundleIdentity, nil
 }
 
 func verifySignerVectors(root string) error {
@@ -292,7 +297,7 @@ func verifyHTTPFixtures(root string) error {
 		return fmt.Errorf("listing reuses keyId")
 	}
 
-	claim, err := readObject(root, "claim-response.json", []string{"chainCodeBase64", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "httpStatus", "intentId", "keyId", "orgId", "sessionId", "status"})
+	claim, err := readObject(root, "claim-response.json", []string{"session", "chainCodeBase64", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "httpStatus", "intentId", "keyId", "orgId", "sessionId", "status"})
 	if err != nil {
 		return err
 	}
@@ -311,12 +316,32 @@ func verifyHTTPFixtures(root string) error {
 		return fmt.Errorf("claim chain code does not match descriptor")
 	}
 
-	signClaim, err := readObject(root, "sign-claim-response.json", []string{"deadline", "httpStatus", "intentId", "payload", "sessionId", "status", "type"})
+	signClaim, err := readObject(root, "sign-claim-response.json", []string{"session", "deadline", "httpStatus", "intentId", "payload", "sessionId", "status", "type"})
 	if err != nil {
 		return err
 	}
 	if err := validateSignClaim(signClaim, claimedSign); err != nil {
 		return err
+	}
+	for _, name := range []string{"messages-response.json", "messages-terminal-response.json"} {
+		raw, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			return err
+		}
+		var result monolith.MessagesResult
+		if err := strictjson.DecodeClosed(raw, &result); err != nil {
+			return err
+		}
+		deadline, err := exactUTC(claimedSign.deadline)
+		if err != nil {
+			return err
+		}
+		if err := result.Session.Validate("SIGN", claimedSign.sessionID, deadline); err != nil {
+			return err
+		}
+		if name == "messages-response.json" && (result.Session.Status != "RUNNING" || len(result.Messages) != 1) || name == "messages-terminal-response.json" && (result.Session.Status != "COMPLETED" || len(result.Messages) != 0) {
+			return fmt.Errorf("invalid messages fixture %s", name)
+		}
 	}
 	if err := validateSignTerminalFixtures(root); err != nil {
 		return err
@@ -385,7 +410,10 @@ func readObject(root, name string, expected []string) (map[string]json.RawMessag
 }
 
 func parseDKG(fields map[string]json.RawMessage, expectedStatus string, _ bool) (dkgFixture, error) {
-	expected := []string{"createdAt", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "intentId", "keyId", "orgId", "sessionId", "status", "type"}
+	if err := validateLifecycle(fields, "DKG"); err != nil {
+		return dkgFixture{}, err
+	}
+	expected := []string{"session", "createdAt", "deadline", "descriptorBytesBase64", "descriptorFingerprint", "intentId", "keyId", "orgId", "sessionId", "status", "type"}
 	if !sameKeys(fields, expected) {
 		return dkgFixture{}, fmt.Errorf("invalid DKG schema")
 	}
@@ -409,6 +437,9 @@ func parseDKG(fields map[string]json.RawMessage, expectedStatus string, _ bool) 
 }
 
 func parseClaim(fields map[string]json.RawMessage) (dkgFixture, error) {
+	if err := validateLifecycle(fields, "DKG"); err != nil {
+		return dkgFixture{}, err
+	}
 	if !uuidV4Pattern.MatchString(stringMust(fields, "intentId")) ||
 		!uuidV4Pattern.MatchString(stringMust(fields, "sessionId")) ||
 		!identifier(stringMust(fields, "orgId"), "orgId", "org-") ||
@@ -446,7 +477,10 @@ func descriptorFixture(fields map[string]json.RawMessage, createdAt time.Time) (
 }
 
 func parseSign(fields map[string]json.RawMessage) error {
-	if !sameKeys(fields, []string{"createdAt", "intentId", "keyId", "orgId", "status", "type"}) || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "PENDING" || !uuidV4Pattern.MatchString(stringMust(fields, "intentId")) || !identifier(stringMust(fields, "orgId"), "orgId", "org-") || !keyIDPattern.MatchString(stringMust(fields, "keyId")) {
+	if err := validateLifecycle(fields, "SIGN"); err != nil {
+		return err
+	}
+	if !sameKeys(fields, []string{"session", "createdAt", "intentId", "keyId", "orgId", "status", "type"}) || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "PENDING" || !uuidV4Pattern.MatchString(stringMust(fields, "intentId")) || !identifier(stringMust(fields, "orgId"), "orgId", "org-") || !keyIDPattern.MatchString(stringMust(fields, "keyId")) {
 		return fmt.Errorf("invalid pending SIGN")
 	}
 	_, err := exactUTC(stringMust(fields, "createdAt"))
@@ -458,7 +492,10 @@ type signDiscoveryFixture struct {
 }
 
 func parseOwnedSign(fields map[string]json.RawMessage) (signDiscoveryFixture, error) {
-	expected := []string{"createdAt", "deadline", "intentId", "keyId", "orgId", "sessionId", "status", "type"}
+	if err := validateLifecycle(fields, "SIGN"); err != nil {
+		return signDiscoveryFixture{}, err
+	}
+	expected := []string{"session", "createdAt", "deadline", "intentId", "keyId", "orgId", "sessionId", "status", "type"}
 	if !sameKeys(fields, expected) || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "CLAIMED" {
 		return signDiscoveryFixture{}, fmt.Errorf("invalid own claimed SIGN schema")
 	}
@@ -481,6 +518,9 @@ func parseOwnedSign(fields map[string]json.RawMessage) (signDiscoveryFixture, er
 }
 
 func validateSignClaim(fields map[string]json.RawMessage, listed signDiscoveryFixture) error {
+	if err := validateLifecycle(fields, "SIGN"); err != nil {
+		return err
+	}
 	if integer(fields, "httpStatus") != 200 || stringMust(fields, "type") != "SIGN" || stringMust(fields, "status") != "CLAIMED" {
 		return fmt.Errorf("invalid SIGN claim status")
 	}
@@ -537,28 +577,14 @@ func validateSignClaim(fields map[string]json.RawMessage, listed signDiscoveryFi
 			return fmt.Errorf("invalid SIGN derivation context %s", key)
 		}
 	}
-	policyFields := objectRaw(payload["policyContext"])
-	policyExpected := []string{"amountAtomic", "asset", "chain", "feeLimitSun", "fromAddress", "toAddress", "tokenContractCanonical", "tokenDecimals", "tokenStandard"}
-	if !sameKeys(policyFields, policyExpected) || len(payload["policyContext"]) > 2_048 {
+	if len(payload["policyContext"]) > 2_048 {
 		return fmt.Errorf("invalid SIGN policy context schema")
 	}
-	for _, key := range []string{"amountAtomic", "asset", "chain", "fromAddress", "toAddress"} {
-		if stringMust(policyFields, key) == "" {
-			return fmt.Errorf("invalid SIGN policy context %s", key)
-		}
+	var policy signingpolicy.Context
+	if err := strictjson.DecodeClosed(payload["policyContext"], &policy); err != nil {
+		return fmt.Errorf("invalid SIGN policy context schema: %w", err)
 	}
-	for _, key := range []string{"feeLimitSun", "tokenContractCanonical", "tokenStandard"} {
-		if !nullOrString(policyFields[key]) {
-			return fmt.Errorf("invalid SIGN policy context %s", key)
-		}
-	}
-	if !nullOrInteger(policyFields["tokenDecimals"]) {
-		return fmt.Errorf("invalid SIGN policy context tokenDecimals")
-	}
-	if stringMust(policyFields, "chain") != stringMust(payload, "chain") || stringMust(policyFields, "fromAddress") != stringMust(contextFields, "expectedAddress") {
-		return fmt.Errorf("SIGN policy context is not bound to derivation context")
-	}
-	return nil
+	return signingpolicy.ValidateContext(&policy, stringMust(payload, "chain"), stringMust(payload, "signingPayloadType"), stringMust(contextFields, "expectedAddress"))
 }
 
 func validateSignTerminalFixtures(root string) error {
@@ -661,20 +687,6 @@ func boolean(fields map[string]json.RawMessage, key string) (bool, error) {
 	err := json.Unmarshal(fields[key], &value)
 	return value, err
 }
-func nullOrString(raw json.RawMessage) bool {
-	if string(raw) == "null" {
-		return true
-	}
-	var value string
-	return json.Unmarshal(raw, &value) == nil
-}
-func nullOrInteger(raw json.RawMessage) bool {
-	if string(raw) == "null" {
-		return true
-	}
-	var value int64
-	return json.Unmarshal(raw, &value) == nil
-}
 func identifier(value, label, prefix string) bool {
 	return len(value) > 0 && len(value) <= 255 && identifierPattern.MatchString(value) && (prefix == "" || (len(value) > len(prefix) && value[:len(prefix)] == prefix))
 }
@@ -694,4 +706,20 @@ func parseStandardBase64(value string, size int) ([]byte, error) {
 		return nil, fmt.Errorf("invalid standard base64")
 	}
 	return decoded, nil
+}
+
+func validateLifecycle(fields map[string]json.RawMessage, kind string) error {
+	var session monolith.SessionLifecycle
+	if err := strictjson.DecodeClosed(fields["session"], &session); err != nil {
+		return err
+	}
+	var deadline time.Time
+	if value := stringMust(fields, "deadline"); value != "" {
+		var err error
+		deadline, err = exactUTC(value)
+		if err != nil {
+			return err
+		}
+	}
+	return session.Validate(kind, stringMust(fields, "sessionId"), deadline)
 }

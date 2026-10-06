@@ -14,9 +14,9 @@ import (
 type pendingClient interface {
 	GetPendingIntents(ctx context.Context) ([]monolith.Intent, error)
 	ClaimIntent(ctx context.Context, intentType, intentID string) (monolith.ClaimResult, error)
-	PostResult(ctx context.Context, intentID string, result monolith.IntentResult) error
+	PostSignResult(ctx context.Context, intentID string, result monolith.SignResultRequest) error
 	PostMessage(ctx context.Context, sessionID string, frame monolith.OutboundFrame) error
-	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) ([]monolith.InboundMessage, error)
+	GetMessages(ctx context.Context, sessionID string, afterSeq uint64) (monolith.MessagesResult, error)
 }
 
 type SchedulerConfig struct {
@@ -47,6 +47,7 @@ type Scheduler struct {
 	inFlightIntentIDs map[string]struct{}
 	launch            sessionLauncher
 	forwardWakeups    func(context.Context)
+	sessions          sync.WaitGroup
 }
 
 func NewScheduler(
@@ -83,6 +84,7 @@ func NewScheduler(
 	}
 	scheduler.launch = scheduler.launchSession
 	scheduler.forwardWakeups = scheduler.forwardProvisioningWakeups
+	metrics.SetJobCapacity(maxConcurrent)
 	metrics.SetDKGAdmission(false)
 	metrics.SetDKGGuard(false)
 	return scheduler
@@ -98,6 +100,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 		}()
 	}
 	defer children.Wait()
+	defer s.sessions.Wait()
 	backoff := s.cfg.MinInterval
 
 	for {
@@ -188,6 +191,9 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 	metrics.ObservePending("SIGN", oldestPendingAge(intents, intentKindSIGN, now), sign)
 	dkgConsidered := false
 	for _, intent := range intents {
+		if ctx.Err() != nil {
+			return
+		}
 		kind, ok := classifyIntentKind(intent.Type)
 		if !ok {
 			s.log.Error("unsupported pending intent type")
@@ -205,6 +211,7 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 			if !s.provisioningReady() {
 				if s.cfg.PreparamsHint != nil && !s.cfg.PreparamsHint() {
 					metrics.ObserveDKGSkippedPreparams()
+					metrics.ObserveAdmission("DKG", "preparams_unavailable")
 				}
 				continue
 			}
@@ -214,9 +221,11 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 			}
 			permits := s.permits.tryAcquireDKG()
 			if permits == nil {
+				metrics.ObserveAdmission("DKG", "capacity_full")
 				releaseIntent()
 				continue
 			}
+			metrics.ObserveAdmission("DKG", "admitted")
 			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits, releaseIntent)) {
 				return
 			}
@@ -227,9 +236,11 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 			}
 			permits := s.permits.tryAcquireSIGN()
 			if permits == nil {
+				metrics.ObserveAdmission("SIGN", "capacity_full")
 				releaseIntent()
 				continue
 			}
+			metrics.ObserveAdmission("SIGN", "admitted")
 			if !waitForClaimDispatch(ctx, s.launch(ctx, intent, permits, releaseIntent)) {
 				return
 			}
@@ -296,7 +307,9 @@ func (s *Scheduler) provisioningReady() bool {
 
 func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, permits *jobPermitLease, releaseIntent func()) <-chan struct{} {
 	claimDispatched := make(chan struct{})
+	s.sessions.Add(1)
 	go func() {
+		defer s.sessions.Done()
 		defer releaseIntent()
 		runSessionWithPermits(
 			ctx,

@@ -7,9 +7,107 @@ import (
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
+var ErrInvalidLifecycle = errors.New("invalid session lifecycle")
+
+// SessionLifecycle is the mandatory backend projection. Nullable fields must
+// be explicitly supplied; absence is never equivalent to a pre-start session.
+type SessionLifecycle struct {
+	SessionID          string     `json:"sessionId"`
+	Status             string     `json:"status"`
+	StartedAt          *time.Time `json:"startedAt"`
+	Deadline           time.Time  `json:"deadline"`
+	ExecutionExpiresAt *time.Time `json:"executionExpiresAt"`
+}
+
+func (s *SessionLifecycle) UnmarshalJSON(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ErrInvalidLifecycle
+	}
+	if len(fields) != 5 {
+		return ErrInvalidLifecycle
+	}
+	for _, name := range []string{"sessionId", "status", "startedAt", "deadline", "executionExpiresAt"} {
+		v, ok := fields[name]
+		if !ok || (name != "startedAt" && name != "executionExpiresAt" && string(v) == "null") {
+			return ErrInvalidLifecycle
+		}
+	}
+	type wire SessionLifecycle
+	var decoded wire
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return ErrInvalidLifecycle
+	}
+	*s = SessionLifecycle(decoded)
+	return s.Validate("", "", time.Time{})
+}
+
+// Validate binds lifecycle observations to an immutable operation. An empty
+// kind performs wire validation; consumers with an intent also enforce kind.
+func (s SessionLifecycle) Validate(kind, sessionID string, deadline time.Time) error {
+	if s.SessionID == "" || sessionID != "" && s.SessionID != sessionID || !s.Deadline.After(time.Unix(0, 0)) || !deadline.IsZero() && !s.Deadline.Equal(deadline) {
+		return ErrInvalidLifecycle
+	}
+	switch s.Status {
+	case "PENDING", "RUNNING", "COMPLETED", "FAILED", "TIMED_OUT":
+	default:
+		return ErrInvalidLifecycle
+	}
+	if s.Status == "PENDING" && s.StartedAt != nil || s.Status == "RUNNING" && s.StartedAt == nil {
+		return ErrInvalidLifecycle
+	}
+	if s.StartedAt != nil && (!s.StartedAt.After(time.Unix(0, 0)) || !s.StartedAt.Before(s.Deadline)) {
+		return ErrInvalidLifecycle
+	}
+	if s.StartedAt == nil && s.ExecutionExpiresAt != nil || kind == "DKG" && s.ExecutionExpiresAt != nil {
+		return ErrInvalidLifecycle
+	}
+	if kind == "SIGN" && s.StartedAt != nil && s.ExecutionExpiresAt == nil {
+		return ErrInvalidLifecycle
+	}
+	if s.ExecutionExpiresAt != nil {
+		if s.StartedAt == nil {
+			return ErrInvalidLifecycle
+		}
+		want := s.StartedAt.Add(300 * time.Second)
+		if s.Deadline.Before(want) {
+			want = s.Deadline
+		}
+		if !s.ExecutionExpiresAt.Equal(want) {
+			return ErrInvalidLifecycle
+		}
+	}
+	return nil
+}
+
+type MessagesResult struct {
+	Session  SessionLifecycle `json:"session"`
+	Messages []InboundMessage `json:"messages"`
+}
+
+func (r *MessagesResult) UnmarshalJSON(raw []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return ErrInvalidLifecycle
+	}
+	if len(fields) != 2 || fields["session"] == nil || fields["messages"] == nil || string(fields["messages"]) == "null" {
+		return ErrInvalidLifecycle
+	}
+	type wire MessagesResult
+	var decoded wire
+	if err := strictjson.DecodeClosed(raw, &decoded); err != nil {
+		return ErrInvalidLifecycle
+	}
+	*r = MessagesResult(decoded)
+	return r.Session.Validate("", "", time.Time{})
+}
+
 type Intent struct {
+	Session         SessionLifecycle `json:"session"`
 	CreatedAt       time.Time
 	DeadlineRaw     string
 	DiscoveryStatus string
@@ -24,6 +122,7 @@ type Intent struct {
 // retained so reconciliation can prove that claim and restart do not replace
 // the backend-created absolute deadline with a fresh TTL.
 type ActionableIntent struct {
+	Session               SessionLifecycle
 	CreatedAt             time.Time
 	CreatedAtRaw          string
 	Deadline              time.Time
@@ -46,73 +145,31 @@ type ActionableListing struct {
 }
 
 type IntentPayload struct {
-	Type                  string             `json:"type,omitempty"`
-	OrgID                 string             `json:"orgId"`
-	WalletID              string             `json:"walletId,omitempty"`
-	KeyID                 string             `json:"keyId"`
-	ProfileID             string             `json:"profileId,omitempty"`
-	ProfileVersion        uint32             `json:"profileVersion,omitempty"`
-	ProfileTemplateID     string             `json:"profileTemplateId,omitempty"`
-	Parties               []string           `json:"parties"`
-	Threshold             uint32             `json:"threshold"`
-	Algorithm             string             `json:"algorithm"`
-	Curve                 string             `json:"curve"`
-	Chain                 string             `json:"chain,omitempty"`
-	Digest                []byte             `json:"digest"`
-	DigestType            string             `json:"digestType,omitempty"`
-	HashAlgorithm         string             `json:"hashAlgorithm,omitempty"`
-	SigningPayloadType    string             `json:"signingPayloadType,omitempty"`
-	ChainCode             string             `json:"chainCode,omitempty"`
-	ChainCodeHash         string             `json:"chainCodeHash,omitempty"`
-	DerivationScheme      string             `json:"derivationScheme,omitempty"`
-	DescriptorBytes       []byte             `json:"descriptorBytesBase64,omitempty"`
-	DescriptorFingerprint string             `json:"descriptorFingerprint,omitempty"`
-	DerivationContextHash string             `json:"derivationContextHash,omitempty"`
-	PartyID               string             `json:"partyId,omitempty"`
-	DerivationContext     *DerivationContext `json:"derivationContext,omitempty"`
-	PolicyContext         *SignPolicyContext `json:"policyContext,omitempty"`
-}
-
-// SignPolicyContext is the immutable transaction-policy snapshot authorized by
-// the backend for one SIGN intent. It is retained by the co-signer so claim
-// validation can bind the cryptographic request to the authorized chain and
-// source address.
-type SignPolicyContext struct {
-	AmountAtomic           string  `json:"amountAtomic"`
-	Asset                  string  `json:"asset"`
-	Chain                  string  `json:"chain"`
-	FeeLimitSun            *string `json:"feeLimitSun"`
-	FromAddress            string  `json:"fromAddress"`
-	ToAddress              string  `json:"toAddress"`
-	TokenContractCanonical *string `json:"tokenContractCanonical"`
-	TokenDecimals          *int64  `json:"tokenDecimals"`
-	TokenStandard          *string `json:"tokenStandard"`
-}
-
-func (c *SignPolicyContext) UnmarshalJSON(raw []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil {
-		return err
-	}
-	expected := []string{
-		"amountAtomic", "asset", "chain", "feeLimitSun", "fromAddress", "toAddress",
-		"tokenContractCanonical", "tokenDecimals", "tokenStandard",
-	}
-	if len(fields) != len(expected) {
-		return errors.New("SIGN policy context has invalid fields")
-	}
-	for _, name := range expected {
-		if _, ok := fields[name]; !ok {
-			return errors.New("SIGN policy context has invalid fields")
-		}
-	}
-	type wire SignPolicyContext
-	var decoded wire
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return err
-	}
-	*c = SignPolicyContext(decoded)
-	return nil
+	Type                  string                 `json:"type,omitempty"`
+	OrgID                 string                 `json:"orgId"`
+	WalletID              string                 `json:"walletId,omitempty"`
+	KeyID                 string                 `json:"keyId"`
+	ProfileID             string                 `json:"profileId,omitempty"`
+	ProfileVersion        uint32                 `json:"profileVersion,omitempty"`
+	ProfileTemplateID     string                 `json:"profileTemplateId,omitempty"`
+	Parties               []string               `json:"parties"`
+	Threshold             uint32                 `json:"threshold"`
+	Algorithm             string                 `json:"algorithm"`
+	Curve                 string                 `json:"curve"`
+	Chain                 string                 `json:"chain,omitempty"`
+	Digest                []byte                 `json:"digest"`
+	DigestType            string                 `json:"digestType,omitempty"`
+	HashAlgorithm         string                 `json:"hashAlgorithm,omitempty"`
+	SigningPayloadType    string                 `json:"signingPayloadType,omitempty"`
+	ChainCode             string                 `json:"chainCode,omitempty"`
+	ChainCodeHash         string                 `json:"chainCodeHash,omitempty"`
+	DerivationScheme      string                 `json:"derivationScheme,omitempty"`
+	DescriptorBytes       []byte                 `json:"descriptorBytesBase64,omitempty"`
+	DescriptorFingerprint string                 `json:"descriptorFingerprint,omitempty"`
+	DerivationContextHash string                 `json:"derivationContextHash,omitempty"`
+	PartyID               string                 `json:"partyId,omitempty"`
+	DerivationContext     *DerivationContext     `json:"derivationContext,omitempty"`
+	PolicyContext         *signingpolicy.Context `json:"policyContext,omitempty"`
 }
 
 type OutboundFrame struct {
@@ -143,22 +200,20 @@ type InboundMessage struct {
 }
 
 type ClaimResult struct {
-	HTTPStatus            int           `json:"httpStatus,omitempty"`
-	IntentID              string        `json:"intentId,omitempty"`
-	SessionID             string        `json:"sessionId,omitempty"`
-	Type                  string        `json:"type,omitempty"`
-	Payload               IntentPayload `json:"payload,omitempty"`
-	Status                string        `json:"status,omitempty"`
-	ClaimedBy             string        `json:"claimedBy,omitempty"`
-	ClaimedAt             *time.Time    `json:"claimedAt,omitempty"`
-	ExpiresAt             time.Time     `json:"expiresAt"`
-	Deadline              time.Time     `json:"deadline"`
-	DeadlineRaw           string        `json:"-"`
-	OrgID                 string        `json:"orgId,omitempty"`
-	KeyID                 string        `json:"keyId,omitempty"`
-	DescriptorBytes       []byte        `json:"descriptorBytesBase64,omitempty"`
-	DescriptorFingerprint string        `json:"descriptorFingerprint,omitempty"`
-	ChainCode             []byte        `json:"chainCodeBase64,omitempty"`
+	Session               SessionLifecycle `json:"session"`
+	HTTPStatus            int              `json:"httpStatus,omitempty"`
+	IntentID              string           `json:"intentId,omitempty"`
+	SessionID             string           `json:"sessionId,omitempty"`
+	Type                  string           `json:"type,omitempty"`
+	Payload               IntentPayload    `json:"payload,omitempty"`
+	Status                string           `json:"status,omitempty"`
+	Deadline              time.Time        `json:"deadline"`
+	DeadlineRaw           string           `json:"-"`
+	OrgID                 string           `json:"orgId,omitempty"`
+	KeyID                 string           `json:"keyId,omitempty"`
+	DescriptorBytes       []byte           `json:"descriptorBytesBase64,omitempty"`
+	DescriptorFingerprint string           `json:"descriptorFingerprint,omitempty"`
+	ChainCode             []byte           `json:"chainCodeBase64,omitempty"`
 }
 
 func (r *ClaimResult) retainExactResponseFields(raw []byte) error {
@@ -173,10 +228,7 @@ func (r *ClaimResult) retainExactResponseFields(raw []byte) error {
 }
 
 func (r ClaimResult) DeadlineTime() time.Time {
-	if !r.Deadline.IsZero() {
-		return r.Deadline
-	}
-	return r.ExpiresAt
+	return r.Deadline
 }
 
 func (r ClaimResult) Intent() Intent {
@@ -205,6 +257,7 @@ func (r ClaimResult) Intent() Intent {
 		}
 	}
 	return Intent{
+		Session:   r.Session,
 		IntentID:  r.IntentID,
 		SessionID: r.SessionID,
 		Type:      intentType,

@@ -92,9 +92,10 @@ func (p *schedulerPermits) tryAcquireDKG() *jobPermitLease {
 	}
 }
 
-// jobPermitLease is the narrow ownership boundary carried by one claimed
-// scheduler job. A normal DKG owns both typed tokens until the terminal owner
-// releases the lease; SIGN owns only the general token.
+// jobPermitLease spans one reserved intent from before its first claim through
+// delivery recovery, runner/transport completion, and terminal resolution.
+// Normal DKG owns both tokens until its terminal publisher resolves;
+// SIGN owns only the general token. Cancellation is not worker completion.
 type jobPermitLease struct {
 	general *permitToken
 	dkg     *permitToken

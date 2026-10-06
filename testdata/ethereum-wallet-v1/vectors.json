@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "sourceHash": "reBSo1hUdbEqcU3ZMMxt9xLB08ZIVHlyYR3Cp0ocmEI",
+  "vectors": [
+    {
+      "id": "ethereum-wallet-v1-mainnet-eth",
+      "chain": "ethereum:mainnet",
+      "digest": "ce42b103a5bc8d4a9b91f884b1c74a04efdbaa6261f7fe043b2abeaa457cc7e5",
+      "contextHash": "d499467ff8498af0d1f84f5f3d103e975add8c263c84d0baa1d769c14bd131ae",
+      "profileId": "ethereum-bip44-account-0",
+      "profileTemplateId": "ethereum-bip44-account",
+      "accountPath": "m/44'/60'/0'",
+      "childPath": "/0/7",
+      "fullPath": "m/44'/60'/0'/0/7",
+      "derivedPublicKey": "0422aedb01ef932e67c7026d6a853ba51f161342493d453517167a62c895a2d94997c2cfa25602e92403ac320cac767e43b55970b4f99dfaa298d7cf29f5f51552"
+    },
+    {
+      "id": "ethereum-wallet-v1-sepolia-erc20",
+      "chain": "ethereum:sepolia",
+      "digest": "0e0a788fa0047c614aade64853b7ed53f47866b25fbf3c97ec301823d62c160b",
+      "contextHash": "36cb776b2232f53b6360ec99ee295b0b9d8d3da9a67751dc1c0865b528b2428f",
+      "profileId": "ethereum-sepolia-bip44-account-0",
+      "profileTemplateId": "ethereum-bip44-account",
+      "accountPath": "m/44'/60'/0'",
+      "childPath": "/0/7",
+      "fullPath": "m/44'/60'/0'/0/7",
+      "derivedPublicKey": "0422aedb01ef932e67c7026d6a853ba51f161342493d453517167a62c895a2d94997c2cfa25602e92403ac320cac767e43b55970b4f99dfaa298d7cf29f5f51552"
+    }
+  ]
+}

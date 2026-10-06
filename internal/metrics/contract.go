@@ -8,6 +8,10 @@ func Contract() map[string]Spec {
 	return map[string]Spec{
 		"co_signer_lifecycle_lock_held": plain(), "co_signer_reconciliation_duration_seconds": plain(), "co_signer_reconciliation_failures_total": plain(),
 		"co_signer_process_ready": plain(), "co_signer_signing_ready": plain(), "co_signer_provisioning_ready": plain(),
+		"co_signer_job_capacity": plain(),
+		"co_signer_admission_total": {Labels: map[string][]string{
+			"type": {"DKG", "SIGN"}, "outcome": {"admitted", "capacity_full", "preparams_unavailable"},
+		}},
 		"dkg_guard_occupied": plain(), "dkg_admission_open": plain(), "dkg_claim_conflicts_total": plain(),
 		"oldest_pending_dkg_age_seconds": plain(), "oldest_pending_sign_age_seconds": plain(),
 		"pending_batch_items":      {Labels: map[string][]string{"type": {"DKG", "SIGN"}}},

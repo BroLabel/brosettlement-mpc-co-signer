@@ -73,7 +73,7 @@ cd brosettlement-mpc-co-signer
 GOWORK=off go mod download
 mkdir -p bin
 GOWORK=off go build -trimpath \
-  -ldflags="-X main.version=${COSIGNER_VERSION#v}" \
+  -ldflags="-X main.version=${COSIGNER_VERSION#v} -X main.revision=$(git rev-parse HEAD)" \
   -o ./bin/co-signer ./cmd/co-signer
 ```
 
@@ -152,6 +152,16 @@ Run exactly one active Co-Signer installation per organization. Two
 installations using the same organization credentials can claim or replay the
 same work and cause a self-inflicted availability failure. During upgrades,
 stop the old process before starting the new one.
+
+### DKG readiness and time bounds
+
+After a claim, the Co-Signer polls until the monolith reports the exact
+authoritative `RUNNING` lifecycle before starting either local DKG party. Time
+spent queued in `PENDING` is therefore not MPC protocol idle time. Once the
+session is `RUNNING`, the signer watchdog measures missing MPC progress, while
+the immutable DKG session deadline remains the overall limit. A longer watchdog
+setting can accommodate normal startup and relay latency; it does not guarantee
+DKG completion under unlimited queueing or load.
 
 ## Configuration
 
@@ -254,3 +264,16 @@ report sensitive findings according to [SECURITY.md](SECURITY.md).
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
+
+## Network compatibility and MPC Core
+
+Co-Signer owns transaction intent validation, including the chain, sender,
+recipient, amount and digest. Protocol rules and golden vectors live here rather
+than in Core. Core accepts the verified digest and an opaque chain/context
+binding; it does not encode addresses or register networks. The existing v1
+context commitment is unchanged.
+
+DKG completion uses persisted share evidence and public keys. Core no longer
+returns a network address or reports `ErrMissingDKGAddress`. Upgrades preserve
+existing key shares and do not require another DKG. Signer and Co-Signer must pin
+the same reviewed Core revision, without local module replacements in builds.
