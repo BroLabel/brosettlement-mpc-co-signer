@@ -10,9 +10,9 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
 )
 
-const expectedApprovalProducerCommit = "804d3d5a043f1406174d8cbf8279a557ea8875ad"
-const expectedApprovalProducerSHA256 = "b53423ad56bb507365ac9a1e895e56db2a86fc536228055f239ac59f17a6d4b8"
-const expectedApprovalBundleIdentity = "x8rxBzjtwevbL4RMOQNkAUGqsDcDMH74zTNzTN2_ook"
+const expectedApprovalProducerCommit = "3ce3e8bbf3e2140e651e67f5fbd33603f7985463"
+const expectedApprovalProducerSHA256 = "cdf529d72e50a857e5c9db4f5823675cc95e09eb7c7492bf059c97542a39eabc"
+const expectedApprovalBundleIdentity = "swh_m0-Yrvbi7HnDxQ8GoXAha21AZpkco7g2_tfLaC8"
 
 type approvalManifest struct {
 	BundleVersion      int    `json:"bundleVersion"`
@@ -36,7 +36,7 @@ func VerifyApprovalBundle(root string) (string, error) {
 		if err := decodeClosed(raw, &m, []string{"bundleVersion", "producerRepository", "producerCommit", "producerPath", "producerSHA256", "schemaVersions", "files"}); err != nil {
 			return err
 		}
-		if m.BundleVersion != 1 || m.ProducerRepository != "https://github.com/BroLabel/back-end" || m.ProducerCommit != expectedApprovalProducerCommit || !gitCommitPattern.MatchString(m.ProducerCommit) || m.ProducerPath != "apps/client-api/src/transactions/approval/approval-corpus.ts" || m.ProducerSHA256 != expectedApprovalProducerSHA256 || m.SchemaVersions.Authorization != 1 || m.SchemaVersions.Receipt != 1 || m.SchemaVersions.PendingCursor != 1 {
+		if m.BundleVersion != 1 || m.ProducerRepository != "https://github.com/BroLabel/BroSettlement" || m.ProducerCommit != expectedApprovalProducerCommit || !gitCommitPattern.MatchString(m.ProducerCommit) || m.ProducerPath != "apps/client-api/src/transactions/approval/approval-corpus.ts" || m.ProducerSHA256 != expectedApprovalProducerSHA256 || m.SchemaVersions.Authorization != 1 || m.SchemaVersions.Receipt != 1 || m.SchemaVersions.PendingCursor != 1 {
 			return fmt.Errorf("invalid approval manifest provenance")
 		}
 		if len(m.Files) != 1 || m.Files[0].Path != "vectors.json" {
