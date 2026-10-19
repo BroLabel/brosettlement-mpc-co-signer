@@ -57,3 +57,11 @@ Detected missing dependencies or a single missing execution artifact fail closed
 ## Verification boundary
 
 Synthetic HTTP servers cover provider and backend transport behavior. Journal crash tests use subprocess termination after actual write/file-sync/create-only publication/directory-sync and receipt-send/ACK boundaries. Linux evidence requires executing the tests on a Linux filesystem, including container-native `/tmp`; macOS success or cross-compilation alone is not Linux proof. Process termination and syscall fault injection exercise recovery boundaries, but do not simulate physical power loss or establish a storage vendor's durability guarantees.
+
+## Coordinated local validation
+
+Task9 adds an explicitly required backend suite, `test/mpc-2of3/approval.external.e2e-spec.ts`, selected by `jest-approval-coordinated.json` through the existing owned disposable runner's `approval-full-e2e` mode. Its executed-result reporter rejects empty, skipped, failed or wrong-suite results. Harness unit tests alone do not prove cryptographic MPC or chain settlement.
+
+The macOS synthetic organization HTTPS proof uses a Go 1.27.2 Co-Signer executable and the standard `SSL_CERT_FILE` with `GODEBUG=x509sslcertoverrideplatform=1`. The module's minimum Go 1.24 and production configuration are unchanged. A Go 1.27 build-tagged default-transport subprocess test separately proves trusted CA success, wrong CA rejection and hostname rejection. These are standard verified trust roots, not an insecure TLS bypass. Report the actual build toolchain independently from minimum-toolchain race tests.
+
+The backend runbook `docs/runbooks/transfer-approval-rollout.md` specifies the controlled organization intake/legacy SIGN pause and drain required at cutover, supported mixed-version pairs, pending-hold cancellation, exact journal restore and prohibited double-old rollback. Never treat a local synthetic capability fixture as live enablement authority.

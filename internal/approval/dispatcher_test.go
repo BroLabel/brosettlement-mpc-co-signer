@@ -552,3 +552,47 @@ func TestPendingAndErrorsHaveNoTotalWaitingDeadline(t *testing.T) {
 		t.Fatal("unlimited waiting lost eventual decision")
 	}
 }
+
+// Logical time advances only inside the dispatcher; HTTP auth keeps trusted real time.
+func TestThirtyAnd365DayPendingSurvivesJournalReopen(t *testing.T) {
+	for _, days := range []int{30, 365} {
+		t.Run(fmt.Sprintf("days_%d", days), func(t *testing.T) {
+			c := testConfig(t)
+			c.Mode, c.Endpoint, c.BearerToken = "external", "https://org.test", "dedicated"
+			item := pendingItem(t, "aged-request")
+			start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+			item.CreatedAt = start.Format("2006-01-02T15:04:05.000Z")
+			b := &fakeBackend{page: func(string) (Page, error) { return Page{Version: 1, Items: []Item{item}}, nil }}
+			o := &fakeOrganization{status: "PENDING"}
+			d, j := makeDispatcher(t, c, b, o)
+			d.now = func() time.Time { return start }
+			if err := d.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if o.calls != 1 || len(b.delivered) != 0 {
+				t.Fatal("pending must not deliver a final decision")
+			}
+			if err := j.Close(); err != nil {
+				t.Fatal(err)
+			}
+			d, j = makeDispatcher(t, c, b, o)
+			d.now = func() time.Time { return start.AddDate(0, 0, days) }
+			if err := d.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			s, err := j.Load(c.OrgID, item.RequestID)
+			if err != nil || s.Admission == nil || s.Receipt != nil || o.calls != 2 || len(b.delivered) != 0 {
+				t.Fatal("age/reopen changed pending approval")
+			}
+			o.status = "APPROVED"
+			d.now = func() time.Time { return start.AddDate(0, 0, days).Add(time.Hour) }
+			if err := d.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			s, err = j.Load(c.OrgID, item.RequestID)
+			if err != nil || s.Receipt == nil || len(s.Application) == 0 || o.calls != 3 || len(b.delivered) != 1 {
+				t.Fatal("aged approval did not resume exactly once")
+			}
+		})
+	}
+}
