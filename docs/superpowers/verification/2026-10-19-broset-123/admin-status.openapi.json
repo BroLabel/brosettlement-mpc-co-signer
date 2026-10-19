@@ -1,0 +1,50 @@
+{
+  "openapi": "3.0.0",
+  "paths": {},
+  "info": {
+    "title": "Local admin status DTO schemas",
+    "description": "",
+    "version": "1",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "OrganizationCoSignerStatusDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ONLINE",
+              "STALE",
+              "OFFLINE"
+            ],
+            "description": "Heartbeat presence derived from mpc.co_signer_instances.last_seen_at"
+          },
+          "lastSeenAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Last co-signer heartbeat timestamp, or null when no heartbeat has been recorded"
+          },
+          "version": {
+            "type": "string",
+            "nullable": true
+          },
+          "revision": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "status",
+          "lastSeenAt",
+          "version",
+          "revision"
+        ]
+      }
+    }
+  }
+}

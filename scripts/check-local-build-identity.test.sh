@@ -13,7 +13,7 @@ revision=$(git -C "$TMP/repo" rev-parse HEAD)
 check_build() {
   local suffix=$1 output
   output=$(cd "$TMP/repo" && make --no-print-directory -n build)
-  for expected in "-X main.version=3.4.5-dev+${revision:0:12}$suffix" "-X main.revision=$revision"; do
+  for expected in "-X main.version=3.4.5-dev+${revision:0:12}$suffix " "-X main.revision=$revision\""; do
     if [[ "$output" != *"$expected"* ]]; then
       printf 'Missing build metadata: %s\nActual:\n%s\n' "$expected" "$output" >&2
       exit 1

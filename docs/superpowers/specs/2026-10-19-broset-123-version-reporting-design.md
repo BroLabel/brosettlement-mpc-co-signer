@@ -4,7 +4,7 @@ Date: 2026-10-19
 
 Issue: https://brolabel.atlassian.net/browse/BROSET-123
 
-Status: The user selected the existing polling transport, the existing single logical Co-Signer model, and explicit development versions for branch builds. This document specifies the resulting cross-repository contract; application implementation has not started.
+Status: Implemented across backend, Co-Signer and UI; locally verified on 2026-10-19. No release, shared migration or deployment has been performed. Actual container image/runtime equality remains pending after a local registry metadata fetch stalled. See [verification and release handoff](../verification/2026-10-19-broset-123/README.md) for source revisions, passing evidence and coverage limits.
 
 ## Goal
 

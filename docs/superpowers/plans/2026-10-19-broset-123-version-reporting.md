@@ -1,6 +1,6 @@
 # BROSET-123 Co-Signer Version Reporting Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Distinguish tagged and development Co-Signer builds and carry their identity through authenticated polling into persisted presence, both status APIs, and their existing UI surfaces.
 
@@ -50,7 +50,7 @@ Record actual command outcomes and any unavailable integration coverage. All com
 - Extend `findLatestHeartbeatByOrgAndParty()` result with required nullable `version` and `revision`.
 - Add `Mpc2of3Metrics.invalidCoSignerBuildMetadata(field: 'version' | 'revision'): void`.
 
-- [ ] **Step 1: Add failing normalization and polling tests.**
+- [x] **Step 1: Add failing normalization and polling tests.**
 
 Use this parser test as the initial behavior contract:
 
@@ -91,7 +91,7 @@ npm run test -w brosettlement-client-api -- --runInBand co-signer-build-identity
 
 Expected first outcome: new behavior assertions fail before implementation. Separate baseline/environment failures from those expected failures.
 
-- [ ] **Step 2: Add the nullable schema and migration.**
+- [x] **Step 2: Add the nullable schema and migration.**
 
 ```prisma
 version  String? @db.VarChar(128)
@@ -106,7 +106,7 @@ ALTER TABLE "mpc"."co_signer_instances"
 
 Build generated Prisma types locally with `npm run build -w @brosettlement/database`. Apply migration only to a disposable test database during this task.
 
-- [ ] **Step 3: Implement the pure parser and non-throwing HTTP boundary.**
+- [x] **Step 3: Implement the pure parser and non-throwing HTTP boundary.**
 
 ```ts
 import { isSemVer } from 'class-validator';
@@ -133,7 +133,7 @@ export function normalizeCoSignerBuildIdentity(query: Record<string, unknown>): 
 
 Bind `@Query() query: Record<string, unknown> = {}` on `getPendingIntents()`. Do not introduce a string/array-coercing DTO or throwing validation decorators. Add optional `ApiQuery` documentation for both fields. Pass only `{ orgId: this.requireOrgId(), ...normalizeCoSignerBuildIdentity(query) }` to the use case. Confirm repeated query keys arrive as arrays in a real Fastify/Nest request test rather than relying only on direct method calls.
 
-- [ ] **Step 4: Extend the existing upsert and read projection.**
+- [x] **Step 4: Extend the existing upsert and read projection.**
 
 At the existing heartbeat call, pass:
 
@@ -149,15 +149,15 @@ await this.instanceStore.upsertHeartbeat({
 
 Add those exact nullable properties to both Prisma `create` and `update`, and both `select` and the read return type. Keep one atomic upsert and the existing error propagation. Test create, changed revision, downgrade, null clearing, partial invalid metadata, and a second organization's independent row. Do not select the highest SemVer or preserve a field with `undefined` on update.
 
-- [ ] **Step 5: Add bounded diagnostics.**
+- [x] **Step 5: Add bounded diagnostics.**
 
 Register `Counter<'field'>` named `mpc_co_signer_build_metadata_invalid_total` in the existing metrics service. Its only label values are `version` and `revision`. Implement the public method with the existing `runSafely()` wrapper and increment once for each `input.invalidBuildFields ?? []` during polling. Extend `createMetrics()` in use-case tests with the new mocked method. Assert missing input does not count, invalid input counts, and metrics exceptions do not stop polling. Do not log raw metadata.
 
-- [ ] **Step 6: Verify persistence against a disposable PostgreSQL database.**
+- [x] **Step 6: Verify persistence against a disposable PostgreSQL database.**
 
 Use the repository's existing disposable database pattern in `apps/client-api/scripts/test-mpc-mailbox-postgres.mjs` when constructing a focused heartbeat suite; do not point the suite at a shared database. Exercise the real migration and `CoSignerInstanceStore` with successive writes: valid -> newer -> lower version -> null. Read after each write and assert timestamp and both metadata fields belong to the same poll, then verify another organization remains unchanged. Confirm an old insert that omits the new columns succeeds with both columns null. Record this evidence separately from mocked unit tests.
 
-- [ ] **Step 7: Run the targeted tests and commit the independently functional backend ingestion change.**
+- [x] **Step 7: Run the targeted tests and commit the independently functional backend ingestion change.**
 
 ```bash
 npm run test -w brosettlement-client-api -- --runInBand co-signer-build-identity co-signer.controller get-pending-intents.use-case co-signer-instance.store mpc-2of3-metrics.service
@@ -178,7 +178,7 @@ Commit message: `feat(mpc): persist co-signer build identity from signed polling
 
 **Interfaces:** Both serialized `coSigner` objects gain `version: string | null` and `revision: string | null`. Task 1's store result is the client input. Administrative queries read the same persisted columns directly.
 
-- [ ] **Step 1: Add failing serialization tests for client status, administrative list, and administrative detail.**
+- [x] **Step 1: Add failing serialization tests for client status, administrative list, and administrative detail.**
 
 In the existing heartbeat fixtures, supply version `2.1.1` and a 40-character revision, then assert the complete nested response contains them. Add these expected missing and offline cases:
 
@@ -193,13 +193,13 @@ expect(offlineResult.coSigner).toMatchObject({
 
 Assert legacy ONLINE rows expose explicit null fields and JSON serialization retains them. Retain existing threshold boundary tests and administrative query-count expectations.
 
-- [ ] **Step 2: Add metadata to both Swagger DTOs and response mappers.**
+- [x] **Step 2: Add metadata to both Swagger DTOs and response mappers.**
 
 Use `@ApiProperty({ type: String, nullable: true })` for each field. Extend client `GetMpcStatusResult.coSigner` and compose the existing status mapping with `heartbeat?.version ?? null` and `heartbeat?.revision ?? null`.
 
 For admin, define a heartbeat snapshot input containing `lastSeenAt: Date`, `version: string | null`, and `revision: string | null`. Change `mapCoSignerStatus()` to accept that snapshot or null, keeping thresholds unchanged. Change `loadCoSignerHeartbeats()` to return a `Map<string, Snapshot>` and select all three fields in the batch query. Pass full rows in detail and list mapping. Update every existing mapper caller/test; do not perform an extra database lookup for version.
 
-- [ ] **Step 3: Verify and commit.**
+- [x] **Step 3: Verify and commit.**
 
 ```bash
 npm run test -w brosettlement-client-api -- --runInBand get-mpc-status.use-case
@@ -227,7 +227,7 @@ Commit message: `feat(api): expose co-signer version in presence responses`.
 
 ### Build identity subtask
 
-- [ ] **Step A: Add failing release identity assertions.**
+- [x] **Step A: Add failing release identity assertions.**
 
 Extend the existing shell test immediately after each corresponding `check()` call:
 
@@ -245,7 +245,7 @@ expect_line "$output" "revision=$production"
 
 Retain the existing RC expectation `version=3.4.5-rc.1`. Add a real tag at the production fixture commit, then assert a subsequent main-branch check at that same commit still returns a development version. Add rejection cases for malformed full revisions on branch inputs. Run `./scripts/check-release-identity.test.sh` and observe the new branch-version assertions fail before implementation.
 
-- [ ] **Step B: Resolve development versions in the existing publication script.**
+- [x] **Step B: Resolve development versions in the existing publication script.**
 
 Validate `REVISION` with `^[0-9a-f]{40}$` before the publication case statement. Change only the branch cases to:
 
@@ -262,7 +262,7 @@ refs/heads/eks-staging)
 
 Keep the tagged cases, existing branch ownership checks, full revision output, image aliases, and release publication rules. Do not derive branch identity with `git describe` or the highest tag; the trigger ref determines the build class. The workflow already forwards resolved outputs to Docker build arguments and OCI labels, so reuse that path rather than constructing another version value in YAML.
 
-- [ ] **Step C: Align the local build entry point and documentation.**
+- [x] **Step C: Align the local build entry point and documentation.**
 
 Update the Makefile's identity variables so `make build` is explicitly a development build. Resolve `REVISION` before the version expression and use the same first 12 characters, not a potentially longer unique abbreviation:
 
@@ -280,7 +280,7 @@ In `build_identity_test.go`, add an assertion that `resolveBuildIdentity("2.2.0-
 
 ### Polling transport subtask
 
-- [ ] **Step 1: Add a failing transport test using the existing signature helper.**
+- [x] **Step 1: Add a failing transport test using the existing signature helper.**
 
 Create a test client with the optional identity, return the existing listing fixture from an HTTP test server, and make two `ListActionableIntents()` calls. On each request assert:
 
@@ -307,7 +307,7 @@ if verifyRequestSignature(t, tampered, publicKey, "") {
 
 Obtain the key using the existing `newTestClient()` helper, or extend that helper to forward optional identity values without changing existing callers. Table-test stable, RC, branch `2.2.0-dev+0123456789ab`, local development, no identity, and revision `unknown`. Keep strict response fixture assertions.
 
-- [ ] **Step 2: Build the encoded request target before existing request signing.**
+- [x] **Step 2: Build the encoded request target before existing request signing.**
 
 ```go
 type BuildIdentity struct {
@@ -333,7 +333,7 @@ func (c *Client) discoveryPath() string {
 
 Use this path in `ListActionableIntents()`. Add the `net/url` import where this method lives. Populate the client copy from the optional constructor identity. In `resources.go`, use `monolith.New(cfg.MonolithURL, cfg.APIKeyID, privateKey, cfg.HTTPTimeout, monolith.BuildIdentity{Version: version, Revision: revision})`. Do not add identity to listing responses or unrelated signing requests.
 
-- [ ] **Step 3: Verify and commit.**
+- [x] **Step 3: Verify and commit.**
 
 ```bash
 GOWORK=off go test ./internal/monolith ./cmd/co-signer ./internal/health
@@ -357,7 +357,7 @@ Commit message: `feat(co-signer): report build identity in signed polling`.
 
 **Interfaces:** Consume the new API fields as nullable values. UI normalization must also accept absent fields from old APIs. Extend `MpcCoSignerHealth` with required nullable `version` and `revision`; retain its existing status and timestamp fields and update fixtures accordingly.
 
-- [ ] **Step 1: Add failing behavioral UI tests.**
+- [x] **Step 1: Add failing behavioral UI tests.**
 
 Use the existing `statusData()`/`renderCard()` fixture in the readiness card tests. For ONLINE `2.1.1`, assert `Version 2.1.1`; for null/absent metadata, assert `Version unknown`. For OFFLINE with version `2.1.1`, assert the version is retained. For branch version `2.2.0-dev+0123456789ab`, assert the full version including `-dev` is rendered as text; retain coverage for the local `dev+...` form. Assert existing initialization eligibility is unchanged by version.
 
@@ -377,7 +377,7 @@ expect(screen.getByText('0123456789ab')).toBeTruthy();
 
 Add equivalent known/unknown tests for the admin section and tooltip. Extend normalization tests to cover explicit null and missing fields without changing health classification.
 
-- [ ] **Step 2: Regenerate types from local APIs built with Task 2.**
+- [x] **Step 2: Regenerate types from local APIs built with Task 2.**
 
 The current generation scripts use local client Swagger on port 8080 and admin Swagger on port 7070:
 
@@ -388,7 +388,7 @@ npm run generate-types:admin
 
 Use isolated local API configuration, not shared runtime dependencies. If those services cannot run, export the same Swagger schemas from the changed backend's local application/test setup and pass the exported files to the installed `openapi-typescript` tool. Do not regenerate from a deployed old API or manually pretend generated types came from the changed schema. Inspect generated diffs for unrelated API drift.
 
-- [ ] **Step 3: Extend normalization and render the fields.**
+- [x] **Step 3: Extend normalization and render the fields.**
 
 Initialize unknown fields to null and normalize them explicitly:
 
@@ -414,7 +414,7 @@ Use existing translations for presence; add version copy separately. Display `re
 
 Use each application's existing translation namespace. Client English copy is `Version {{version}}`, `Version unknown`, and `Revision`; Ukrainian is `Версія {{version}}`, `Версія невідома`, and `Коміт`; Russian is `Версия {{version}}`, `Версия неизвестна`, and `Коммит`. Add these strings to all three client catalogs and English strings to the admin catalog. This task specifically includes localization of UI copy.
 
-- [ ] **Step 4: Verify tests, types, and visual placement; commit.**
+- [x] **Step 4: Verify tests, types, and visual placement; commit.**
 
 ```bash
 npm run test -w @brosettlement/client -- src/pages/mpc/components/mpc-readiness-utils.test.ts src/pages/mpc/components/mpc-readiness-card.test.tsx src/pages/organization-setup/onboarding-derive.test.ts
@@ -428,14 +428,16 @@ Commit message: `feat(ui): display reported co-signer version and revision`.
 
 ## Task 5: Review integration and document release handoff
 
-- [ ] Verify the backend still returns the exact pending-intent response fixture and that signature verification covers encoded query parameters end to end.
+- [x] Verify the backend still returns the exact pending-intent response fixture and that signature verification covers encoded query parameters end to end.
 - [ ] Verify tagged builds retain the exact GitHub tag version without `v`, branch builds retain their `-dev+<12-character SHA>` suffix, and full `revision` agrees with the build source. Compare resolved build output, OCI labels, and the identity used by health and polling.
-- [ ] Verify an old client can poll the new backend, overwriting a previous metadata observation with null while presence stays ONLINE.
-- [ ] Verify a new client can poll an old backend: extra query fields must be ignored and exact signature validation must still succeed. Preserve errors if that test exposes a compatibility issue; do not weaken signing validation.
-- [ ] Verify both status APIs and UI display a lower version after a reporting client rollback, and unknown after a legacy client rollback.
-- [ ] Review the final diffs for unintended changes to MPC admission, key operations, API credentials, release publishing, and other user work.
-- [ ] Report which tests actually passed and any remaining coverage limitations. Keep migration, source review, release publication, deployment, and live version readback as separate evidence.
-- [ ] Prepare the backend -> UI -> Co-Signer installation handoff using the design's rollout/rollback section. Updating Jira, publishing releases, merging, or deploying remains a separate requested action.
+- [x] Verify an old client can poll the new backend, overwriting a previous metadata observation with null while presence stays ONLINE.
+- [x] Verify a new client can poll an old backend: extra query fields must be ignored and exact signature validation must still succeed. Preserve errors if that test exposes a compatibility issue; do not weaken signing validation.
+- [x] Verify both status APIs and UI display a lower version after a reporting client rollback, and unknown after a legacy client rollback.
+- [x] Review the final diffs for unintended changes to MPC admission, key operations, API credentials, release publishing, and other user work.
+- [x] Report which tests actually passed and any remaining coverage limitations. Keep migration, source review, release publication, deployment, and live version readback as separate evidence.
+- [x] Prepare the backend -> UI -> Co-Signer installation handoff using the design's rollout/rollback section. Updating Jira, publishing releases, merging, or deploying remains a separate requested action.
+
+Build-identity status: tag/branch/local resolver and health/polling tests passed; OCI label/build-argument wiring was source-reviewed. The actual Dockerfile build stalled fetching base-image registry metadata and was canceled. Image/runtime label equality remains pending before release. Other completed boxes refer to the local and component evidence in [verification and handoff](../verification/2026-10-19-broset-123/README.md), not deployment proof.
 
 ## Plan self-review
 
