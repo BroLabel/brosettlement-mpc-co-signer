@@ -2,9 +2,11 @@
 
 Date: 2026-10-11
 Updated: 2026-10-19 — user approved and this revision incorporates review remedies R1–R3 and simplification S1; all six v1 product decisions remain unchanged.
-Status: **DESIGN DECISIONS APPROVED — documentation only; implementation not started**
+Status: **DESIGN DECISIONS APPROVED / IMPLEMENTATION AUTHORIZED — PLAN-STEP-000 prepared; feature implementation remains unchecked**
 Supersedes: the earlier conversation proposal to reserve principal after approval.
-Scope: backend + customer-hosted Co-Signer; documentation only in this change.
+Scope: backend + customer-hosted Co-Signer. On 2026-10-19 the user authorized implementation and isolated local tests; deployment, production mutations and shared-branch pushes remain outside authorization. PLAN-STEP-000 changes documentation only.
+
+Reviewed decision revision: commit `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a`, DESIGN SHA-256 `6f2003b182a3df0d0b6a7fa58a6fc6f6a155022e84531d6d248b976f65b30d9b`. That commit preserves the exact previously reviewed DESIGN/PLAN and both historical review reports. Its docs-only/unstarted statements describe that historical review snapshot. The current preparation records wire details in [contracts v1](2026-10-19-co-signer-approval-contracts.md); controller review of those technical rulings follows preparation.
 
 ## Context and problem
 
@@ -43,7 +45,7 @@ Not in scope:
 - Changing MPC algorithms, key-share custody, DKG, or chain-scanner behavior.
 - Automatic replacement transactions, fee bumping, or recovery of ambiguous broadcasts.
 - Fee-after-approval mode, automatic fee top-ups, and a WAITING_FOR_FEE workflow.
-- Implementing the selected policy in this documentation-only change.
+- Feature implementation within PLAN-STEP-000; subsequent unchecked plan steps implement the selected policy under the new authorization.
 - Production configuration changes, funding, migrations, releases, or deployments.
 
 ## Requirements
@@ -73,7 +75,7 @@ Not in scope:
 
 ## Human decisions
 
-The user approved all six v1 decisions on 2026-10-19 and explicitly confirmed that Co-Signer polls the organization API only when requests await approval. The decisions below are normative. Design approval does not change the current documentation-only task scope.
+The user approved all six v1 decisions on 2026-10-19 and explicitly confirmed that Co-Signer polls the organization API only when requests await approval. The decisions below are normative. That design review was documentation-only; the user has since authorized implementation and isolated local tests. This preparation step still changes documentation only.
 
 | ID | State / owner | Decision and alternatives |
 | --- | --- | --- |
@@ -88,7 +90,7 @@ The user approved all six v1 decisions on 2026-10-19 and explicitly confirmed th
 | DECISION-009 | Confirmed / user (2026-10-19) | Retry known temporary failures with the same holds. Terminalize proven non-execution and release holds atomically; after outgoing activation use its existing lifecycle. Unknown broadcast outcome retains funds for reconciliation. The approved over-cap treatment is terminal failure of this request, followed by a new authorization if needed. |
 | DECISION-010 | Confirmed / user (2026-10-19) | One approval authorizes one transfer and, before MPC, one immutable outgoing/byte sequence/digest. No automatic replacement under that approval. Retries may redeliver the same receipt/transaction only under existing execution ownership rules. |
 
-All six v1 decisions are approved. On 2026-10-19 the user also approved R1–R3 and S1 from the source-backed review: durable outgoing-to-SIGN recovery, atomic pre-activation ledger terminalization, fresh-pending-page polling, and derived execution status. These are normative refinements of the existing decisions, not additional product modes. This revision changes documentation only.
+All six v1 decisions are approved. On 2026-10-19 the user also approved R1–R3 and S1 from the source-backed review: durable outgoing-to-SIGN recovery, atomic pre-activation ledger terminalization, fresh-pending-page polling, and derived execution status. These are normative refinements of the existing decisions, not additional product modes. PLAN-STEP-000 adds the contract freeze without implementing feature behavior; later implementation is now authorized.
 
 ### Network-fee policy — selected: reserve the ceiling at creation
 
@@ -197,7 +199,7 @@ Reuse `POST /api/v1/transactions`: validate terms and explicit fee ceiling, atom
 
 `GET /transactions/:id` and list results must resolve both approval-origin and legacy outgoing-origin records. Do not implement the old controller lookup through a nonexistent outgoing.
 
-Proposed cancellation endpoint: `POST /api/v1/transactions/:id/cancel`, authenticated and authorized for the organization's withdrawal management. Its exact RBAC scope must follow the existing role model during contract approval. Success requires an atomic PENDING_APPROVAL/APPROVED-to-CANCELLED transition with no activated outgoing and release of both holds; repeated cancellation returns the same outcome. An activated outgoing returns 409 without releasing funds. If approval had already been applied, preserve that receipt and append the cancellation event rather than rewriting the receipt or its original application history.
+Cancellation endpoint: `POST /api/v1/transactions/:id/cancel`, authenticated and tenant-scoped, requiring existing `RbacScopes.withdrawals.revoke` (`withdrawals:revoke`) under the existing guards. No new scope or role grant is added. Exact request/response/error forms are pinned in [contracts v1](2026-10-19-co-signer-approval-contracts.md). Success requires an atomic PENDING_APPROVAL/APPROVED-to-CANCELLED transition with no activated outgoing and release of both holds; repeated cancellation returns the same outcome. An activated outgoing returns 409 without releasing funds. If approval had already been applied, preserve that receipt and append the cancellation event rather than rewriting the receipt or its original application history.
 
 ### Co-Signer platform API
 
@@ -391,4 +393,4 @@ Detailed named tests and requirement mappings are in the companion plan. No test
 
 ## Structural readiness
 
-The design uses `feature-artifact-contract` (DESIGN); all mandatory categories are present and the six v1 decisions were approved by the user on 2026-10-19. Pending-only organization polling is recorded in REQ-004, DECISION-007, the organization API contract, the wait flow, and AC-003. No product decision among those six remains open. A Git revision still needs to be pinned for plan execution. R1–R3 and S1 were explicitly approved and incorporated on 2026-10-19; see the companion plan for repeat-review evidence. This is authoring/decision evidence, not implementation, executed feature tests or deployment evidence.
+The design uses `feature-artifact-contract` (DESIGN); all mandatory categories are present and the six v1 decisions were approved by the user on 2026-10-19. Pending-only organization polling is recorded in REQ-004, DECISION-007, the organization API contract, the wait flow, and AC-003. No product decision among those six remains open. The exact reviewed decision revision is now pinned by commit `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a`; PLAN-STEP-000 records the concrete contract document and frozen vector IDs. The vector registry specifies future fixtures and does not claim they exist. R1–R3 and S1 were explicitly approved and incorporated on 2026-10-19; see the companion plan for repeat-review evidence. This is authoring/decision evidence, not implementation, executed feature tests or deployment evidence.

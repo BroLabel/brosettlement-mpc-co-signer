@@ -2,7 +2,7 @@
 
 Updated: 2026-10-19 — user-approved R1–R3 and S1 incorporated; repeat source-backed engineering review completed with no remaining findings. All six v1 product decisions remain unchanged.
 
-> **For agentic workers:** When implementation is requested, use `superpowers:subagent-driven-development` or `superpowers:executing-plans` task by task. The six design decisions are approved; pin the approved design revision before execution. This turn records documentation only. Checkbox steps describe future work, not work performed in this task.
+> **For agentic workers:** Implementation and isolated local tests are now authorized. Execute task by task under the binding implementation constraints. The user forbids review subagents; the controller performs task/final review. Implementation subagents use GPT-6.1 Sol medium (xhigh for complex work), with no nested subagents. PLAN-STEP-000 is documentation preparation; later unchecked steps and their fixtures/tests remain future work. No push, merge or deployment is authorized.
 
 **Goal:** Immediately reserve transfer principal and an explicit network-fee ceiling, support durable unlimited external/automatic approval, and execute at most one fresh, verified transfer without duplicate reserves or releases.
 
@@ -14,7 +14,7 @@ Updated: 2026-10-19 — user-approved R1–R3 and S1 incorporated; repeat source
 
 ## Global constraints
 
-- Documentation only has been authorized; no production implementation, test execution, migration, release, or deployment is part of this task.
+- Implementation and isolated local tests were authorized on 2026-10-19. PLAN-STEP-000 performs documentation preparation only; production mutations, deployment and shared-branch pushes are not authorized.
 - Principal and the explicit fee ceiling are reserved atomically at request creation; activation does not release/re-reserve, top up or shrink either hold.
 - PENDING_APPROVAL has no expiration or maximum age; before approve there is no raw transaction, nonce allocation, outgoing execution row, SIGN intent/session, or SIGN permit.
 - External API errors never authorize signing. Auto approval must be explicitly configured and recorded. Each new external call requires a freshly discovered, unresolved, due PENDING_APPROVAL item; cached local records cannot schedule calls during discovery failure or after cancellation. Idle and auto_approve produce zero organization calls.
@@ -23,21 +23,24 @@ Updated: 2026-10-19 — user-approved R1–R3 and S1 incorporated; repeat source
 - Request status is PENDING_APPROVAL | APPROVED | REJECTED | CANCELLED | PREPARATION_FAILED. After outgoing creation it stays APPROVED; execution status/error comes only from outgoing. PREPARATION_FAILED requires no outgoing.
 - Before outgoing creation, terminal request/debit/expected-credit transitions, history and both hold releases are one transaction. After outgoing creation, the existing outgoing lifecycle is the sole refund owner, including handoff failure.
 - New public/config/wire contracts must be versioned/documented and tested on both sides; old paths cannot bypass approval for enabled organizations.
-- Commit messages use Conventional Commits with DCO sign-off when implementation is eventually authorized.
+- Local feature commits use Conventional Commits with DCO sign-off. Backend changes are confined to `/Users/vlas/Work/BroLabel/back-end/.worktrees/co-signer-approval`; never edit the primary backend checkout.
 
 ## Design reference and readiness
 
-This plan follows the v1 design decisions approved by the user on 2026-10-19, including pending-only organization API polling, and the subsequently approved R1–R3/S1 review corrections. The approved document has not yet been pinned to a Git commit; do not substitute the source baselines below for that design revision. Implementation has not been requested in this documentation update.
+This plan follows the v1 design decisions approved by the user on 2026-10-19, including pending-only organization API polling, and the subsequently approved R1–R3/S1 review corrections. The exact reviewed DESIGN and PLAN, including their existing historical review evidence, are pinned at commit `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` (`docs(mpc): specify durable co-signer approvals`, DCO signed). The current authorization supersedes that snapshot's docs-only/unstarted scope statements. Source baselines below identify source feasibility, not the approved DESIGN revision.
 
 - Co-Signer source baseline: `5df5ac25953debeb94f2c37d89a2ad458a73057c`.
 - Backend source baseline: `e14e175ff5fb2974907bcd5efd123d20425a5001`.
-- Before execution, PLAN-STEP-000 records the Git revision of the already approved design; no repeat approval of the six decisions is required. If later work needs a new design-level decision, use `DESIGN_REOPEN_REQUIRED` with affected IDs rather than silently inventing it here.
+- Reviewed DESIGN SHA-256 at the pinned commit: `6f2003b182a3df0d0b6a7fa58a6fc6f6a155022e84531d6d248b976f65b30d9b`; reviewed PLAN SHA-256: `3948daacb72f0f1a4ba31b0cf96d578ee31d34d51f351a88c60b3ca4682292e9`. Historical review fingerprints apply to that commit, not subsequent preparation edits.
+- Concrete normative wire schemas: [contracts v1](../specs/2026-10-19-co-signer-approval-contracts.md), including AuthorizationV1, signed DecisionEnvelopeV1/receipt, public cap/projections/cancel, pending page and existing authenticated cursor, organization request/response, four decision outcomes, v2 SIGN claim and trusted config/admission. RULING-001–006 are technical choices for controller review, not new product modes.
+- Frozen vector IDs: `APPROVAL-V1-001` through `APPROVAL-V1-020`, exactly as defined by that contract registry. These are reserved specification IDs only; no fixture manifest, signatures, raw-byte vectors or passing feature tests exist yet. STEP-001 must generate producer/version evidence; STEP-006 must verify actual supported raw bytes.
+- PLAN-STEP-000 pins the already approved decisions; no repeat product approval is required. If later work needs a new design-level decision, use `DESIGN_REOPEN_REQUIRED` with affected IDs rather than silently inventing it here.
 
 Inventory: REQ-001 through REQ-013; INV-001 through INV-015; ASSUMPTION-001 through ASSUMPTION-004; DECISION-001 through DECISION-010; RISK-001 through RISK-007. The requirement mapping and decision dispositions below cover these sets.
 
 ## Responsibility map
 
-All `backend:` paths are relative to `/Users/vlas/Work/BroLabel/back-end`; all `cosigner:` paths are relative to `/Users/vlas/.codex/worktrees/2c85/mpc-co-signer`. Exact new filenames are proposed; existing paths were inspected. Keep normal repository/module DI boundaries.
+All `backend:` paths for implementation are relative to `/Users/vlas/Work/BroLabel/back-end/.worktrees/co-signer-approval`; all `cosigner:` paths are relative to `/Users/vlas/.codex/worktrees/2c85/mpc-co-signer`. Exact new filenames are proposed; existing paths were inspected. Keep normal repository/module DI boundaries.
 
 | Owner / files | Responsibility and dependencies |
 | --- | --- |
@@ -98,7 +101,7 @@ Assumption validation: 001 → STEP-006/TEST-017 against all supported chain fix
 
 ## Implementation steps
 
-All steps below are planned. For each implementation unit use RED → verify the intended failure → minimal GREEN → verify behavior → bounded refactor → signed-off Conventional Commit. Do not run integration commands against live databases or funded networks. Do not write production code from this draft before PLAN-STEP-000.
+PLAN-STEP-000 is completed preparation, subject to controller review; PLAN-STEP-001–008 remain planned. For each implementation unit use RED → verify the intended failure → minimal GREEN → verify behavior → bounded refactor → signed-off Conventional Commit. Do not run integration commands against live databases or funded networks. Begin feature implementation only after the controller reviews the PLAN-STEP-000 contract rulings; no feature behavior is implemented by this preparation.
 
 ### PLAN-STEP-000 — Pin the approved design and contracts
 
@@ -107,12 +110,12 @@ Sources: DECISION-005–010; RISK-001/002/005; compatibility obligations.
 - [x] User approved fee ceiling at creation, required request cap, cancellation before outgoing activation, and over-cap failure without top-ups on 2026-10-19.
 - [x] User approved outbound organization API polling for pending requests, immutable ledger lineage, failure ownership and one-digest binding on 2026-10-19.
 - [x] User approved R1–R3 and S1: explicit durable SIGN handoff, full pre-activation ledger terminalization, fresh-page polling, and derived execution state; incorporated in both documents.
-- [ ] Map the cancellation endpoint to the existing withdrawal-management RBAC scope; do not broaden permissions.
-- [ ] Record the reviewed DESIGN commit, exact request/receipt/claim/config/API schemas and frozen test-vector IDs in this plan. Do not mark unresolved choices as defaults.
-- [ ] Recheck both repository heads and applicable AGENTS instructions. Keep unrelated backend plan/spec files out of feature changes.
-- [ ] Pin the already approved design/plan with a documentation commit when preparing execution: `docs(mpc): specify durable co-signer approvals`.
+- [x] Map cancellation to existing `RbacScopes.withdrawals.revoke` (`withdrawals:revoke`), retaining org checks and existing guards; no new scope/role grant. Evidence: backend `apps/client-api/src/security/rbac/rbac-scopes.constants.ts:46` and current transaction/Co-Signer controllers. Exact contracts are in the normative contract document.
+- [x] Record reviewed DESIGN commit `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a`, [contracts v1](../specs/2026-10-19-co-signer-approval-contracts.md), and frozen IDs `APPROVAL-V1-001`–`APPROVAL-V1-020` above. No fixture/test implementation is claimed. Controller reviews RULING-001–006 before STEP-001; no approved product decision was reopened.
+- [x] Recheck isolated feature branches and source HEADs against the two baselines above. Both matched before preparation. Applicable instructions: `/Users/vlas/.codex/AGENTS.md` (Russian progress/English docs), isolated backend `AGENTS.md` (Chain Tracker rules only if that subsystem is touched); no local Co-Signer AGENTS.md found. No Chain Tracker source/config is changed. Backend worktree and primary checkout are unchanged; unrelated backend plan/spec files are excluded.
+- [x] Pin the exact already reviewed DESIGN/PLAN and both historical review reports with local signed-off commit `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a`: `docs(mpc): specify durable co-signer approvals`. Source baseline is unchanged; no push/merge/deployment.
 
-Deliverable: an executable plan tied to one reviewed design revision. Fee timing is resolved. Design acceptance is recorded; a pinned revision remains preparation for implementation, which the user has not requested.
+Deliverable: plan tied to the exact reviewed decision revision, concrete wire schemas, cancellation scope and frozen vector IDs. Implementation and isolated tests are now authorized; this step supplies preparation only. Controller review is the next gate before STEP-001. Feature steps/fixtures/tests remain unchecked.
 
 ### PLAN-STEP-001 — Add durable approval identity and protocol fixtures
 
@@ -320,9 +323,11 @@ Backend 005 and the backend portion of 006 both touch SIGN creation/claim contra
 
 ## Structural readiness
 
-Status: **DESIGN_APPROVED / ENGINEERING_REVIEW_CLEARED / REVISION_PIN_PENDING**. User-approved R1–R3/S1 are now incorporated into the normative design and implementation steps. All six v1 decisions remain approved. The approved DESIGN Git revision still needs to be pinned in STEP-000 before future implementation. No feature code, migrations, tests or deployments were executed.
+Status: **DESIGN_APPROVED / REVIEWED_REVISION_PINNED / PLAN-STEP-000_PREPARED / CONTROLLER_REVIEW_PENDING**. User-approved R1–R3/S1 and all six v1 decisions are preserved. Reviewed revision `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` preserves prior evidence; current exact wire rulings are documented separately. No feature code, migrations, fixtures or feature tests were implemented/executed by STEP-000. Implementation and isolated tests are authorized for subsequent reviewed tasks.
 
 ## GSTACK REVIEW REPORT
+
+**Historical review snapshot:** the following report and its docs-only/unstarted/remaining-preparation statements describe the exact DESIGN/PLAN committed at `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a`, before the user authorized implementation and before STEP-000. They are preserved as evidence, superseded for current preparation status by the sections above. Both standalone review files remain byte-for-byte unchanged. Their hashes are not claims about the subsequently edited current documents.
 
 Repeat review: 2026-10-19, after the user authorized incorporation of R1–R3 and S1. Result: **no remaining findings in the revised design/plan**. This clears the reviewed documentation; it is not feature implementation, executed-test or deployment evidence.
 
