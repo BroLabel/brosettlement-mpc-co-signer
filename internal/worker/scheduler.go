@@ -20,6 +20,7 @@ type pendingClient interface {
 }
 
 type SchedulerConfig struct {
+	AuthorizeSign      func(context.Context, monolith.Intent) error
 	MinInterval        time.Duration
 	MaxInterval        time.Duration
 	BackoffFactor      float64
@@ -311,7 +312,9 @@ func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, p
 	go func() {
 		defer s.sessions.Done()
 		defer releaseIntent()
-		runSessionWithPermits(
+		clock := realReadinessClock()
+		clock.authorize = s.cfg.AuthorizeSign
+		runSessionWithClock(
 			ctx,
 			intent,
 			s.client,
@@ -323,6 +326,7 @@ func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, p
 			permits,
 			s.log,
 			func() { close(claimDispatched) },
+			clock,
 		)
 	}()
 	return claimDispatched

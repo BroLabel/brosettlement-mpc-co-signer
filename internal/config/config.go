@@ -19,6 +19,7 @@ const (
 
 type Config struct {
 	Approval                       *approval.Config
+	TronApprovalRPCEndpoints       map[string]string
 	MonolithURL                    string
 	APIKeyID                       string
 	APIPrivateKey                  string
@@ -138,6 +139,15 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.Approval = &a
+	}
+	cfg.TronApprovalRPCEndpoints = make(map[string]string)
+	for chain, name := range map[string]string{"tron:mainnet": "CO_SIGNER_APPROVAL_TRON_MAINNET_RPC_URL", "tron:nile": "CO_SIGNER_APPROVAL_TRON_NILE_RPC_URL"} {
+		if value := os.Getenv(name); value != "" {
+			cfg.TronApprovalRPCEndpoints[chain] = value
+		}
+	}
+	if _, err := approval.NewTronNetworkChecker(cfg.TronApprovalRPCEndpoints, cfg.HTTPTimeout, nil); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }

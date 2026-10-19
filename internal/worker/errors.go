@@ -7,6 +7,7 @@ import (
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 )
 
@@ -33,7 +34,7 @@ func BuildResult(runErr error, sessionCtx context.Context) monolith.IntentResult
 		return failedResult(ErrorCodeSessionTimeout, runErr)
 	case errors.Is(runErr, context.Canceled):
 		return failedResult(ErrorCodeWorkerShutdown, runErr)
-	case errors.Is(runErr, errInvalidIntent),
+	case errors.Is(runErr, errInvalidIntent), errors.Is(runErr, signingpolicy.ErrPrepared), errors.Is(runErr, signingpolicy.ErrNetworkMismatch),
 		errors.Is(runErr, coretss.ErrInvalidSessionDescriptor),
 		errors.Is(runErr, coretss.ErrLocalPartyRequired),
 		errors.Is(runErr, coretss.ErrTransportRequired),

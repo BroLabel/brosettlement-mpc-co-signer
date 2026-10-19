@@ -41,6 +41,7 @@ func TestClaimPolicyRejectionDeliversWithoutReclaim(t *testing.T) {
 				t.Fatal(err)
 			}
 			deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+			wire["version"], wire["approval"], wire["prepared"] = 2, nil, nil
 			wire["deadline"] = deadline.Format(time.RFC3339)
 			wire["session"].(map[string]any)["deadline"] = wire["deadline"]
 			wire["payload"].(map[string]any)["policyContext"].(map[string]any)["toAddress"] = "0x222222222222222222222222222222222222222A"
@@ -142,6 +143,7 @@ func TestClaimRejectionDoesNotAdoptUnverifiedIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+			wire["version"], wire["approval"], wire["prepared"] = 2, nil, nil
 			wire["deadline"] = deadline.Format(time.RFC3339)
 			wire["session"].(map[string]any)["deadline"] = wire["deadline"]
 			raw, _ = json.Marshal(wire)
@@ -159,6 +161,7 @@ func TestClaimRejectionDoesNotAdoptUnverifiedIdentity(t *testing.T) {
 				wire["sessionId"] = "unrelated-session"
 				wire["session"].(map[string]any)["sessionId"] = "unrelated-session"
 			case "deadline":
+				wire["version"], wire["approval"], wire["prepared"] = 2, nil, nil
 				wire["deadline"] = deadline.Add(time.Second).Format(time.RFC3339)
 				wire["session"].(map[string]any)["deadline"] = wire["deadline"]
 			case "org":

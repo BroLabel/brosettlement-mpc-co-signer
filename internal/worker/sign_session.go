@@ -12,6 +12,7 @@ import (
 )
 
 type readinessClock struct {
+	authorize func(context.Context, monolith.Intent) error
 	// Scheduling at this boundary cannot authorize execution; Dispatch always
 	// arbitrates against transport stop after the scheduling callback returns.
 	beforeDispatch func(*transport.HTTPTransport)

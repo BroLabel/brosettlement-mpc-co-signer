@@ -23,7 +23,11 @@ func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (
 	if err != nil {
 		return ClaimResult{}, err
 	}
-	path := "/api/v1/co-signer/intents/" + pathType + "/" + url.PathEscape(intentID) + "/claim"
+	version := "v1"
+	if pathType == "sign" {
+		version = "v2"
+	}
+	path := "/api/" + version + "/co-signer/intents/" + pathType + "/" + url.PathEscape(intentID) + "/claim"
 	var out ClaimResult
 	if err := c.doJSONAttempts(ctx, http.MethodPost, path, nil, intentID, &out, http.StatusOK, 1); err != nil {
 		switch {
@@ -32,7 +36,7 @@ func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (
 		case statusCode(err) == http.StatusNotFound:
 			return ClaimResult{}, ErrNotFound
 		case isAmbiguous(err), statusCode(err) >= 500, errors.Is(err, context.Canceled):
-			return ClaimResult{}, ErrClaimOutcomeUnknown
+			return ClaimResult{}, errors.Join(ErrClaimOutcomeUnknown, err)
 		default:
 			return ClaimResult{}, err
 		}
@@ -55,6 +59,9 @@ func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (
 }
 
 func validateClaimEnvelope(claim ClaimResult, expectedType string) error {
+	if expectedType == "SIGN" && (claim.Type != "SIGN" || claim.Version != 2) {
+		return ErrClaimEnvelopeInvalid
+	}
 	if claim.SessionID == "" {
 		return errors.New("claim session identity is required")
 	}

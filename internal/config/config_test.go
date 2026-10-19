@@ -261,3 +261,41 @@ func TestApprovalRejectsCanonicalShareDirectoryOverlap(t *testing.T) {
 		t.Fatal("canonical share/journal overlap accepted")
 	}
 }
+
+func TestTrustedTronApprovalEndpointsRemainExplicitAndBounded(t *testing.T) {
+	for _, name := range []string{"legacy-zero-timeout", "configured-zero-timeout", "configured-https", "configured-http"} {
+		t.Run(name, func(t *testing.T) {
+			setRequiredEnv(t)
+			t.Setenv("CO_SIGNER_APPROVAL_TRON_MAINNET_RPC_URL", "")
+			t.Setenv("CO_SIGNER_APPROVAL_TRON_NILE_RPC_URL", "")
+			if name == "legacy-zero-timeout" || name == "configured-zero-timeout" {
+				t.Setenv("CO_SIGNER_HTTP_TIMEOUT", "0s")
+			}
+			if name == "configured-zero-timeout" || name == "configured-https" {
+				t.Setenv("CO_SIGNER_APPROVAL_TRON_NILE_RPC_URL", "https://synthetic.example/nile?credential=synthetic-secret")
+			}
+			if name == "configured-http" {
+				t.Setenv("CO_SIGNER_APPROVAL_TRON_NILE_RPC_URL", "http://synthetic.example/nile")
+			}
+			cfg, e := config.Load()
+			if name == "configured-zero-timeout" || name == "configured-http" {
+				if e == nil {
+					t.Fatal("unbounded/untrusted checker accepted")
+				}
+				if strings.Contains(e.Error(), "synthetic-secret") {
+					t.Fatal("credential leaked")
+				}
+				return
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			if name == "legacy-zero-timeout" && (cfg.Approval != nil || cfg.HTTPTimeout != 0 || len(cfg.TronApprovalRPCEndpoints) != 0) {
+				t.Fatal("legacy timeout/config changed")
+			}
+			if name == "configured-https" && cfg.TronApprovalRPCEndpoints["tron:nile"] == "" {
+				t.Fatal("missing explicit endpoint")
+			}
+		})
+	}
+}

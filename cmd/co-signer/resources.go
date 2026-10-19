@@ -178,6 +178,17 @@ func openApplicationResources(
 		)
 	}
 	signingReady := func() bool { return primaryReader.ProbeReadCapability() == nil }
+	tronChecker, err := approval.NewTronNetworkChecker(cfg.TronApprovalRPCEndpoints, cfg.HTTPTimeout, nil)
+	if err != nil {
+		return nil, err
+	}
+	gate := approval.SignGate{Tron: tronChecker}
+	if approvalJournal != nil {
+		gate.Journal = approvalJournal
+	}
+	if cfg.Approval != nil {
+		gate.RequiredOrgID = cfg.Approval.OrgID
+	}
 	scheduler := worker.NewScheduler(
 		client,
 		tssService,
@@ -185,6 +196,7 @@ func openApplicationResources(
 		cfg.PrimaryStore.PartyID(),
 		cfg.FramePollInterval,
 		worker.SchedulerConfig{
+			AuthorizeSign:      gate.Authorize,
 			MinInterval:        cfg.PollMinInterval,
 			MaxInterval:        cfg.PollMaxInterval,
 			BackoffFactor:      cfg.PollBackoffFactor,
