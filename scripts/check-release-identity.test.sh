@@ -29,16 +29,33 @@ reject() {
   fi
 }
 output=$(check refs/heads/main "$production")
+expect_line "$output" "version=3.4.5-dev+${production:0:12}"
+expect_line "$output" "revision=$production"
 expect_line "$output" "tags=example/co-signer:sha-$production"
 output=$(check refs/heads/eks-staging "$staging")
+expect_line "$output" "version=3.4.5-dev+${staging:0:12}"
+expect_line "$output" "revision=$staging"
 expect_line "$output" "tags=example/co-signer:staging,example/co-signer:sha-$staging"
+git -C "$TMP/repo" tag v3.4.5 "$production"
 output=$(check refs/tags/v3.4.5 "$production")
+expect_line "$output" 'version=3.4.5'
+expect_line "$output" "revision=$production"
 expect_line "$output" 'tags=example/co-signer:v3.4.5'
 expect_line "$output" 'prerelease=false'
 output=$(check refs/tags/v3.4.5-rc.1 "$staging")
 expect_line "$output" 'version=3.4.5-rc.1'
 expect_line "$output" 'tags=example/co-signer:v3.4.5-rc.1'
 expect_line "$output" 'prerelease=true'
+# A branch build stays development even when its commit also owns a release tag.
+output=$(check refs/heads/main "$production")
+expect_line "$output" "version=3.4.5-dev+${production:0:12}"
+expect_line "$output" "revision=$production"
+for branch in main eks-staging; do
+  reject "refs/heads/$branch" "${production:0:12}"
+  reject "refs/heads/$branch" 'ABCDEF0123456789abcdef0123456789abcdef0123'
+  reject "refs/heads/$branch" 'g123456789abcdef0123456789abcdef012345678'
+  reject "refs/heads/$branch" "${production}0"
+done
 reject refs/tags/v3.4.5 "$staging"
 reject refs/tags/v3.4.5-rc.1 "$production"
 reject refs/tags/v3.4.4 "$production"

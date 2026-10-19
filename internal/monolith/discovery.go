@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -115,7 +116,7 @@ func (wire actionableIntentWire) hasExactFields(expected ...string) bool {
 // reconciliation layer to classify as protocol-integrity failures.
 func (c *Client) ListActionableIntents(ctx context.Context) (ActionableListing, error) {
 	var wire actionableListingWire
-	if err := c.doJSON(ctx, http.MethodGet, "/api/v1/co-signer/intents/pending", nil, "", &wire, http.StatusOK); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, c.discoveryPath(), nil, "", &wire, http.StatusOK); err != nil {
 		return ActionableListing{}, err
 	}
 	if wire.HTTPStatus != http.StatusOK {
@@ -140,6 +141,21 @@ func (c *Client) ListActionableIntents(ctx context.Context) (ActionableListing, 
 		return ActionableListing{}, err
 	}
 	return listing, nil
+}
+
+func (c *Client) discoveryPath() string {
+	const path = "/api/v1/co-signer/intents/pending"
+	q := url.Values{}
+	if c.buildIdentity.Version != "" {
+		q.Set("version", c.buildIdentity.Version)
+	}
+	if c.buildIdentity.Revision != "" && c.buildIdentity.Revision != "unknown" {
+		q.Set("revision", c.buildIdentity.Revision)
+	}
+	if len(q) == 0 {
+		return path
+	}
+	return path + "?" + q.Encode()
 }
 
 func decodeActionableCollection(items []actionableIntentWire, collection string) ([]ActionableIntent, error) {

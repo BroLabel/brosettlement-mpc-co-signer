@@ -11,10 +11,20 @@ if [[ ! "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; th
   echo "VERSION must contain plain SemVer, got: '$version'" >&2
   exit 1
 fi
+if [[ ! "$REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "REVISION must contain a full 40-character lowercase commit SHA" >&2
+  exit 1
+fi
 prerelease=false
 case "$REF" in
-  refs/heads/main) tags="$IMAGE:sha-$REVISION" ;;
-  refs/heads/eks-staging) tags="$IMAGE:staging,$IMAGE:sha-$REVISION" ;;
+  refs/heads/main)
+    tags="$IMAGE:sha-$REVISION"
+    version="$version-dev+${REVISION:0:12}"
+    ;;
+  refs/heads/eks-staging)
+    tags="$IMAGE:staging,$IMAGE:sha-$REVISION"
+    version="$version-dev+${REVISION:0:12}"
+    ;;
   refs/tags/v*)
     release_version=${REF#refs/tags/v}
     if [[ "$release_version" == "$version" ]]; then

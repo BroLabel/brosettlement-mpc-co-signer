@@ -12,6 +12,27 @@ confirmed. A successful staging deployment alone is not production approval.
 | Production release | `vX.Y.Z` at the current `main` tip | Exact version, then `latest` | Stable, Latest |
 
 `VERSION` contains the base version (`X.Y.Z`). RC numbering starts at 1.
+Build identity follows the publication ref:
+
+| Build source | Reported `version` | Reported `revision` |
+| --- | --- | --- |
+| Verified release tag `v2.2.0` | `2.2.0` | Full SHA of the tag's commit |
+| Verified candidate tag `v2.2.0-rc.1` | `2.2.0-rc.1` | Full SHA of the tag's commit |
+| `main` or `eks-staging` with `VERSION=2.2.0` | `2.2.0-dev+0123456789ab` | Full SHA starting with `0123456789ab` |
+
+Branch builds remain development builds even at a tagged commit. The validated
+full lowercase revision supplies exactly its first 12 characters; no highest-tag
+or `git describe` inference is used. Binary health, signed polling, and OCI labels
+share the resolved identity. Metadata after `+` does not establish release order;
+use the full revision to identify source.
+
+`make build` also produces a development version, appending `.dirty` for a
+modified checkout. The README's explicit tagged-release recipe preserves the
+selected release version. Unconfigured `go build` retains its existing local
+fallbacks. Polling omits an unknown revision; legacy polls without identity stay
+supported and clear stored build metadata to unknown. The listing response and
+MPC signing contracts remain unchanged.
+
 The tagged RC suffix is included in the container binary version. Versions and
 Git tags are never reused for different code. Stable releases must advance from
 the previous production version; rollback uses an existing digest explicitly,

@@ -76,3 +76,12 @@ func TestResolveCurrentBuildIdentityUsesDevelopmentModuleMetadata(t *testing.T) 
 		t.Fatalf("identity = %#v, want derived dirty development identity", identity)
 	}
 }
+
+func TestResolveBuildIdentityPreservesInjectedDevelopmentMetadata(t *testing.T) {
+	const fullRevision = "0123456789abcdef0123456789abcdef01234567"
+	identity := resolveBuildIdentity("2.2.0-dev+0123456789ab", fullRevision, "checkout-revision", false)
+
+	if identity.version != "2.2.0-dev+0123456789ab" || identity.revision != fullRevision {
+		t.Fatalf("identity = %#v, want injected development identity", identity)
+	}
+}

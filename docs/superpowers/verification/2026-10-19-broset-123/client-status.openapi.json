@@ -1,0 +1,105 @@
+{
+  "openapi": "3.0.0",
+  "paths": {},
+  "info": {
+    "title": "Local client status DTO schemas",
+    "description": "",
+    "version": "1",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "MpcCoSignerStatusDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ONLINE",
+              "STALE",
+              "OFFLINE"
+            ]
+          },
+          "lastSeenAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "string",
+            "nullable": true
+          },
+          "revision": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "status",
+          "lastSeenAt",
+          "version",
+          "revision"
+        ]
+      },
+      "MpcChainStatusDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "READY",
+              "PROFILE_NOT_AVAILABLE",
+              "PROFILE_AMBIGUOUS",
+              "SIGNER_UNAVAILABLE",
+              "MPC_KEY_NOT_READY"
+            ]
+          }
+        },
+        "required": [
+          "chain",
+          "status"
+        ]
+      },
+      "MpcStatusResponseDto": {
+        "type": "object",
+        "properties": {
+          "orgId": {
+            "type": "string"
+          },
+          "keyId": {
+            "type": "string",
+            "nullable": true
+          },
+          "keyStatus": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "PROVISIONING",
+              "ACTIVE"
+            ]
+          },
+          "coSigner": {
+            "$ref": "#/components/schemas/MpcCoSignerStatusDto"
+          },
+          "chains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MpcChainStatusDto"
+            }
+          }
+        },
+        "required": [
+          "orgId",
+          "keyId",
+          "keyStatus",
+          "coSigner",
+          "chains"
+        ]
+      }
+    }
+  }
+}

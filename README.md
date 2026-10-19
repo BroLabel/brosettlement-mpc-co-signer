@@ -88,6 +88,18 @@ Containers follow the same selection: pull
 in deployment configuration. `latest` tracks stable releases; `staging` tracks
 staging development. Publishing a release does not update an installed client.
 
+For local development, `make build` injects `X.Y.Z-dev+<12-character SHA>`
+from `VERSION` and the current commit, with `.dirty` for a modified checkout.
+It remains a development build even when HEAD is also tagged. Use the explicit
+tagged-release build recipe above for a release installation.
+
+The same resolved `version` and full `revision` are exposed by `/health` and
+reported as signed query parameters on every intent-discovery poll. An unknown
+revision is omitted from polling. Plain `go build` without injected metadata
+keeps the existing `dev+<12-character SHA>[.dirty]` or `dev` fallback. The backend
+accepts legacy polls without metadata and records their build identity as
+unknown; the discovery response body is unchanged.
+
 ### Configure
 
 Create two separate private artifact directories:
