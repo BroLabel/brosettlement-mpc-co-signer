@@ -1,7 +1,7 @@
 # Co-Signer approval wire contracts v1
 
 Date: 2026-10-19
-Status: **TASK-000 CONTRACT FREEZE — implementation and isolated tests authorized; feature code and fixtures not yet implemented**
+Status: **TASK-000 CONTRACT FREEZE — STEP-001 persistence and initial executable authorization/receipt/cursor corpus implemented; later workflows and prepared-byte vectors remain pending**
 Normative policy: [approved DESIGN](2026-10-11-co-signer-approval-design.md), decision revision pinned by commit `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` (DESIGN SHA-256 `6f2003b182a3df0d0b6a7fa58a6fc6f6a155022e84531d6d248b976f65b30d9b`). This document selects wire representations, not additional product modes. Controller review follows preparation.
 
 ## Encoding and closed-schema rules
@@ -48,9 +48,9 @@ type RequestedChainParamsV1 =
   | {tron: {feeLimitSun: UInt | null}};
 ```
 
-`SignDerivationContextV1` is the existing closed SIGN derivation shape, with exactly: `profileId`, `profileTemplateId`, `profileVersion`, `chain`, `algorithm`, `curve`, `scheme`, `accountPath`, `childPath`, `fullPath`, `addressEncoding`, `expectedAddress`, `expectedPublicKey`, `publicKeyFormat`, `descriptorVersion`, `keyVersion`. The three version fields are PositiveInt; other fields are nonempty strings, retaining the existing descriptor/scheme, path, key, address and context-hash validation. Algorithm/curve remain `ecdsa`/`secp256k1`. Bind the descriptor fingerprint and this full context to the authoritative tenant-owned key/wallet before admission and again before signing.
+`SignDerivationContextV1` is the existing closed SIGN derivation shape, with exactly: `profileId`, `profileTemplateId`, `profileVersion`, `chain`, `algorithm`, `curve`, `scheme`, `accountPath`, `childPath`, `fullPath`, `addressEncoding`, `expectedAddress`, `expectedPublicKey`, `publicKeyFormat`, `descriptorVersion`, `keyVersion`. The three version fields are PositiveInt; other fields are nonempty strings, retaining the existing descriptor/scheme, path, key, address and context-hash validation. Algorithm/curve remain `ECDSA`/`secp256k1`, preserving the existing SIGN derivation wire spelling. Bind the descriptor fingerprint and this full context to the authoritative tenant-owned key/wallet before admission and again before signing.
 
-Network/asset/token metadata comes from existing supported chain configuration. `tokenDecimals` is integer 0–255 for tokens; all three token fields are null for native transfers. Token contracts and sender/recipient addresses use existing network canonicalization (EVM lowercase `0x` + 40 hex; TRON verified canonical Base58Check). The derived sender must equal `fromAddress`. Internal classification requires the tenant-scoped expected recipient account/wallet; external classification requires null. This preserves accounting classification; it does not add another transfer form. Request IDs and ledger IDs have different roles even if both are UUIDs.
+Network/asset/token metadata comes from existing supported chain configuration. `tokenDecimals` is integer 0–255 for tokens; all three token fields are null for native transfers. Token contracts use the existing canonical20 representation: lowercase `0x` + 40 hex on both EVM and TRON. Sender/recipient addresses use existing network canonicalization (EVM lowercase `0x` + 40 hex; TRON verified canonical Base58Check). Current derived-wallet `addressEncoding` is `evm_hex` for Ethereum and `tron_base58` for TRON; `publicKeyFormat` is `uncompressed_hex` (the root descriptor separately uses `compressed_sec1`). The derived sender must equal `fromAddress`. Internal classification requires the tenant-scoped expected recipient account/wallet; external classification requires null. This preserves accounting classification; it does not add another transfer form. Request IDs and ledger IDs have different roles even if both are UUIDs.
 
 `requestedChainParams` preserves normalized optional client constraints without preparing a transaction. An absent object normalizes to null; a TRON object without `feeLimitSun` normalizes that property to null. A present object must match the selected protocol and existing chain policy. Do not invent zero, nonce, gas limit, TAPOS, raw bytes or a current fee quote during creation. Provided Ethereum fee fields and TRON fee limit retain the existing request semantics during preparation and byte verification; the total prepared budget must also fit the separately authorized cap.
 
@@ -263,9 +263,9 @@ Admission is a closed local record `{version:1, orgId, requestId, authorizationH
 
 Backend enablement is the existing organization capability gate, not a client-provided mode flag. It must prove v1 discovery/receipt plus v2 prepared claim support and compatible old-writer drain before intake. Exact backend storage of that capability is STEP-001/008 implementation detail; it must not weaken these wire checks.
 
-## Frozen vector registry (planned, no fixture files yet)
+## Frozen vector registry
 
-IDs below are reserved immutable identifiers, **not generated vectors or passing tests**. STEP-001 must create the shared manifest and producer provenance; STEP-006 adds genuine prepared bytes and cross-language verification. Each vector records producer repository/revision, schema versions, canonical input bytes/hash, expected outcome, and (where applicable) exact signature/digest/raw bytes. Never claim this preparation generated signed fixtures. Do not reuse a retired ID for new semantics.
+IDs below are reserved immutable identifiers. STEP-001 now materializes authorization/receipt/schema/exact-evidence/cursor fixtures in IDs 001–010 (with descriptive subcases), with a backend-owned manifest and producer provenance. ID 009 proves wire outcomes and exact receipt equality, not the later transactional decision lifecycle. IDs 011–020 remain planned: STEP-006 adds genuine prepared bytes and cross-language byte verification; other steps add their own operational proofs. Each vector records producer repository/revision, schema versions, canonical input bytes/hash, expected outcome, and (where applicable) exact signature/digest/raw bytes. Never claim this preparation generated signed fixtures. Do not reuse a retired ID for new semantics.
 
 | Frozen ID | Required input / expected result | Plan proof |
 | --- | --- | --- |
@@ -302,3 +302,5 @@ Verified source baselines: Co-Signer `5df5ac25953debeb94f2c37d89a2ad458a73057c`;
 - RULING-006 freezes bounded HTTP fields, explicit configuration, one-attempt/fresh-page dispatch and four application outcomes. These are technical representations of DECISION-003/007 and R3; errors cannot become authorization. No new expiry, top-up, cancellation phase, approval source, chain support or replacement policy is introduced.
 
 These rulings require controller review before STEP-001. A policy change outside this representation is DESIGN_REOPEN_REQUIRED, with affected REQ/INV/DECISION IDs; do not silently reinterpret this freeze.
+
+- STEP-001 technical correction (controller ruling, 2026-10-19): existing SIGN derivation JSON uses `ECDSA`, while internal classifier/hash normalization uses lowercase; signed authorization preserves the wire value. Existing TRON `tron-transfer-builders.ts:75-85` stores token contract canonical20 (`0x` + 40 lowercase hex), distinct from Base58Check transfer addresses. These corrections preserve existing formats and introduce no new policy.

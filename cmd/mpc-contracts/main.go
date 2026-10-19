@@ -24,6 +24,7 @@ func verify(args []string) {
 	flags := flag.NewFlagSet("verify", flag.ExitOnError)
 	signerRoot := flags.String("signer-root", "contracts/mpc-2of3/v1", "signer contract bundle root")
 	httpRoot := flags.String("http-root", "testdata/mpc-co-signer-http/v1", "HTTP fixture bundle root")
+	approvalRoot := flags.String("approval-root", "testdata/approval-v1", "approval fixture bundle root")
 	_ = flags.Parse(args)
 	signerID, err := bundle.VerifySignerBundle(*signerRoot)
 	if err != nil {
@@ -33,6 +34,11 @@ func verify(args []string) {
 	if err != nil {
 		fail("verify HTTP bundle: %v", err)
 	}
+	approvalID, err := bundle.VerifyApprovalBundle(*approvalRoot)
+	if err != nil {
+		fail("verify approval bundle: %v", err)
+	}
+	fmt.Printf("APPROVAL-V1 verified: %s\n", approvalID)
 	fmt.Printf("CONTRACT-BUNDLE-V1 verified: %s\nCOSIGNER-HTTP-V1 verified: %s\n", signerID, httpID)
 }
 
