@@ -113,7 +113,13 @@ A local Dockerfile build from a clean archive of `99b0685` was attempted with th
 
 Review of final changed paths and diffs found no changes to MPC admission/readiness decisions, key generation/signing operations, credentials, API-key verification, authorization scopes, or signing/terminal response contracts. Release source changes are confined to identity classification, its tests, and invoking the additional local-build test. Existing image aliases, branch ownership checks, tag immutability checks, GitHub release triggers and publication channels remain intact. Task 5 changes are tests, a local verification helper, disposable-runner cleanup, and documentation. The frontend remained read-only during Task 5.
 
-## Authorized release handoff, still pending
+## Final review and local cleanup
+
+An independent whole-change review on 2026-10-19 covered Co-Signer `96c8d74`, backend `a26ece1a`, and frontend `97349f7`, following the task-scoped reviews. No critical, important, or new minor findings remained. The reviewer confirmed the cross-repository contract, exact query signing, nullable snapshot semantics, build-ref classification, unchanged MPC decisions, and the evidence limits above. This is code-review readiness, not authorization to merge or deploy.
+
+All three feature branches and isolated worktrees are retained for review. The dedicated temporary PostgreSQL cluster was stopped after verification; temporary local HTTP/Vite servers and browser sessions were closed. Task scratch is removed after the durable verification record and optional screenshots are preserved. No shared environment was modified.
+
+## Release handoff, requiring separate authorization
 
 1. Review/merge through the normal process only when separately authorized. Apply additive migration `20261019000000_add_co_signer_build_identity` and complete backend rollout first. Confirm all backend writers support build snapshots before installing reporting clients. A disposable migration test is not evidence of a shared migration.
 2. Deploy the UI with required nullable schema fields and absent-field fallback. Verify client status and admin list/detail with known, legacy and absent snapshots.
