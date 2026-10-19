@@ -1,6 +1,24 @@
 # Task9 local approval proof
 
-Status: LOCAL PROOF VERIFIED; main controller final and whole-branch review pending. No independent reviewers or review subagents ran.
+Status: **ALL_NINE_STEPS_IMPLEMENTED / LOCAL_PROOF_VERIFIED / CONTROLLER_REVIEW_APPROVED**. Main controller task and whole-branch reviews are approved for local handoff. No independent reviewers or review subagents ran.
+
+## Authoritative completion table
+
+This table records the current completion status accepted by the main controller. All nine specification and quality reviews and the final whole-branch review are approved for local handoff. The detailed plan checkboxes are retained as the historical requirements checklist; unchecked historical items do not override this table. Literal hosted CI, staging and deployment requirements remain unperformed release gates, rather than completed local checks.
+
+| Step | Completed scope | Verified status |
+| --- | --- | --- |
+| STEP000 / PLAN-STEP-000 | Approved design revision, contracts and frozen identifiers pinned | Verified; controller approved |
+| STEP001 / PLAN-STEP-001 | Durable request identity and producer-pinned protocol fixtures | Verified; controller approved |
+| STEP002 / PLAN-STEP-002 | Atomic principal/cap reservation and stable public state | Verified; controller approved |
+| STEP003 / PLAN-STEP-003 | Signed decisions and atomic rejection/cancellation release | Verified; controller approved |
+| STEP004 / PLAN-STEP-004 | Separate approval dispatcher and durable journal | Verified; controller approved |
+| STEP005 / PLAN-STEP-005 | One activation and recoverable CREATED-to-SIGN handoff | Verified; controller approved |
+| STEP006 / PLAN-STEP-006 | Independent prepared-byte verification and execution binding | Verified; controller approved |
+| STEP007 / PLAN-STEP-007 | Original ledger read, settlement and reconciliation ownership | Verified; controller approved |
+| STEP008 / PLAN-STEP-008 | Actual coordinated MPC/Anvil proof, retained evidence and rollout runbooks | Verified; controller approved |
+
+The [main controller review](controller-review.md) records exact reviewed revisions, coverage and limits. [Implementation rulings](implementation-rulings.md) retains all 21 decisions and their costs if wrong. No independent reviewers or review subagents were used. This local completion is not hosted CI, staging or deployment approval.
 
 ## Exact tested identities
 
@@ -27,7 +45,7 @@ Result: 1 executed Jest suite / 1 passed test, zero failed/skipped; 194.513 seco
 - Auto path: accepted signed bytes reach real Anvil, one HTTP response is lost, hash/receipt lookup is temporarily hidden; BROADCAST_AMBIGUOUS preserves original holds and one new broadcast, then the same hash reconciles and settles. Auto makes zero organization calls.
 - Outgoing preparation time is at/after the APPLIED decision timestamp, compared as UTC; no arbitrary limit on total MPC duration.
 
-All three original caps are 1000000000000000 ETH atomic units. Prepared/actual fees are respectively 26251233908324/21382502841000, 25343605602448/21051622956000 and 25221111331852/21006967128000. Request stays APPROVED; execution status is derived from the confirmed outgoing. All four exact owned PostgreSQL/Vault/NATS/Anvil resources were removed and absence verified. Append-only evidence was retained until parent disposal; the separate focused PostgreSQL container remains for controller verification.
+All three original caps are 1000000000000000 ETH atomic units. Prepared/actual fees are respectively 26251233908324/21382502841000, 25343605602448/21051622956000 and 25221111331852/21006967128000. Request stays APPROVED; execution status is derived from the confirmed outgoing. All four exact owned PostgreSQL/Vault/NATS/Anvil resources were removed and absence verified. Append-only evidence was retained until parent disposal; the separate focused PostgreSQL container was left temporarily for controller verification at the initial handoff.
 
 ## Current local checks
 
@@ -63,9 +81,12 @@ The macOS full binary uses standard SSL_CERT_FILE and GODEBUG=x509sslcertoverrid
 
 Real monetary coordination covers ETH on Anvil. The other accepted native/token forms use pinned real backend producer corpus and scoped lifecycle/independent RPC proof; no real TRON network settlement is claimed. The actual old Co executable is tested. The other compatibility direction is the precisely recorded current-backend v2 null/null transport/application boundary; no arbitrary old backend executable or simultaneous double-old rollback is certified. Double-old rollback is prohibited while approval-origin records/holds exist.
 
-No primary .env, live provider/org/DB, real capability enablement, push/PR/merge/deployment or staging pilot was used. No frozen wire/schema/producer pin changed. Source changes are limited to missing backend security-module wiring, correct Swagger metadata, isolated harness/proof tests and documentation. Main controller review remains pending.
+No primary .env, live provider/org/DB, real capability enablement, push/PR/merge/deployment or staging pilot was used. No frozen wire/schema/producer pin changed. Source changes are limited to missing backend security-module wiring, correct Swagger metadata, isolated harness/proof tests and documentation. Main controller review is approved for local handoff; its coverage and retained limits are recorded in [controller-review.md](controller-review.md).
 
 The backend runbook docs/runbooks/transfer-approval-rollout.md covers controlled intake and legacy SIGN pause/drain, unseen backlog, explicit modes, durable volume/backup, pending cancellation, fee policy, journal loss, stuck activation and ambiguous broadcast. [Co-Signer operations](../../approval-operations.md) retains the local custody and journal recovery rules.
 
 Durable operational notes: Prisma supplies INSERT timestamps; raw pg reads of the old timestamp-without-time-zone outgoing field need explicit UTC; metrics use the existing exact name{}=value parser; old binaries require a healthy API at startup; immutable evidence cleanup belongs to owned database disposal. These observations are saved here; no persistent user memory was modified.
 
+## Final controller cleanup
+
+After final controller verification, the main controller stopped the separate focused PostgreSQL container `codex-approval-pg-2c85`, exact ID `e304235b8c969fc04fe1f6c075acad2f9d689e888349ac7bcf36951925c540d5` (PostgreSQL 16, auto-remove, loopback port 56902). A repeated exact-ID container lookup returned no container; absence was verified. No Task9 test services remain.

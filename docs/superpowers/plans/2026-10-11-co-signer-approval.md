@@ -1,8 +1,8 @@
 # Co-Signer Approval Workflow Implementation Plan
 
-Updated: 2026-10-19 — user-approved R1–R3 and S1 incorporated; repeat source-backed engineering review completed with no remaining findings. All six v1 product decisions remain unchanged.
+Updated: 2026-10-19 — all nine steps are implemented and locally verified; main controller task and whole-branch reviews are approved. All six v1 product decisions and user-approved R1–R3/S1 remain unchanged.
 
-> **For agentic workers:** Implementation and isolated local tests are now authorized. Execute task by task under the binding implementation constraints. The user forbids review subagents; the controller performs task/final review. Implementation subagents use GPT-6.1 Sol medium (xhigh for complex work), with no nested subagents. PLAN-STEP-000 is the historical documentation preparation. Feature implementation and materialized fixtures are now present; STEP-008 local validation and final controller review are tracked below. No push, merge or deployment is authorized.
+> **For agentic workers:** Implementation and isolated local tests are now authorized. Execute task by task under the binding implementation constraints. The user forbids review subagents; the controller performs task/final review. Implementation subagents use GPT-6.1 Sol medium (xhigh for complex work), with no nested subagents. PLAN-STEP-000 is the historical documentation preparation. All nine steps, materialized fixtures and STEP-008 local proof are complete and controller-approved; the authoritative completion table below records current status. No push, merge or deployment is authorized.
 
 **Goal:** Immediately reserve transfer principal and an explicit network-fee ceiling, support durable unlimited external/automatic approval, and execute at most one fresh, verified transfer without duplicate reserves or releases.
 
@@ -14,7 +14,7 @@ Updated: 2026-10-19 — user-approved R1–R3 and S1 incorporated; repeat source
 
 ## Global constraints
 
-- Implementation and isolated local tests were authorized on 2026-10-19. PLAN-STEP-000 performs documentation preparation only; production mutations, deployment and shared-branch pushes are not authorized.
+- Implementation and isolated local tests were authorized on 2026-10-19. PLAN-STEP-000 performed documentation preparation only; production mutations, deployment and shared-branch pushes are not authorized.
 - Principal and the explicit fee ceiling are reserved atomically at request creation; activation does not release/re-reserve, top up or shrink either hold.
 - PENDING_APPROVAL has no expiration or maximum age; before approve there is no raw transaction, nonce allocation, outgoing execution row, SIGN intent/session, or SIGN permit.
 - External API errors never authorize signing. Auto approval must be explicitly configured and recorded. Each new external call requires a freshly discovered, unresolved, due PENDING_APPROVAL item; cached local records cannot schedule calls during discovery failure or after cancellation. Idle and auto_approve produce zero organization calls.
@@ -38,9 +38,27 @@ This plan follows the v1 design decisions approved by the user on 2026-10-19, in
 
 Inventory: REQ-001 through REQ-013; INV-001 through INV-015; ASSUMPTION-001 through ASSUMPTION-004; DECISION-001 through DECISION-010; RISK-001 through RISK-007. The requirement mapping and decision dispositions below cover these sets.
 
+## Authoritative completion table
+
+This table records the current completion status accepted by the main controller. All nine specification and quality reviews and the final whole-branch review are approved for local handoff. The detailed plan checkboxes are retained as the historical requirements checklist; unchecked historical items do not override this table. Literal hosted CI, staging and deployment requirements remain unperformed release gates, rather than completed local checks.
+
+| Step | Completed scope | Verified status |
+| --- | --- | --- |
+| STEP000 / PLAN-STEP-000 | Approved design revision, contracts and frozen identifiers pinned | Verified; controller approved |
+| STEP001 / PLAN-STEP-001 | Durable request identity and producer-pinned protocol fixtures | Verified; controller approved |
+| STEP002 / PLAN-STEP-002 | Atomic principal/cap reservation and stable public state | Verified; controller approved |
+| STEP003 / PLAN-STEP-003 | Signed decisions and atomic rejection/cancellation release | Verified; controller approved |
+| STEP004 / PLAN-STEP-004 | Separate approval dispatcher and durable journal | Verified; controller approved |
+| STEP005 / PLAN-STEP-005 | One activation and recoverable CREATED-to-SIGN handoff | Verified; controller approved |
+| STEP006 / PLAN-STEP-006 | Independent prepared-byte verification and execution binding | Verified; controller approved |
+| STEP007 / PLAN-STEP-007 | Original ledger read, settlement and reconciliation ownership | Verified; controller approved |
+| STEP008 / PLAN-STEP-008 | Actual coordinated MPC/Anvil proof, retained evidence and rollout runbooks | Verified; controller approved |
+
+The [main controller review](../../validation/approval/controller-review.md) records exact reviewed revisions, coverage and limits. [Implementation rulings](../../validation/approval/implementation-rulings.md) retains all 21 decisions and their costs if wrong. No independent reviewers or review subagents were used. This local completion is not hosted CI, staging or deployment approval.
+
 ## Responsibility map
 
-All `backend:` paths for implementation are relative to `/Users/vlas/Work/BroLabel/back-end/.worktrees/co-signer-approval`; all `cosigner:` paths are relative to `/Users/vlas/.codex/worktrees/2c85/mpc-co-signer`. Exact new filenames are proposed; existing paths were inspected. Keep normal repository/module DI boundaries.
+All `backend:` paths for implementation are relative to `/Users/vlas/Work/BroLabel/back-end/.worktrees/co-signer-approval`; all `cosigner:` paths are relative to `/Users/vlas/.codex/worktrees/2c85/mpc-co-signer`. The file map retains the original implementation sketch; current behavior and completion are recorded by the authoritative table and controller review. Keep normal repository/module DI boundaries.
 
 | Owner / files | Responsibility and dependencies |
 | --- | --- |
@@ -62,7 +80,7 @@ All `backend:` paths for implementation are relative to `/Users/vlas/Work/BroLab
 
 ## Interfaces used by the plan
 
-These names describe planned interfaces, not existing exports:
+This historical interface sketch describes responsibilities, not a promise of exact current export names. Implemented behavior is verified in the completion table and controller review:
 
 - `CreateApprovalRequest(input, idempotencyKey)` validates the required `maxNetworkFeeAtomic`, returns the stable ledger ID, and commits request + principal/fee reservations atomically.
 - Existing `LedgerWithdrawalReservationService.createReservation(input, tx)` remains the sole reservation operation. Extend only its source argument to `{kind: outgoing_transaction | transfer_approval_request, id}`; request cap becomes `nativeFeeReservation.amountAtomic`. Preserve exact replay checks, sorted locks and effect keys. Do not add split reservation APIs.
@@ -77,7 +95,7 @@ These names describe planned interfaces, not existing exports:
 
 ## Requirement-to-step mapping
 
-Every completion reference below means captured output from the stated test, not an assertion that it has run.
+The mapping below defines evidence requirements. The authoritative completion table and linked validation reports record what actually ran and its limits.
 
 | Design items | Owner | Steps | Tests | Completion evidence |
 | --- | --- | --- | --- | --- |
@@ -95,13 +113,13 @@ Every completion reference below means captured output from the stated test, not
 
 R1 is addressed in STEP-005/TEST-013/018/020; R2 in STEP-003/005/007 and TEST-010/015B/025; R3 in STEP-001/004 and TEST-007/009/022; S1 in STEP-001/002/007 and TEST-024. All four corrections were explicitly approved for documentation on 2026-10-19.
 
-Decision dispositions: 001–004 are planned throughout the mapped steps; 005 selects cap-at-create in 002/005/007 and TEST-004/015B/016; 006 is implemented/tested in 003/011–012; 007 in 004/007–008; 008 in 002/005/007/014/024; 009 in 005/013–015; 010 in 006/017–020. User approval of all six v1 decisions was explicitly recorded on 2026-10-19.
+Decision dispositions: 001–004 are implemented throughout the mapped steps; 005 selects cap-at-create in 002/005/007 and TEST-004/015B/016; 006 is implemented/tested in 003/011–012; 007 in 004/007–008; 008 in 002/005/007/014/024; 009 in 005/013–015; 010 in 006/017–020. User approval of all six v1 decisions was explicitly recorded on 2026-10-19.
 
 Assumption validation: 001 → STEP-006/TEST-017 against all supported chain fixtures; 002 → STEP-004/TEST-009 and installation-lock check; 003 → STEP-008/TEST-026 recovery exercise; 004 → STEP-004/TEST-007–008 plus an organization's non-production endpoint contract test. Residual risks 001–007 map respectively to STEP-000, 006, 003/007, 007, 004, 006/008, and 008; unknown live deployment remains outside repository-completion evidence.
 
 ## Implementation steps
 
-PLAN-STEP-000 is completed preparation, subject to controller review; PLAN-STEP-001–008 remain planned. For each implementation unit use RED → verify the intended failure → minimal GREEN → verify behavior → bounded refactor → signed-off Conventional Commit. Do not run integration commands against live databases or funded networks. Begin feature implementation only after the controller reviews the PLAN-STEP-000 contract rulings; no feature behavior is implemented by this preparation.
+All nine steps are implemented, locally verified and controller-approved. The authoritative completion table above is the current status ledger. Detailed checkboxes below retain the original requirements and historical task progress; they are not a competing completion ledger. In particular, local Linux Docker results do not check off hosted CI, and staging/deployment remain unperformed release gates. Implementation used RED → intended failure → minimal GREEN → behavior verification → bounded refactor → signed-off Conventional Commit. No live database or funded-network execution is claimed.
 
 ### PLAN-STEP-000 — Pin the approved design and contracts
 
@@ -115,7 +133,7 @@ Sources: DECISION-005–010; RISK-001/002/005; compatibility obligations.
 - [x] Recheck isolated feature branches and source HEADs against the two baselines above. Both matched before preparation. Applicable instructions: `/Users/vlas/.codex/AGENTS.md` (Russian progress/English docs), isolated backend `AGENTS.md` (Chain Tracker rules only if that subsystem is touched); no local Co-Signer AGENTS.md found. No Chain Tracker source/config is changed. Backend worktree and primary checkout are unchanged; unrelated backend plan/spec files are excluded.
 - [x] Pin the exact already reviewed DESIGN/PLAN and both historical review reports with local signed-off commit `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a`: `docs(mpc): specify durable co-signer approvals`. Source baseline is unchanged; no push/merge/deployment.
 
-Deliverable: plan tied to the exact reviewed decision revision, concrete wire schemas, cancellation scope and frozen vector IDs. Implementation and isolated tests are now authorized; this step supplies preparation only. Controller review is the next gate before STEP-001. Feature steps/fixtures/tests remain unchecked.
+Deliverable: the plan is tied to the exact reviewed decision revision, concrete wire schemas, cancellation scope and frozen vector IDs. STEP-000 supplied preparation only and passed controller review before feature implementation. Subsequent implementation and local proof are complete as recorded in the authoritative table; the original checklist is retained for traceability.
 
 ### PLAN-STEP-001 — Add durable approval identity and protocol fixtures
 
@@ -314,7 +332,7 @@ Backend 005 and the backend portion of 006 both touch SIGN creation/claim contra
 
 ## Completion criteria
 
-- Repository implementation: each checked-off step has passing targeted tests and exact revisions; every REQ/INV maps to captured evidence; the cap-at-create tests are complete.
+- Repository implementation: each verified step in the authoritative completion table has passing targeted tests and exact revisions; every REQ/INV maps to captured evidence; the cap-at-create tests are complete.
 - Contract compatibility: backend producer fixture identity, Co-Signer verifier and old/new behavior are tested together; unknown fields do not silently downgrade security.
 - Financial proof: exactly one principal hold, stable IDs through activation, exactly one post/void outcome, and no release on ambiguity are demonstrated in real PostgreSQL tests.
 - Behavioral proof: long-wait/restart, fresh-only fair polling and discovery outage, approve/reject/cancel races, complete pre-activation ledger terminalization, automatic CREATED-to-SIGN crash recovery, auto approval, raw-byte substitution and duplicate-transfer prevention pass coordinated tests.
@@ -323,7 +341,7 @@ Backend 005 and the backend portion of 006 both touch SIGN creation/claim contra
 
 ## Structural readiness
 
-Status: **DESIGN_APPROVED / REVIEWED_REVISION_PINNED / IMPLEMENTED_THROUGH_STEP_007 / STEP_008_LOCAL_PROOF_VERIFIED / FINAL_CONTROLLER_REVIEW_PENDING**. User-approved R1–R3/S1 and all six v1 decisions are preserved. Reviewed revision `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` preserves prior evidence; current exact wire rulings are documented separately. No feature code, migrations, fixtures or feature tests were implemented/executed by STEP-000. Implementation and isolated tests are authorized for subsequent reviewed tasks.
+Status: **ALL_NINE_STEPS_IMPLEMENTED / LOCAL_PROOF_VERIFIED / CONTROLLER_REVIEW_APPROVED**. User-approved R1–R3/S1 and all six v1 decisions are preserved. The pinned DESIGN snapshot at `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` and the historical review report are unchanged by this followup. STEP-000 was preparation only; STEP-001–008 subsequently implemented and locally verified the feature. The [main controller review](../../validation/approval/controller-review.md) preserves exact whole-branch scope and coverage. Hosted Linux CI, staging pilot, live capability enablement and deployment remain unperformed release gates. No independent review, push, PR, merge or deployment is claimed.
 
 ## GSTACK REVIEW REPORT
 
