@@ -253,10 +253,16 @@ func TestDispatcherBackoffMemoryBound(t *testing.T) {
 	c := testConfig(t)
 	d, _ := makeDispatcher(t, c, &fakeBackend{page: func(string) (Page, error) { return Page{Version: 1, Items: []Item{}}, nil }}, nil)
 	for i := 0; i < 1500; i++ {
-		d.suppress(fmt.Sprint(i))
+		d.suppress("organization:" + fmt.Sprint(i))
 	}
 	if len(d.backoff) != 1000 {
 		t.Fatalf("unbounded backoff: %d", len(d.backoff))
+	}
+	if _, retained := d.backoff["organization:0"]; retained {
+		t.Fatal("oldest organization suppression hint was not evicted")
+	}
+	if _, retained := d.backoff["organization:1499"]; !retained {
+		t.Fatal("newest organization suppression hint was not retained")
 	}
 }
 

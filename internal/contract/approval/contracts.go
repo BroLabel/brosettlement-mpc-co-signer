@@ -419,7 +419,7 @@ func ParsePendingPage(raw []byte, orgID string) error {
 	}
 	if !isNull(v, "nextCursor") {
 		for _, c := range []byte(str(v, "nextCursor")) {
-			if c < 0x20 || c > 0x7e {
+			if c < 0x21 || c > 0x7e {
 				return invalid()
 			}
 		}

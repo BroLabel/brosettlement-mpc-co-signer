@@ -75,3 +75,21 @@ func TestPendingPageRejectsUnboundedDuplicateUnorderedAndNonASCIICursor(t *testi
 		})
 	}
 }
+
+func TestPendingPageRejectsCursorSpaces(t *testing.T) {
+	for _, tc := range []struct{ name, cursor string }{
+		{"leading space", " cursor"},
+		{"interior space", "cur sor"},
+		{"trailing space", "cursor "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]any{"version": 1, "items": []any{}, "nextCursor": tc.cursor})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ParsePendingPage(raw, "org-1") == nil {
+				t.Fatal("cursor containing a literal space accepted")
+			}
+		})
+	}
+}
