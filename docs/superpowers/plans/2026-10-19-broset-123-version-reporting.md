@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Carry the existing Co-Signer build identity through authenticated polling into persisted presence, both status APIs, and their existing UI surfaces.
+**Goal:** Distinguish tagged and development Co-Signer builds and carry their identity through authenticated polling into persisted presence, both status APIs, and their existing UI surfaces.
 
 **Architecture:** Preserve one logical Co-Signer per organization and the existing polling heartbeat. Normalize optional signed query metadata without rejecting otherwise valid polls; atomically persist it with the existing timestamp and expose nullable fields through status APIs.
 
@@ -16,6 +16,7 @@
 - Keep authentication, scopes, organization isolation, and signing decisions unchanged.
 - Build metadata is observational; it is not a compatibility gate or proof of which code is executing.
 - Use the same resolved build identity for health and polling. Do not introduce runtime version configuration.
+- Published branch builds use `X.Y.Z-dev+<12-character SHA>`; tagged releases use the exact tag version without `v`. The full commit SHA remains in `revision`.
 - Accept legacy polls without build metadata for the lifetime of this API contract; removing that support requires a separate compatibility decision.
 - Persist and return unknown values as JSON `null`, never the strings `unknown`, `null`, or an empty string.
 - Never log raw rejected metadata, request credentials, configuration, or key material.
@@ -56,7 +57,7 @@ Use this parser test as the initial behavior contract:
 ```ts
 describe('normalizeCoSignerBuildIdentity', () => {
   const revision = '0123456789abcdef0123456789abcdef01234567';
-  it.each(['2.1.1', '2.2.0-rc.1', '2.2.0+build.7', 'dev', 'dev+0123456789ab.dirty'])(
+  it.each(['2.1.1', '2.2.0-rc.1', '2.2.0+build.7', '2.2.0-dev+0123456789ab', '2.2.0-dev+0123456789ab.dirty', 'dev', 'dev+0123456789ab.dirty'])(
     'accepts supported version %s',
     (version) => {
       expect(normalizeCoSignerBuildIdentity({ version, revision })).toEqual({
@@ -209,17 +210,75 @@ npm run typecheck:admin
 
 Commit message: `feat(api): expose co-signer version in presence responses`.
 
-## Task 3: Send the existing build identity on every Co-Signer poll
+## Task 3: Distinguish development builds and send identity on every Co-Signer poll
 
 **Files in `mpc-co-signer`:**
 
 - Modify `internal/monolith/client.go`.
 - Modify `internal/monolith/discovery.go` and `internal/monolith/discovery_test.go`.
 - Modify `cmd/co-signer/resources.go`.
-- Modify `README.md` to document reported metadata and legacy compatibility.
-- Use existing `cmd/co-signer/build_identity_test.go` and release identity tests unchanged unless new behavior requires an assertion.
+- Modify `scripts/check-release-identity.sh` and `scripts/check-release-identity.test.sh`.
+- Modify `Makefile` so general-purpose local builds carry the development suffix and optional dirty marker.
+- Modify `README.md` and `docs/release-channels.md` to document version sources, reported metadata, and legacy compatibility.
+- Extend `cmd/co-signer/build_identity_test.go` to assert injected development identities are preserved.
+- Verify `.github/workflows/docker-publish.yml` and `Dockerfile` consume the single resolved version/revision for both the binary and OCI labels; modify them only if the verified flow requires it.
 
 **Interfaces:** Add `monolith.BuildIdentity { Version string; Revision string }` and an optional variadic `identity ...BuildIdentity` constructor parameter. Existing four-argument call sites remain valid; the production composition root passes exactly one identity. Store the identity by value in the client.
+
+### Build identity subtask
+
+- [ ] **Step A: Add failing release identity assertions.**
+
+Extend the existing shell test immediately after each corresponding `check()` call:
+
+```bash
+# refs/heads/main
+expect_line "$output" "version=3.4.5-dev+${production:0:12}"
+expect_line "$output" "revision=$production"
+# refs/heads/eks-staging
+expect_line "$output" "version=3.4.5-dev+${staging:0:12}"
+expect_line "$output" "revision=$staging"
+# refs/tags/v3.4.5
+expect_line "$output" 'version=3.4.5'
+expect_line "$output" "revision=$production"
+```
+
+Retain the existing RC expectation `version=3.4.5-rc.1`. Add a real tag at the production fixture commit, then assert a subsequent main-branch check at that same commit still returns a development version. Add rejection cases for malformed full revisions on branch inputs. Run `./scripts/check-release-identity.test.sh` and observe the new branch-version assertions fail before implementation.
+
+- [ ] **Step B: Resolve development versions in the existing publication script.**
+
+Validate `REVISION` with `^[0-9a-f]{40}$` before the publication case statement. Change only the branch cases to:
+
+```bash
+refs/heads/main)
+  tags="$IMAGE:sha-$REVISION"
+  version="$version-dev+${REVISION:0:12}"
+  ;;
+refs/heads/eks-staging)
+  tags="$IMAGE:staging,$IMAGE:sha-$REVISION"
+  version="$version-dev+${REVISION:0:12}"
+  ;;
+```
+
+Keep the tagged cases, existing branch ownership checks, full revision output, image aliases, and release publication rules. Do not derive branch identity with `git describe` or the highest tag; the trigger ref determines the build class. The workflow already forwards resolved outputs to Docker build arguments and OCI labels, so reuse that path rather than constructing another version value in YAML.
+
+- [ ] **Step C: Align the local build entry point and documentation.**
+
+Update the Makefile's identity variables so `make build` is explicitly a development build. Resolve `REVISION` before the version expression and use the same first 12 characters, not a potentially longer unique abbreviation:
+
+```make
+BASE_VERSION := $(shell cat VERSION)
+REVISION := $(shell git rev-parse --verify HEAD)
+SHORT_REVISION := $(shell printf '%s' '$(REVISION)' | cut -c1-12)
+DIRTY_SUFFIX := $(shell test -z "$$(git status --porcelain)" || printf '.dirty')
+VERSION := $(BASE_VERSION)-dev+$(SHORT_REVISION)$(DIRTY_SUFFIX)
+```
+
+Retain the existing linker flags. Verify the generated build command for a clean and a modified disposable Git fixture, and add a focused shell regression test for these two cases if the current Makefile test tooling does not cover them. Run that test in CI alongside the existing release-boundary shell tests. Keep ordinary unconfigured `go build` fallbacks unchanged. Preserve the README's explicit verified-release-tag installation recipe; document `make build` as a development build. Add the three-row stable/RC/branch mapping from the spec to `docs/release-channels.md`.
+
+In `build_identity_test.go`, add an assertion that `resolveBuildIdentity("2.2.0-dev+0123456789ab", fullRevision, "checkout-revision", false)` retains the injected version and full revision. Verify the shell tests and build identity tests pass, then commit: `fix(build): distinguish branch builds from tagged releases`.
+
+### Polling transport subtask
 
 - [ ] **Step 1: Add a failing transport test using the existing signature helper.**
 
@@ -246,7 +305,7 @@ if verifyRequestSignature(t, tampered, publicKey, "") {
 }
 ```
 
-Obtain the key using the existing `newTestClient()` helper, or extend that helper to forward optional identity values without changing existing callers. Table-test stable, RC, development, no identity, and revision `unknown`. Keep strict response fixture assertions.
+Obtain the key using the existing `newTestClient()` helper, or extend that helper to forward optional identity values without changing existing callers. Table-test stable, RC, branch `2.2.0-dev+0123456789ab`, local development, no identity, and revision `unknown`. Keep strict response fixture assertions.
 
 - [ ] **Step 2: Build the encoded request target before existing request signing.**
 
@@ -300,7 +359,7 @@ Commit message: `feat(co-signer): report build identity in signed polling`.
 
 - [ ] **Step 1: Add failing behavioral UI tests.**
 
-Use the existing `statusData()`/`renderCard()` fixture in the readiness card tests. For ONLINE `2.1.1`, assert `Version 2.1.1`; for null/absent metadata, assert `Version unknown`. For OFFLINE with version `2.1.1`, assert the version is retained. For development metadata, assert the full development version is rendered as text. Assert existing initialization eligibility is unchanged by version.
+Use the existing `statusData()`/`renderCard()` fixture in the readiness card tests. For ONLINE `2.1.1`, assert `Version 2.1.1`; for null/absent metadata, assert `Version unknown`. For OFFLINE with version `2.1.1`, assert the version is retained. For branch version `2.2.0-dev+0123456789ab`, assert the full version including `-dev` is rendered as text; retain coverage for the local `dev+...` form. Assert existing initialization eligibility is unchanged by version.
 
 For example, after extending the test fixture type:
 
@@ -370,6 +429,7 @@ Commit message: `feat(ui): display reported co-signer version and revision`.
 ## Task 5: Review integration and document release handoff
 
 - [ ] Verify the backend still returns the exact pending-intent response fixture and that signature verification covers encoded query parameters end to end.
+- [ ] Verify tagged builds retain the exact GitHub tag version without `v`, branch builds retain their `-dev+<12-character SHA>` suffix, and full `revision` agrees with the build source. Compare resolved build output, OCI labels, and the identity used by health and polling.
 - [ ] Verify an old client can poll the new backend, overwriting a previous metadata observation with null while presence stays ONLINE.
 - [ ] Verify a new client can poll an old backend: extra query fields must be ignored and exact signature validation must still succeed. Preserve errors if that test exposes a compatibility issue; do not weaken signing validation.
 - [ ] Verify both status APIs and UI display a lower version after a reporting client rollback, and unknown after a legacy client rollback.
@@ -379,4 +439,4 @@ Commit message: `feat(ui): display reported co-signer version and revision`.
 
 ## Plan self-review
 
-The plan covers build identity reuse (Task 3), signed reporting (Tasks 1/3), tolerant validation and legacy behavior (Task 1), persistence (Task 1), API serialization (Task 2), UI unknown/offline behavior (Task 4), and cross-version integration (Task 5). No new endpoint or per-instance model is introduced. The parser, input, store, API, and UI field names are consistently `version` and `revision`.
+The plan covers tagged/development build classification and identity reuse (Task 3), signed reporting (Tasks 1/3), tolerant validation and legacy behavior (Task 1), persistence (Task 1), API serialization (Task 2), UI unknown/offline/development behavior (Task 4), and cross-version integration (Task 5). No new endpoint or per-instance model is introduced. The parser, input, store, API, and UI field names are consistently `version` and `revision`.

@@ -4,7 +4,7 @@ Date: 2026-10-19
 
 Issue: https://brolabel.atlassian.net/browse/BROSET-123
 
-Status: The user selected the existing polling transport and the existing single logical Co-Signer model. This document specifies the resulting cross-repository contract; application implementation has not started.
+Status: The user selected the existing polling transport, the existing single logical Co-Signer model, and explicit development versions for branch builds. This document specifies the resulting cross-repository contract; application implementation has not started.
 
 ## Goal
 
@@ -35,6 +35,7 @@ Current behavior:
 
 1. One logical Co-Signer per organization is sufficient for this task. Preserve `(orgId, partyId)` and the existing configured party.
 2. Extend the existing polling request. Do not add a heartbeat endpoint, timer, instance registration, or per-process identifier.
+3. Tagged release builds report their exact tag version without the leading `v`; branch builds report `X.Y.Z-dev+<12-character SHA>`. Keep the full commit SHA in `revision`.
 
 ## Constraints
 
@@ -42,10 +43,31 @@ Current behavior:
 - Keep authentication, scopes, organization isolation, and signing decisions unchanged.
 - Build metadata is observational; it is not a compatibility gate or proof of which code is executing.
 - Use the same resolved build identity for health and polling. Do not introduce runtime version configuration.
+- Published branch builds use `X.Y.Z-dev+<12-character SHA>`; tagged releases use the exact tag version without `v`. The full commit SHA remains in `revision`.
 - Accept legacy polls without build metadata for the lifetime of this API contract; removing that support requires a separate compatibility decision.
 - Persist and return unknown values as JSON `null`, never the strings `unknown`, `null`, or an empty string.
 - Never log raw rejected metadata, request credentials, configuration, or key material.
 - Do not merge, release, deploy, or migrate a shared environment as part of preparing the implementation.
+
+## Build identity and GitHub tags
+
+The following rules are the agreed target behavior, not a claim that the current branch publication script already implements development suffixes:
+
+| Build source | Reported `version` | Reported `revision` |
+| --- | --- | --- |
+| Verified release tag `v2.2.0` | `2.2.0` | Full SHA of the tag's commit |
+| Verified candidate tag `v2.2.0-rc.1` | `2.2.0-rc.1` | Full SHA of the tag's commit |
+| `main` or `eks-staging` branch publication with `VERSION=2.2.0` | `2.2.0-dev+0123456789ab` | Full SHA of the built commit, starting with `0123456789ab` |
+
+`VERSION` continues to contain only the base `X.Y.Z`. For branch publications, `scripts/check-release-identity.sh` appends `-dev+` and the first 12 lowercase hexadecimal characters of the full `REVISION`. Validate the full revision as a 40-character lowercase SHA before deriving the short value. Tag publications preserve the existing version/tag and branch ownership checks and do not append development metadata.
+
+Classification follows the publication ref. A branch-triggered build remains a development build even if its commit is also referenced by a release tag. A matching base version alone never makes a branch build a release.
+
+The existing workflow passes the resolved identity into the binary and OCI labels, so health, polling, and the image's version label must agree. Keep existing image aliases and publication channels unchanged; no GitHub release is created for a branch publication. The suffix is generated at build time and is not a runtime setting.
+
+The documented general-purpose `make build` path must also produce `X.Y.Z-dev+<12-character SHA>`, adding `.dirty` to build metadata for a modified checkout. Keep the explicit README installation recipe for a verified release tag aligned with that tag. Plain `go build` without injected metadata retains the existing `dev+<12-character SHA>[.dirty]` or `dev` fallback. Manually overriding linker metadata is outside the official build guarantees.
+
+Build metadata after `+` is not a release-order counter. Use the full revision to identify source; do not infer upgrade order from lexical SHA comparisons. The UI displays the complete version, preserving the visible `-dev` or `-rc.N` distinction.
 
 ## Polling contract
 
@@ -73,7 +95,7 @@ Normalize the two fields independently at the HTTP boundary. Use the existing `c
 | Revision: exactly 40 lowercase hex characters | Exact value | None |
 | Empty, repeated/array, object, invalid format, whitespace-padded, or overlong input | `null` for that field | Fixed field name only |
 
-For example, `2.1.1`, `2.2.0-rc.1`, and `2.2.0-rc.1+build.7` are accepted. `v2.1.1`, `2.1`, `latest`, and `02.1.1` are rejected as metadata. Local dirty builds are clearly marked development observations; their SHA does not identify uncommitted edits reproducibly. Official build identity remains the deterministic `(version, revision)` pair already supplied by the build pipeline.
+For example, `2.1.1`, `2.2.0-rc.1`, `2.2.0-rc.1+build.7`, and `2.2.0-dev+0123456789ab` are accepted. The new branch format is valid SemVer and needs no special backend exception. `v2.1.1`, `2.1`, `latest`, and `02.1.1` are rejected as metadata. Local dirty builds are clearly marked development observations; their SHA does not identify uncommitted edits reproducibly. Official build identity is the deterministic `(version, revision)` pair supplied by the build pipeline with the agreed publication-ref classification.
 
 Within the existing HTTP request-size and request-format limits, invalid metadata does not generate an HTTP 400 or prevent an otherwise authorized poll. Existing transport limits, authentication, discovery, and database failures retain their current behavior. Do not turn a persistence failure into a successful poll.
 
@@ -140,6 +162,7 @@ Do not add version properties to the strict pending-intent response: old Co-Sign
 5. UI: known version, unknown/absent metadata, development value, and OFFLINE with a last reported version. Assert readiness actions remain unchanged.
 6. OpenAPI-derived frontend types, relevant type checks, and existing MPC HTTP contract checks must pass.
 7. Before release, verify the new client against an old backend and an old client against the new backend using test instances. Planned tests are not completed evidence.
+8. Build identity: verify stable and RC tag equality, branch development suffixes on both branches, unchanged full revisions, and the same identity in binary health/polling and OCI labels. A branch ref at a tagged commit remains a development build. Verify `make build` marks a clean/dirty local build as development.
 
 ## Rollout and rollback
 
