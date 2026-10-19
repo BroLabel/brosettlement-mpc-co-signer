@@ -24,11 +24,17 @@ const (
 	maxTerminalResponseBytes = 8 << 10
 )
 
+type BuildIdentity struct {
+	Version  string
+	Revision string
+}
+
 type Client struct {
-	baseURL    string
-	keyID      string
-	privateKey ed25519.PrivateKey
-	httpClient *http.Client
+	buildIdentity BuildIdentity
+	baseURL       string
+	keyID         string
+	privateKey    ed25519.PrivateKey
+	httpClient    *http.Client
 }
 
 var (
@@ -45,13 +51,17 @@ type ResultConflictError struct {
 func (e *ResultConflictError) Error() string { return ErrTerminalConflict.Error() }
 func (e *ResultConflictError) Unwrap() error { return ErrTerminalConflict }
 
-func New(baseURL, keyID string, privateKey ed25519.PrivateKey, timeout time.Duration) *Client {
-	return &Client{
+func New(baseURL, keyID string, privateKey ed25519.PrivateKey, timeout time.Duration, identity ...BuildIdentity) *Client {
+	client := &Client{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		keyID:      keyID,
 		privateKey: privateKey,
 		httpClient: &http.Client{Timeout: timeout},
 	}
+	if len(identity) > 0 {
+		client.buildIdentity = identity[0]
+	}
+	return client
 }
 
 func (c *Client) doJSON(

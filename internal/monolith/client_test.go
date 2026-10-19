@@ -50,7 +50,7 @@ func TestNewRequestSignsExactRequestTarget(t *testing.T) {
 	}
 }
 
-func newTestClient(t *testing.T, baseURL string) (*Client, ed25519.PublicKey) {
+func newTestClient(t *testing.T, baseURL string, identity ...BuildIdentity) (*Client, ed25519.PublicKey) {
 	t.Helper()
 
 	seed := make([]byte, ed25519.SeedSize)
@@ -58,7 +58,7 @@ func newTestClient(t *testing.T, baseURL string) (*Client, ed25519.PublicKey) {
 		seed[i] = byte(i + 1)
 	}
 	privateKey := ed25519.NewKeyFromSeed(seed)
-	client := New(baseURL, testAPIKeyID, privateKey, time.Second)
+	client := New(baseURL, testAPIKeyID, privateKey, time.Second, identity...)
 	return client, privateKey.Public().(ed25519.PublicKey)
 }
 

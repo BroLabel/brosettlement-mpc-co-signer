@@ -121,7 +121,7 @@ func openApplicationResources(
 	if err != nil {
 		return nil, fmt.Errorf("initialize dual-party dkg coordinator: %w", err)
 	}
-	client := monolith.New(cfg.MonolithURL, cfg.APIKeyID, privateKey, cfg.HTTPTimeout)
+	client := monolith.New(cfg.MonolithURL, cfg.APIKeyID, privateKey, cfg.HTTPTimeout, monolith.BuildIdentity{Version: version, Revision: revision})
 	terminalPublisher := terminal.NewPublisher(
 		client,
 		terminal.DefaultRetryPolicy(),

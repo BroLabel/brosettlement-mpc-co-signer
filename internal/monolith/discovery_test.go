@@ -2,6 +2,7 @@ package monolith
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
@@ -183,5 +184,90 @@ func TestListActionableIntentsRejectsUnexpectedHTTPStatusWithValidBody(t *testin
 	client, _ := newTestClient(t, srv.URL)
 	if _, err := client.ListActionableIntents(context.Background()); err == nil {
 		t.Fatal("ListActionableIntents() error = nil")
+	}
+}
+
+func TestListActionableIntentsReportsSignedBuildIdentityOnEveryPoll(t *testing.T) {
+	const fullRevision = "0123456789abcdef0123456789abcdef01234567"
+	fixture, err := os.ReadFile("../../testdata/mpc-co-signer-http/v1/listing-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name         string
+		identity     []BuildIdentity
+		wantVersion  string
+		wantRevision string
+	}{
+		{name: "stable", identity: []BuildIdentity{{Version: "2.2.0", Revision: fullRevision}}, wantVersion: "2.2.0", wantRevision: fullRevision},
+		{name: "RC", identity: []BuildIdentity{{Version: "2.2.0-rc.1", Revision: fullRevision}}, wantVersion: "2.2.0-rc.1", wantRevision: fullRevision},
+		{name: "branch", identity: []BuildIdentity{{Version: "2.2.0-dev+0123456789ab", Revision: fullRevision}}, wantVersion: "2.2.0-dev+0123456789ab", wantRevision: fullRevision},
+		{name: "local development", identity: []BuildIdentity{{Version: "dev+0123456789ab.dirty", Revision: fullRevision}}, wantVersion: "dev+0123456789ab.dirty", wantRevision: fullRevision},
+		{name: "no identity"},
+		{name: "unknown revision", identity: []BuildIdentity{{Version: "dev", Revision: "unknown"}}, wantVersion: "dev"},
+		{name: "empty revision", identity: []BuildIdentity{{Version: "dev"}}, wantVersion: "dev"},
+		{name: "revision only", identity: []BuildIdentity{{Revision: fullRevision}}, wantRevision: fullRevision},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var publicKey ed25519.PublicKey
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/co-signer/intents/pending" {
+					t.Errorf("unexpected discovery request: %s %s", r.Method, r.URL.Path)
+				}
+				q := r.URL.Query()
+				for field, want := range map[string]string{"version": tt.wantVersion, "revision": tt.wantRevision} {
+					values, present := q[field]
+					if want == "" {
+						if present {
+							t.Errorf("%s unexpectedly present: %q", field, values)
+						}
+					} else if len(values) != 1 || values[0] != want {
+						t.Errorf("%s = %q, want [%q]", field, values, want)
+					}
+				}
+				if tt.wantVersion == "" && tt.wantRevision == "" && r.URL.RawQuery != "" {
+					t.Errorf("legacy poll has query %q", r.URL.RawQuery)
+				}
+				if strings.Contains(tt.wantVersion, "+") && !strings.Contains(r.URL.RawQuery, "%2B") {
+					t.Error("development version plus was not URL encoded")
+				}
+				if !verifyRequestSignature(t, r, publicKey, "") {
+					t.Error("query is not covered by the request signature")
+				}
+				for _, field := range []string{"version", "revision"} {
+					tampered := r.Clone(r.Context())
+					tamperedURL := *r.URL
+					tampered.URL = &tamperedURL
+					q := tampered.URL.Query()
+					q.Set(field, "9.9.9")
+					tampered.URL.RawQuery = q.Encode()
+					if verifyRequestSignature(t, tampered, publicKey, "") {
+						t.Errorf("signature unexpectedly accepts changed %s", field)
+					}
+				}
+				_, _ = w.Write(fixture)
+			}))
+			defer srv.Close()
+			client, pub := newTestClient(t, srv.URL, tt.identity...)
+			publicKey = pub
+			if len(tt.identity) > 0 {
+				tt.identity[0] = BuildIdentity{Version: "changed", Revision: "changed"}
+			}
+			for poll := 0; poll < 2; poll++ {
+				listing, err := client.ListActionableIntents(context.Background())
+				if err != nil {
+					t.Fatalf("poll %d: ListActionableIntents() error = %v", poll, err)
+				}
+				if listing.HTTPStatus != http.StatusOK || len(listing.OwnClaimedDKG) != 1 || len(listing.OwnClaimedSign) != 1 || len(listing.Pending) != 2 {
+					t.Fatalf("poll %d: unexpected listing = %+v", poll, listing)
+				}
+			}
+			if requests != 2 {
+				t.Fatalf("requests = %d, want 2", requests)
+			}
+		})
 	}
 }
