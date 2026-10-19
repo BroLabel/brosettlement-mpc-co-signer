@@ -1,0 +1,412 @@
+{
+  "sourceRevision": "9cc15089c66e934229e65209237b3926be505365",
+  "rawOutputSHA256": "c90023c0ae10ce2f4f0214d5e23eeb984df22ae790bf8677c940736e126d770c",
+  "counts": {
+    "test_pass": 79,
+    "top_level_pass": 33,
+    "package_pass": 1
+  },
+  "packages": {
+    "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval": "pass"
+  },
+  "filesystemEvidence": [
+    "crash_test.go:20: actual filesystem crash/reopen process platform=linux/arm64 temp=/tmp"
+  ],
+  "testResults": [
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries/receipt/write",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries/receipt/file-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries/receipt/publish",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries/receipt/directory-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries/ack/write",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries/ack/file-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries/ack/publish",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries/ack/directory-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashReopenPublicationAndACKBoundaries",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalCrashChild",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestReceiptSentBeforeACKCrashIsRedeliverable",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestReceiptSendCrashChild",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestDispatcherIdlePendingFinalIdleAndLostACK",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestDispatcherAutoAndPinnedAdmissionAcrossRestart",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestDispatcherPagesProgressPastForeverPendingAndNewArrivals",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestDispatcherBackoffMemoryBound",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestSavedDeliveryProgressWithContinuousArrivalsAndOneLostACK",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestPendingRestartCancellationAndFreshDiscoveryBackoff",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestSuppressedSavedReceiptRetriesWithoutWaitingForGrowingDirectoryEOF",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestDeliveryRetrySaturationPreservesEvidenceHintsAndResumesEvaluation",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestPublishedFinalAfterDirectorySyncFailureNeverRepollsOrganization",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestDispatcherConcurrentTicksUseOneOrganizationAttemptAndNoSignPermit",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestPendingAndErrorsHaveNoTotalWaitingDeadline",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestThirtyAnd365DayPendingSurvivesJournalReopen/days_30",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestThirtyAnd365DayPendingSurvivesJournalReopen/days_365",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestThirtyAnd365DayPendingSurvivesJournalReopen",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/pending",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/approved",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/rejected",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/malformed",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/reject_no_reason",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/unauthenticated",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/server_error",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/accepted_status",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential/redirect",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalOnly200BoundFinalResponseAndNoPlatformCredential",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalTransportCannotReplayIdempotentPOSTAfterLostResponse",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalAttemptTimeoutDoesNotCreateFinalDecision",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExternalRejectsUnauthenticatedTLSAndOversizedResponse",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalReopenPreservesExactReceiptAndRejectsConflict",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalPrivateExistingDirectoryAndSeparateProcessLock",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalLockChild",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalDurabilityFailureDoesNotAuthorizeAndPublishedReceiptNeverRepolls/write",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalDurabilityFailureDoesNotAuthorizeAndPublishedReceiptNeverRepolls/file-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalDurabilityFailureDoesNotAuthorizeAndPublishedReceiptNeverRepolls/publish",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalDurabilityFailureDoesNotAuthorizeAndPublishedReceiptNeverRepolls/directory-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalDurabilityFailureDoesNotAuthorizeAndPublishedReceiptNeverRepolls",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalRejectsMissingAndSubstitutedEvidenceAndRevisionReuse",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalExecutionBindingIsCreateOnlyAndRequiresAppliedApprove",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestJournalRejectsSymlinkRecordAndDirectoryReplacement",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestClosedJournalCannotWriteAfterNewOwnerAcquiresLock",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionKnownMarkerRequiresBothExactArtifactsAfterReopen/execution",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionKnownMarkerRequiresBothExactArtifactsAfterReopen/execution-known",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionKnownMarkerRequiresBothExactArtifactsAfterReopen",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary/artifact-1/write",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary/artifact-1/file-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary/artifact-1/publish",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary/artifact-1/directory-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary/artifact-2/write",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary/artifact-2/file-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary/artifact-2/publish",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary/artifact-2/directory-sync",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestExecutionPartialPublicationFailsClosedAtEachDurabilityBoundary",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/valid",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/mainnet",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/wrong-chain",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/wrong-reference",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/malformed-height",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/wrong-id",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/rpc-error",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/redirect",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/timeout",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/unconfigured",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/oversized",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/duplicate-json",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence/bad-block-prefix",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTrustedTronNetworkEvidence",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestTronNetworkConfiguration",
+      "result": "pass"
+    },
+    {
+      "package": "github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval",
+      "test": "TestEmptyTronCheckerPreservesLegacyZeroTimeout",
+      "result": "pass"
+    }
+  ]
+}

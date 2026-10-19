@@ -2,13 +2,13 @@
 
 Updated: 2026-10-19 — user-approved R1–R3 and S1 incorporated; repeat source-backed engineering review completed with no remaining findings. All six v1 product decisions remain unchanged.
 
-> **For agentic workers:** Implementation and isolated local tests are now authorized. Execute task by task under the binding implementation constraints. The user forbids review subagents; the controller performs task/final review. Implementation subagents use GPT-6.1 Sol medium (xhigh for complex work), with no nested subagents. PLAN-STEP-000 is documentation preparation; later unchecked steps and their fixtures/tests remain future work. No push, merge or deployment is authorized.
+> **For agentic workers:** Implementation and isolated local tests are now authorized. Execute task by task under the binding implementation constraints. The user forbids review subagents; the controller performs task/final review. Implementation subagents use GPT-6.1 Sol medium (xhigh for complex work), with no nested subagents. PLAN-STEP-000 is the historical documentation preparation. Feature implementation and materialized fixtures are now present; STEP-008 local validation and final controller review are tracked below. No push, merge or deployment is authorized.
 
 **Goal:** Immediately reserve transfer principal and an explicit network-fee ceiling, support durable unlimited external/automatic approval, and execute at most one fresh, verified transfer without duplicate reserves or releases.
 
 **Architecture:** Add a backend-owned approval request linked to the original ledger transaction and its principal/fee journals. Co-Signer evaluates requests outside SIGN admission and persists signed decisions and execution bindings. On approval, backend creates a fresh outgoing that adopts both existing holds. The approval worker durably resumes its CREATED-to-SIGN handoff until a persisted MPC binding exists, then the current MPC/broadcast lifecycle continues. Execution status is derived from outgoing; pre-activation terminalization closes ledger records and both holds together.
 
-**Tech Stack:** Existing NestJS/TypeScript, Prisma/PostgreSQL and ledger/outbox infrastructure; Go 1.24+, existing JCS dependency, standard Ed25519 and durable local files. Parser dependencies require the bounded evaluation in PLAN-STEP-006; no dependency was installed for this plan.
+**Tech Stack:** Existing NestJS/TypeScript, Prisma/PostgreSQL and ledger/outbox infrastructure; Go 1.24+, existing JCS dependency, standard Ed25519 and durable local files. Parser dependencies and pinned real-producer fixtures are implemented and covered by the current contract/race suites. The local macOS organization-TLS proof uses a Go 1.27.2 executable; the module minimum remains Go 1.24.
 
 **Spec:** `docs/superpowers/specs/2026-10-11-co-signer-approval-design.md` in the Co-Signer repository.
 
@@ -33,7 +33,7 @@ This plan follows the v1 design decisions approved by the user on 2026-10-19, in
 - Backend source baseline: `e14e175ff5fb2974907bcd5efd123d20425a5001`.
 - Reviewed DESIGN SHA-256 at the pinned commit: `6f2003b182a3df0d0b6a7fa58a6fc6f6a155022e84531d6d248b976f65b30d9b`; reviewed PLAN SHA-256: `3948daacb72f0f1a4ba31b0cf96d578ee31d34d51f351a88c60b3ca4682292e9`. Historical review fingerprints apply to that commit, not subsequent preparation edits.
 - Concrete normative wire schemas: [contracts v1](../specs/2026-10-19-co-signer-approval-contracts.md), including AuthorizationV1, signed DecisionEnvelopeV1/receipt, public cap/projections/cancel, pending page and existing authenticated cursor, organization request/response, four decision outcomes, v2 SIGN claim and trusted config/admission. RULING-001–006 are technical choices for controller review, not new product modes.
-- Frozen vector IDs: `APPROVAL-V1-001` through `APPROVAL-V1-020`, exactly as defined by that contract registry. These are reserved specification IDs only; no fixture manifest, signatures, raw-byte vectors or passing feature tests exist yet. STEP-001 must generate producer/version evidence; STEP-006 must verify actual supported raw bytes.
+- Frozen vector IDs: `APPROVAL-V1-001` through `APPROVAL-V1-020`, exactly as defined by that contract registry. Authorization/receipt/cursor and prepared-byte corpora are now materialized with pinned producer/version evidence and verified by the cross-language suites. Operational IDs map to executable dispatcher, journal, worker and coordinated tests; the Task9 validation report records actual executed status and scope.
 - PLAN-STEP-000 pins the already approved decisions; no repeat product approval is required. If later work needs a new design-level decision, use `DESIGN_REOPEN_REQUIRED` with affected IDs rather than silently inventing it here.
 
 Inventory: REQ-001 through REQ-013; INV-001 through INV-015; ASSUMPTION-001 through ASSUMPTION-004; DECISION-001 through DECISION-010; RISK-001 through RISK-007. The requirement mapping and decision dispositions below cover these sets.
@@ -187,7 +187,7 @@ Files: new `internal/approval/` files from responsibility map; `internal/monolit
 - [ ] Wire outbound discovery/decision delivery as a separate bounded worker. Keep pending requests on backend as the authoritative queue, with local records for independent decision/execution evidence.
 - [ ] Verify targeted Go tests and Linux journal crash tests; commit `feat(cosigner): add durable external and automatic approvals`.
 
-Commands: `GOWORK=off go test ./internal/config ./internal/approval ./internal/monolith ./cmd/co-signer`; `GOWORK=off go test -race ./internal/approval -count=1`. Linux filesystem crash tests must actually run on Linux CI; macOS passing is not Linux crash evidence.
+Commands: `GOWORK=off go test ./internal/config ./internal/approval ./internal/monolith ./cmd/co-signer`; `GOWORK=off go test -race ./internal/approval -count=1`. Linux filesystem crash tests must actually run on a Linux filesystem; macOS passing is not Linux crash evidence. Current local native-Linux Docker approval race/crash proof passed at Co-Signer 9cc15089 (79 test events, zero failed/skipped); hosted CI execution remains unperformed.
 
 ### PLAN-STEP-005 — Activate once and durably hand off the saved outgoing to SIGN
 
@@ -249,14 +249,14 @@ Depends on: 003–007.
 
 Files: new backend `apps/client-api/test/mpc-2of3/approval.external.e2e-spec.ts` and explicitly selected runner config; existing harness; new Co-Signer approval crash tests/CI selection; public API/config/recovery docs; existing release workflows only if test inclusion requires change.
 
-- [ ] Add coordinated TEST-005/018/020–026 using fake clock for long waits, stub organization API, isolated PostgreSQL and local chain fixtures. Ensure the runner discovers the new suite; an empty selection is failure.
-- [ ] Exercise principal+fee-cap reservation → external pending → restart/time advance → approve → fresh transaction → independent verification → MPC → settlement, and reject/cancel release paths. Run the same monetary path with explicit auto approval.
-- [ ] Exercise disabled intake, old/new binary combinations, legacy-key replay and fenced intake cutover, journal restore/reconciliation and pending-hold drain/cancel. Demonstrate no rollback path can bypass approval or orphan a held principal.
-- [ ] Run backend targeted suites/typecheck and coordinated harness, then Co-Signer `GOWORK=off go test -race ./... -count=1` and contract verification. Broaden only for failures or relevant uncovered paths.
-- [ ] Record exact backend/Co-Signer/fixture revisions, executable suite counts and evidence for each acceptance criterion. Separate code/CI proof from staging pilot and live deployment.
-- [ ] Publish runbook: mode changes and unseen backlog, durable volume/backup, pending cancellation, fee policy, journal loss, stuck activation and ambiguous broadcast. Commit `test(approval): verify durable approval and reservation lifecycle`.
+- [x] Add coordinated TEST-005/018/020–026 using fake clock for long waits, stub organization API, isolated PostgreSQL and local chain fixtures. Ensure the runner discovers the new suite; an empty selection is failure.
+- [x] Exercise principal+fee-cap reservation → external pending → restart/time advance → approve → fresh transaction → independent verification → MPC → settlement, and reject/cancel release paths. Run the same monetary path with explicit auto approval.
+- [x] Exercise disabled intake, old/new binary combinations, legacy-key replay and fenced intake cutover, journal restore/reconciliation and pending-hold drain/cancel. Demonstrate no rollback path can bypass approval or orphan a held principal.
+- [x] Run backend targeted suites/typecheck and coordinated harness, then Co-Signer `GOWORK=off go test -race ./... -count=1` and contract verification. Broaden only for failures or relevant uncovered paths.
+- [x] Record exact backend/Co-Signer/fixture revisions, executable suite counts and evidence for each acceptance criterion. Separate code/CI proof from staging pilot and live deployment.
+- [x] Publish runbook: mode changes and unseen backlog, durable volume/backup, pending cancellation, fee policy, journal loss, stuck activation and ambiguous broadcast. Commit `test(approval): verify durable approval and reservation lifecycle`.
 
-Planned integration command after adding the explicit suite config: `npm exec -w brosettlement-client-api -- jest --config ./test/mpc-2of3/jest-approval-coordinated.json --runInBand`. The config and required-suite guard are deliverables of this step, not existing commands claimed to work today.
+Implemented integration command (requires the owned runner environment): `npm exec -w brosettlement-client-api -- jest --config ./test/mpc-2of3/jest-approval-coordinated.json --runInBand`. The config and executed-result guard are implemented. Actual local proof at backend 72a20dcb and Co-Signer 9cc15089 passed 1 required suite / 1 test with zero failed/skipped, three confirmed ETH/Anvil approval withdrawals, and verified cleanup of four owned services. The actual old Co-Signer binary and configured-current-Co/null-claim boundary fail closed; arbitrary double-old rollback remains prohibited. Hosted CI, staging pilot, live capability enablement and deployment were not performed. See [durable Task9 proof](../../validation/approval/task9-validation.md).
 
 ## Test matrix
 
@@ -323,7 +323,7 @@ Backend 005 and the backend portion of 006 both touch SIGN creation/claim contra
 
 ## Structural readiness
 
-Status: **DESIGN_APPROVED / REVIEWED_REVISION_PINNED / PLAN-STEP-000_PREPARED / CONTROLLER_REVIEW_PENDING**. User-approved R1–R3/S1 and all six v1 decisions are preserved. Reviewed revision `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` preserves prior evidence; current exact wire rulings are documented separately. No feature code, migrations, fixtures or feature tests were implemented/executed by STEP-000. Implementation and isolated tests are authorized for subsequent reviewed tasks.
+Status: **DESIGN_APPROVED / REVIEWED_REVISION_PINNED / IMPLEMENTED_THROUGH_STEP_007 / STEP_008_LOCAL_PROOF_VERIFIED / FINAL_CONTROLLER_REVIEW_PENDING**. User-approved R1–R3/S1 and all six v1 decisions are preserved. Reviewed revision `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` preserves prior evidence; current exact wire rulings are documented separately. No feature code, migrations, fixtures or feature tests were implemented/executed by STEP-000. Implementation and isolated tests are authorized for subsequent reviewed tasks.
 
 ## GSTACK REVIEW REPORT
 
