@@ -1,7 +1,10 @@
 .PHONY: build verify-contracts build-recovery-proof verify-recovery-proof verify-mpc-2of3
 
-VERSION := $(shell cat VERSION)
+BASE_VERSION := $(shell cat VERSION)
 REVISION := $(shell git rev-parse --verify HEAD)
+SHORT_REVISION := $(shell printf '%s' '$(REVISION)' | cut -c1-12)
+DIRTY_SUFFIX := $(shell test -z "$$(git status --porcelain)" || printf '.dirty')
+VERSION := $(BASE_VERSION)-dev+$(SHORT_REVISION)$(DIRTY_SUFFIX)
 
 build:
 	@mkdir -p bin

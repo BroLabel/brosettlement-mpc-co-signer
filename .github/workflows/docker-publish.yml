@@ -19,6 +19,7 @@ jobs:
       - name: Test release boundaries
         run: |
           ./scripts/check-release-identity.test.sh
+          ./scripts/check-local-build-identity.test.sh
           ./scripts/check-image-tag-available.test.sh
       - uses: actions/setup-go@v6
         with:
