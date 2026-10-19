@@ -277,3 +277,9 @@ DKG completion uses persisted share evidence and public keys. Core no longer
 returns a network address or reports `ErrMissingDKGAddress`. Upgrades preserve
 existing key shares and do not require another DKG. Signer and Co-Signer must pin
 the same reviewed Core revision, without local module replacements in builds.
+
+### Durable transfer approvals
+
+Optional approval dispatch is configured explicitly with `CO_SIGNER_APPROVAL_MODE`, `CO_SIGNER_APPROVAL_ORG_ID`, `CO_SIGNER_APPROVAL_ENVIRONMENT`, `CO_SIGNER_APPROVAL_CONFIG_REVISION` and `CO_SIGNER_APPROVAL_JOURNAL_DIR`. External mode also requires the exact HTTPS `CO_SIGNER_APPROVAL_ENDPOINT` and dedicated `CO_SIGNER_APPROVAL_BEARER_TOKEN`. A separately provisioned private durable journal pins admission and exact signed decisions; saved receipts retry independently of backend pending discovery. Automatic mode uses the same durable path and makes no organization calls. The worker is independent of SIGN permits and does not enable the backend capability.
+
+Read [approval operations](docs/approval-operations.md) before provisioning storage, changing modes or restoring history. A missing existing journal is an integrity/recovery event, never a reason to create an empty replacement. Prepared SIGN verification and backend activation remain separately gated rollout steps.

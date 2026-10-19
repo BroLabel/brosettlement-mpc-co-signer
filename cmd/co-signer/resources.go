@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/config"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
@@ -22,14 +23,17 @@ import (
 )
 
 type applicationResources struct {
-	tssService        *coretss.Service
-	scheduler         *worker.Scheduler
-	startupPublisher  *terminal.SingleSlot
-	reconciler        *reconcile.Reconciler
-	healthServer      *http.Server
-	provisioningReady func() bool
-	signingReady      func() bool
-	background        sync.WaitGroup
+	approvalJournal    *approval.Journal
+	approvalDispatcher *approval.Dispatcher
+	approvalReport     func(error)
+	tssService         *coretss.Service
+	scheduler          *worker.Scheduler
+	startupPublisher   *terminal.SingleSlot
+	reconciler         *reconcile.Reconciler
+	healthServer       *http.Server
+	provisioningReady  func() bool
+	signingReady       func() bool
+	background         sync.WaitGroup
 }
 
 func (r *applicationResources) Close() error {
@@ -37,10 +41,14 @@ func (r *applicationResources) Close() error {
 		return nil
 	}
 	r.background.Wait()
-	if r.tssService == nil {
-		return nil
+	var journalErr, serviceErr error
+	if r.approvalJournal != nil {
+		journalErr = r.approvalJournal.Close()
 	}
-	return r.tssService.StopPreParamsPool()
+	if r.tssService != nil {
+		serviceErr = r.tssService.StopPreParamsPool()
+	}
+	return errors.Join(journalErr, serviceErr)
 }
 
 func (r *applicationResources) startBackground(run func()) {
@@ -55,10 +63,15 @@ func (r *applicationResources) startBackground(run func()) {
 }
 
 func (r *applicationResources) startScheduler(ctx context.Context) {
-	if r == nil || r.scheduler == nil {
+	if r == nil {
 		return
 	}
-	r.startBackground(func() { r.scheduler.Run(ctx) })
+	if r.scheduler != nil {
+		r.startBackground(func() { r.scheduler.Run(ctx) })
+	}
+	if r.approvalDispatcher != nil {
+		r.startBackground(func() { r.approvalDispatcher.Run(ctx, r.approvalReport) })
+	}
 }
 
 func openApplicationResources(
@@ -122,6 +135,15 @@ func openApplicationResources(
 		return nil, fmt.Errorf("initialize dual-party dkg coordinator: %w", err)
 	}
 	client := monolith.New(cfg.MonolithURL, cfg.APIKeyID, privateKey, cfg.HTTPTimeout)
+	approvalJournal, approvalDispatcher, err := openApprovalWorker(cfg, privateKey, client)
+	if err != nil {
+		return nil, fmt.Errorf("initialize approval worker: %w", err)
+	}
+	defer func() {
+		if returnErr != nil && approvalJournal != nil {
+			_ = approvalJournal.Close()
+		}
+	}()
 	terminalPublisher := terminal.NewPublisher(
 		client,
 		terminal.DefaultRetryPolicy(),
@@ -175,12 +197,15 @@ func openApplicationResources(
 		cfg.MaxConcurrent,
 	)
 	resources := &applicationResources{
-		tssService:        tssService,
-		scheduler:         scheduler,
-		startupPublisher:  startupPublisher,
-		reconciler:        actionableReconciler,
-		provisioningReady: provisioningReady,
-		signingReady:      signingReady,
+		approvalJournal:    approvalJournal,
+		approvalDispatcher: approvalDispatcher,
+		approvalReport:     func(err error) { log.Error("approval dispatch requires retry or reconciliation", "err", err) },
+		tssService:         tssService,
+		scheduler:          scheduler,
+		startupPublisher:   startupPublisher,
+		reconciler:         actionableReconciler,
+		provisioningReady:  provisioningReady,
+		signingReady:       signingReady,
 	}
 	resources.healthServer = newApplicationHealthServer(cfg.HTTPAddr, cfg.PrimaryStore.Directory(), readiness, resources)
 	if preParamsCapabilityErr == nil {
@@ -229,4 +254,40 @@ func newDKGCoreService(
 		return nil, nil, err
 	}
 	return service, controller, nil
+}
+
+func openApprovalWorker(cfg config.Config, key ed25519.PrivateKey, backend approval.Backend) (*approval.Journal, *approval.Dispatcher, error) {
+	if cfg.Approval == nil {
+		return nil, nil, nil
+	}
+	if err := cfg.Approval.Validate(); err != nil {
+		return nil, nil, err
+	}
+	var shares []string
+	for _, path := range []string{cfg.PrimaryStore.Directory(), cfg.RecoveryStore.Directory()} {
+		if path != "" {
+			shares = append(shares, path)
+		}
+	}
+	if err := approval.ValidateDirectories(cfg.Approval.JournalDir, shares...); err != nil {
+		return nil, nil, err
+	}
+	journal, err := approval.OpenJournal(cfg.Approval.JournalDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	var organization approval.Organization
+	if cfg.Approval.Mode == "external" {
+		organization, err = approval.NewExternal(*cfg.Approval, nil)
+		if err != nil {
+			journal.Close()
+			return nil, nil, err
+		}
+	}
+	dispatcher, err := approval.NewDispatcher(*cfg.Approval, journal, backend, organization, cfg.APIKeyID, key)
+	if err != nil {
+		journal.Close()
+		return nil, nil, err
+	}
+	return journal, dispatcher, nil
 }

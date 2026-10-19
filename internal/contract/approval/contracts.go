@@ -417,10 +417,19 @@ func ParsePendingPage(raw []byte, orgID string) error {
 	if !isNull(v, "nextCursor") && (len(str(v, "nextCursor")) == 0 || len(str(v, "nextCursor")) > 4096) {
 		return invalid()
 	}
+	if !isNull(v, "nextCursor") {
+		for _, c := range []byte(str(v, "nextCursor")) {
+			if c < 0x20 || c > 0x7e {
+				return invalid()
+			}
+		}
+	}
 	var items []json.RawMessage
-	if json.Unmarshal(v["items"], &items) != nil || bytes.Equal(v["items"], []byte("null")) {
+	if json.Unmarshal(v["items"], &items) != nil || bytes.Equal(v["items"], []byte("null")) || len(items) > 100 {
 		return invalid()
 	}
+	seen := make(map[string]bool, len(items))
+	previousTime, previousID := "", ""
 	for _, item := range items {
 		row, e := parse(item, 32768, false)
 		if e != nil {
@@ -429,6 +438,12 @@ func ParsePendingPage(raw []byte, orgID string) error {
 		if !closed(row, "requestId,createdAt,authorization,authorizationHash") || !timestamp(str(row, "createdAt")) {
 			return invalid()
 		}
+		id, created := str(row, "requestId"), str(row, "createdAt")
+		if seen[id] || created < previousTime || created == previousTime && id <= previousID {
+			return invalid()
+		}
+		seen[id] = true
+		previousTime, previousID = created, id
 		auth, e := jcs.Transform(row["authorization"])
 		if e != nil {
 			return e
@@ -452,3 +467,26 @@ func hexSeed(value string) ([]byte, error) {
 	return b, nil
 }
 func bytesEqual(a, b []byte) bool { return bytes.Equal(a, b) }
+
+// ValidReference exposes the frozen shared Id/Reference validation for trusted configuration.
+func ValidReference(value string) bool { return bounded(value, 128) }
+
+// PendingItem and PendingPage carry the frozen discovery wire shape. Validation
+// still belongs to ParsePendingPage, including authorization canonicalization.
+type PendingItem struct {
+	RequestID         string          `json:"requestId"`
+	CreatedAt         string          `json:"createdAt"`
+	Authorization     json.RawMessage `json:"authorization"`
+	AuthorizationHash string          `json:"authorizationHash"`
+}
+type PendingPage struct {
+	Version    int           `json:"version"`
+	Items      []PendingItem `json:"items"`
+	NextCursor *string       `json:"nextCursor"`
+}
+
+// ValidAuthorizationHash and ValidTimestamp reuse frozen wire primitives for
+// durable local records; they do not normalize signed values.
+func ValidAuthorizationHash(value string) bool { return hex256.MatchString(value) }
+func ValidTimestamp(value string) bool         { return timestamp(value) }
+func ValidExecutionDigest(value string) bool   { _, err := standardBase64(value, 32); return err == nil }
