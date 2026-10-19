@@ -26,6 +26,9 @@ var ErrNetworkMismatch = errors.New("trusted TRON network evidence mismatch")
 
 var ErrPrepared = errors.New("prepared transaction does not match approved authorization")
 
+// Existing ethers nonce and TRON request builders use JavaScript safe integers.
+const maxProducerSafeInteger int64 = 1<<53 - 1
+
 type ApprovedExecution struct {
 	Version           int             `json:"version"`
 	RequestID         string          `json:"requestId"`
@@ -188,7 +191,7 @@ func verifyEthereumBytes(raw []byte, p *Context) (string, error) {
 		return "", ErrPrepared
 	}
 	encoded, e := rlp.EncodeToBytes(tx)
-	if e != nil || !bytes.Equal(encoded, raw[1:]) || len(tx.AccessList) != 0 || len(tx.To) != 20 || tx.ChainID.String() != ethereumChainID(p.Chain) || tx.ChainID.String() != p.ChainID || tx.Nonce.String() != p.Nonce || tx.Gas.String() != p.GasLimit || tx.MaxFee.String() != p.MaxFeePerGas || tx.Priority.String() != p.MaxPriorityFeePerGas || tx.Gas.Sign() <= 0 || tx.MaxFee.Sign() <= 0 || tx.Priority.Cmp(tx.MaxFee) > 0 || tx.Value.BitLen() > 256 || tx.MaxFee.BitLen() > 256 || tx.Priority.BitLen() > 256 || tx.Gas.BitLen() > 64 || tx.Nonce.BitLen() > 64 {
+	if e != nil || !bytes.Equal(encoded, raw[1:]) || len(tx.AccessList) != 0 || len(tx.To) != 20 || tx.ChainID.String() != ethereumChainID(p.Chain) || tx.ChainID.String() != p.ChainID || tx.Nonce.String() != p.Nonce || tx.Gas.String() != p.GasLimit || tx.MaxFee.String() != p.MaxFeePerGas || tx.Priority.String() != p.MaxPriorityFeePerGas || tx.Gas.Sign() <= 0 || tx.MaxFee.Sign() <= 0 || tx.Priority.Cmp(tx.MaxFee) > 0 || tx.Value.BitLen() > 256 || tx.MaxFee.BitLen() > 256 || tx.Priority.BitLen() > 256 || tx.Gas.BitLen() > 64 || tx.Nonce.Cmp(big.NewInt(maxProducerSafeInteger)) > 0 {
 		return "", ErrPrepared
 	}
 	to := "0x" + hex.EncodeToString(tx.To)
@@ -246,7 +249,7 @@ func tronAddress(address string) []byte {
 }
 func verifyTronBytes(raw []byte, p *Context, now time.Time) (*Tapos, error) {
 	tx := new(tron.TransactionRaw)
-	if strictProto(raw, tx) != nil || len(tx.Contract) != 1 || len(tx.RefBlockBytes) != 2 || len(tx.RefBlockHash) != 8 || tx.RefBlockNum != 0 || len(tx.Auths) != 0 || len(tx.Data) != 0 || len(tx.Scripts) != 0 || tx.Timestamp <= 0 || tx.Timestamp > now.UnixMilli()+1000 || tx.Expiration-now.UnixMilli() <= 60000 || tx.Expiration <= tx.Timestamp || tx.Expiration-tx.Timestamp > 86340000 || tx.FeeLimit < 0 {
+	if strictProto(raw, tx) != nil || len(tx.Contract) != 1 || len(tx.RefBlockBytes) != 2 || len(tx.RefBlockHash) != 8 || tx.RefBlockNum != 0 || len(tx.Auths) != 0 || len(tx.Data) != 0 || len(tx.Scripts) != 0 || tx.Timestamp <= 0 || tx.Timestamp > now.UnixMilli()+1000 || tx.Expiration-now.UnixMilli() <= 60000 || tx.Expiration <= tx.Timestamp || tx.Expiration-tx.Timestamp > 86340000 || tx.FeeLimit < 0 || tx.FeeLimit > maxProducerSafeInteger {
 		return nil, ErrPrepared
 	}
 	c := tx.Contract[0]
@@ -255,7 +258,7 @@ func verifyTronBytes(raw []byte, p *Context, now time.Time) (*Tapos, error) {
 	}
 	if p.TokenStandard == nil {
 		v := new(tron.TransferContract)
-		if c.Type != tron.Transaction_Contract_TransferContract || c.Parameter.TypeUrl != "type.googleapis.com/protocol.TransferContract" || strictProto(c.Parameter.Value, v) != nil || !bytes.Equal(v.OwnerAddress, tronAddress(p.FromAddress)) || !bytes.Equal(v.ToAddress, tronAddress(p.ToAddress)) || v.Amount <= 0 || big.NewInt(v.Amount).String() != p.AmountAtomic || tx.FeeLimit != 0 || p.FeeLimitSun != nil || p.Asset != "TRX" {
+		if c.Type != tron.Transaction_Contract_TransferContract || c.Parameter.TypeUrl != "type.googleapis.com/protocol.TransferContract" || strictProto(c.Parameter.Value, v) != nil || !bytes.Equal(v.OwnerAddress, tronAddress(p.FromAddress)) || !bytes.Equal(v.ToAddress, tronAddress(p.ToAddress)) || v.Amount <= 0 || v.Amount > maxProducerSafeInteger || big.NewInt(v.Amount).String() != p.AmountAtomic || tx.FeeLimit != 0 || p.FeeLimitSun != nil || p.Asset != "TRX" {
 			return nil, ErrPrepared
 		}
 	} else {

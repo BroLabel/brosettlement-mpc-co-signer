@@ -69,6 +69,12 @@ known boundary maps to signed `trc20`. Signed authorization is never rewritten.
 The same actual SDK/policy producer corpus is checked in TypeScript and Go.
 Legacy HTTP/descriptor/authorization trust bundles are retained independently.
 
+Both verifiers accept the intersection of existing producer numeric ranges:
+Ethereum nonce is at most 9007199254740991 (ethers JavaScript safe integer),
+gas is a positive uint64 (at most 18446744073709551615), and native TRX amount
+and TRON feeLimit are at most 9007199254740991 (existing request builder bounds).
+These are byte/producer compatibility checks; signed authorization is unchanged.
+
 ## HTTP error boundary
 
 Only the new v2 SIGN claim joins the existing public error target registry.
