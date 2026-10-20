@@ -48,7 +48,7 @@ func (g SignGate) Authorize(ctx context.Context, i monolith.Intent) error {
 	if e != nil {
 		return e
 	}
-	if state.Admission == nil || state.Receipt == nil || len(state.Application) == 0 || state.Admission.AuthorizationHash != a.AuthorizationHash {
+	if state.Admission == nil || state.Receipt == nil || state.Admission.AuthorizationHash != a.AuthorizationHash {
 		return ErrIntegrity
 	}
 	same, e := wire.SameReceipt(state.Receipt.Bytes, a.DecisionReceipt)
@@ -60,14 +60,23 @@ func (g SignGate) Authorize(ctx context.Context, i monolith.Intent) error {
 	if e != nil {
 		return e
 	}
+	var decision string
+	_ = json.Unmarshal(receipt.Envelope["decision"], &decision)
+	if decision != "APPROVED" {
+		return ErrIntegrity
+	}
+	// Receipt recovery belongs to Dispatcher. A claim cannot supply the missing ACK.
+	// Journal.Load already rejects missing ACKs when execution evidence exists.
+	if len(state.Application) == 0 {
+		return signingpolicy.ErrApprovalApplicationPending
+	}
 	application, e := wire.ParseDecisionApplication(state.Application)
 	if e != nil {
 		return e
 	}
-	var decision, disposition string
-	_ = json.Unmarshal(receipt.Envelope["decision"], &decision)
+	var disposition string
 	_ = json.Unmarshal(application["disposition"], &disposition)
-	if decision != "APPROVED" || disposition != "APPLIED" {
+	if disposition != "APPLIED" {
 		return ErrIntegrity
 	}
 	now := time.Now()

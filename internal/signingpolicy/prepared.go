@@ -21,6 +21,9 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// ErrApprovalApplicationPending keeps an owned SIGN waiting for durable decision delivery.
+var ErrApprovalApplicationPending = errors.New("approval application confirmation pending")
+
 var ErrNetworkUnavailable = errors.New("trusted TRON network evidence unavailable")
 var ErrNetworkMismatch = errors.New("trusted TRON network evidence mismatch")
 

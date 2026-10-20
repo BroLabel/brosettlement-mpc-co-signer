@@ -69,6 +69,18 @@ func approvalIntent(t *testing.T, tron bool) (monolith.Intent, int64) {
 	return monolith.Intent{}, 0
 }
 func approvalJournal(t *testing.T, i monolith.Intent) *approval.Journal {
+	j := approvalJournalAwaitingACK(t, i)
+	acknowledgeApproval(t, j, i)
+	return j
+}
+func acknowledgeApproval(t *testing.T, j *approval.Journal, i monolith.Intent) {
+	t.Helper()
+	ack, _ := json.Marshal(map[string]any{"version": 1, "requestId": i.Approval.RequestID, "outcome": "EXACT_REPLAY", "disposition": "APPLIED"})
+	if e := j.Acknowledge(i.Payload.OrgID, i.Approval.RequestID, ack); e != nil {
+		t.Fatal(e)
+	}
+}
+func approvalJournalAwaitingACK(t *testing.T, i monolith.Intent) *approval.Journal {
 	t.Helper()
 	dir := t.TempDir()
 	if e := os.Chmod(dir, 0700); e != nil {
@@ -88,10 +100,6 @@ func approvalJournal(t *testing.T, i monolith.Intent) *approval.Journal {
 		seed[k] = 0x42
 	}
 	if e = j.SaveReceipt(approval.SavedReceipt{Version: 1, OrgID: i.Payload.OrgID, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, SigningKeyID: "synthetic-approval-ed25519", PublicKey: ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey), Bytes: i.Approval.DecisionReceipt}); e != nil {
-		t.Fatal(e)
-	}
-	ack, _ := json.Marshal(map[string]any{"version": 1, "requestId": i.Approval.RequestID, "outcome": "ACCEPTED", "disposition": "APPLIED"})
-	if e = j.Acknowledge(i.Payload.OrgID, i.Approval.RequestID, ack); e != nil {
 		t.Fatal(e)
 	}
 	return j
@@ -180,11 +188,16 @@ func TestApprovalGateRejectsNullDowngradeAndMissingLocalEvidence(t *testing.T) {
 	}
 }
 func TestApprovalRuntimeGateBeforeCoreAndOutageDeadline(t *testing.T) {
-	for _, test := range []string{"valid", "hostile", "null", "outage", "missing-checker"} {
+	for _, test := range []string{"valid", "hostile", "null", "outage", "missing-checker", "ack-delayed", "ack-timeout"} {
 		t.Run(test, func(t *testing.T) {
 			tron := test == "outage" || test == "missing-checker"
 			i, now := approvalIntent(t, tron)
-			j := approvalJournal(t, i)
+			var j *approval.Journal
+			if test == "ack-delayed" || test == "ack-timeout" {
+				j = approvalJournalAwaitingACK(t, i)
+			} else {
+				j = approvalJournal(t, i)
+			}
 			g := ApprovalGate{RequiredOrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 			if test == "outage" {
 				g.Tron = trustedTronFunc(func(context.Context, string, *signingpolicy.Tapos) error { return approval.ErrNetworkUnavailable })
@@ -220,8 +233,23 @@ func TestApprovalRuntimeGateBeforeCoreAndOutageDeadline(t *testing.T) {
 			})
 			clock := realReadinessClock()
 			clock.authorize = g.Authorize
+			if test == "ack-delayed" {
+				attempts := 0
+				clock.authorize = func(ctx context.Context, intent monolith.Intent) error {
+					attempts++
+					err := g.Authorize(ctx, intent)
+					if attempts == 1 {
+						if err == nil || calls.Load() != 0 {
+							t.Error("MPC admitted before durable ACK")
+						}
+						// The existing dispatcher recovers the exact saved receipt while SIGN waits.
+						acknowledgeApproval(t, j, i)
+					}
+					return err
+				}
+			}
 			timeout := 5 * time.Second
-			if test == "outage" || test == "missing-checker" {
+			if test == "outage" || test == "missing-checker" || test == "ack-timeout" {
 				timeout = 100 * time.Millisecond
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -230,13 +258,13 @@ func TestApprovalRuntimeGateBeforeCoreAndOutageDeadline(t *testing.T) {
 			permit <- struct{}{}
 			runSessionWithExecutorsForTest(ctx, i, client, runner, nil, nil, primaryPartyID, time.Millisecond, permit, nil, slog.Default(), clock)
 			want := int64(0)
-			if test == "valid" {
+			if test == "valid" || test == "ack-delayed" {
 				want = 1
 			}
 			if calls.Load() != want {
 				t.Fatalf("Core calls=%d want=%d", calls.Load(), want)
 			}
-			if test == "outage" || test == "missing-checker" {
+			if test == "outage" || test == "missing-checker" || test == "ack-timeout" {
 				if client.lastResult.ErrorCode != ErrorCodeSessionTimeout {
 					t.Fatalf("outage terminal code=%s", client.lastResult.ErrorCode)
 				}

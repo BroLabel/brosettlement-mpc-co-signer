@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -148,6 +150,30 @@ func TestApprovalApplicationStatusBindingAndBoundedErrors(t *testing.T) {
 			}
 			if e != nil && strings.Contains(e.Error(), "secret provider response") {
 				t.Fatal("unsafe response logged")
+			}
+		})
+	}
+}
+
+func TestPendingApprovalsClassifiesInvalidCursor(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+		reset  bool
+	}{
+		{400, `{"code":"INVALID_CURSOR","message":"Invalid cursor","details":[],"requestId":"r","retryable":false}`, true},
+		{400, `{"code":"INVALID_REQUEST"}`, false},
+		{401, `{"code":"INVALID_CURSOR"}`, false},
+		{503, `{"code":"INVALID_CURSOR"}`, false},
+		{400, `private invalid response`, false},
+	} {
+		t.Run(fmt.Sprintf("%d/%s", tc.status, tc.body), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); io.WriteString(w, tc.body) }))
+			defer server.Close()
+			client, _ := newTestClient(t, server.URL)
+			_, err := client.PendingApprovals(context.Background(), "stale", "org-1")
+			if errors.Is(err, ErrInvalidApprovalCursor) != tc.reset {
+				t.Fatalf("reset=%v err=%v", tc.reset, err)
 			}
 		})
 	}

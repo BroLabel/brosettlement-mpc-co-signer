@@ -14,6 +14,7 @@ import (
 	"time"
 
 	wire "github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/gowebpki/jcs"
 )
 
@@ -129,6 +130,11 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 	page, e := d.backend.PendingApprovals(pageCtx, d.cursor, d.cfg.OrgID)
 	cancel()
 	if e != nil {
+		// Cursor key rotation invalidates a sweep, not saved decisions. Restart
+		// discovery on the next scheduled step; ordinary outages retain position.
+		if errors.Is(e, monolith.ErrInvalidApprovalCursor) {
+			d.cursor = ""
+		}
 		return errors.Join(result, e)
 	}
 	if len(page.Items) > 50 {

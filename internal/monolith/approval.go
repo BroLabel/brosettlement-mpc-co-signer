@@ -13,6 +13,8 @@ import (
 	wire "github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
 )
 
+var ErrInvalidApprovalCursor = errors.New("invalid approval discovery cursor")
+
 // approvalHTTP reuses signed authentication, but never retries, follows redirects,
 // exposes arbitrary response bodies in errors, or reads an unbounded response.
 func (c *Client) approvalHTTP(ctx context.Context, method, path string, body []byte, maximum int) (int, []byte, error) {
@@ -48,6 +50,12 @@ func (c *Client) PendingApprovals(ctx context.Context, cursor, org string) (wire
 		return page, e
 	}
 	if status != http.StatusOK {
+		var failure struct {
+			Code string `json:"code"`
+		}
+		if status == http.StatusBadRequest && json.Unmarshal(raw, &failure) == nil && failure.Code == "INVALID_CURSOR" {
+			return page, ErrInvalidApprovalCursor
+		}
 		return page, fmt.Errorf("approval discovery HTTP status %d", status)
 	}
 	if e = wire.ParsePendingPage(raw, org); e != nil {

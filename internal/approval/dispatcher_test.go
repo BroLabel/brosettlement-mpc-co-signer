@@ -15,6 +15,7 @@ import (
 	"time"
 
 	wire "github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
 	"github.com/gowebpki/jcs"
 )
 
@@ -592,6 +593,48 @@ func TestThirtyAnd365DayPendingSurvivesJournalReopen(t *testing.T) {
 			s, err = j.Load(c.OrgID, item.RequestID)
 			if err != nil || s.Receipt == nil || len(s.Application) == 0 || o.calls != 3 || len(b.delivered) != 1 {
 				t.Fatal("aged approval did not resume exactly once")
+			}
+		})
+	}
+}
+
+func TestDispatcherRecoversInvalidCursorWithoutReevaluatingSavedDecisions(t *testing.T) {
+	for _, reset := range []bool{true, false} {
+		t.Run(fmt.Sprint(reset), func(t *testing.T) {
+			c := testConfig(t)
+			item := pendingItem(t, "saved")
+			fresh, stale := 0, 0
+			cursor := "old-key-cursor"
+			b := &fakeBackend{page: func(got string) (Page, error) {
+				if got != "" {
+					stale++
+					if reset {
+						return Page{}, monolith.ErrInvalidApprovalCursor
+					}
+					return Page{}, errors.New("temporary outage")
+				}
+				fresh++
+				return Page{Version: 1, Items: []Item{item}, NextCursor: &cursor}, nil
+			}}
+			d, j := makeDispatcher(t, c, b, nil)
+			if err := d.Step(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			saved, _ := j.Load(c.OrgID, item.RequestID)
+			if err := d.Step(context.Background()); err == nil {
+				t.Fatal("missing discovery error")
+			}
+			_ = d.Step(context.Background())
+			want := 1
+			if reset {
+				want = 2
+			}
+			if fresh != want {
+				t.Fatalf("fresh=%d stale=%d reset=%v", fresh, stale, reset)
+			}
+			after, _ := j.Load(c.OrgID, item.RequestID)
+			if !bytes.Equal(saved.Receipt.Bytes, after.Receipt.Bytes) || len(b.delivered) != 1 {
+				t.Fatal("saved decision recreated or redelivered")
 			}
 		})
 	}

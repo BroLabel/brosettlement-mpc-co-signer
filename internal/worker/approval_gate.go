@@ -19,11 +19,11 @@ func authorizeSign(ctx context.Context, i monolith.Intent, gate func(context.Con
 	logged := false
 	for {
 		err := gate(ctx, i)
-		if !errors.Is(err, signingpolicy.ErrNetworkUnavailable) {
+		if !errors.Is(err, signingpolicy.ErrNetworkUnavailable) && !errors.Is(err, signingpolicy.ErrApprovalApplicationPending) {
 			return err
 		}
 		if !logged && log != nil {
-			log.Warn("trusted TRON network evidence unavailable; owned SIGN suspended until bounded expiry", "intent_id", i.IntentID, "session_id", i.SessionID, "stage", "pre_core_authorization")
+			log.Warn("SIGN authorization evidence pending; owned SIGN suspended until bounded expiry", "intent_id", i.IntentID, "session_id", i.SessionID, "stage", "pre_core_authorization")
 			logged = true
 		}
 		// Only this already-owned live SIGN attempt may retry identical evidence;
