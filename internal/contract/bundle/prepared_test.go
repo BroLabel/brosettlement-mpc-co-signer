@@ -1,6 +1,8 @@
 package bundle
 
 import (
+	"bytes"
+	"compress/gzip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,14 +15,38 @@ func TestPreparedBundleExecutesPinnedRealProducerCorpus(t *testing.T) {
 	}
 }
 func TestPreparedBundleRejectsChangedUnpinnedOrMissingEvidence(t *testing.T) {
-	for _, test := range []string{"changed", "missing", "unexpected", "producer"} {
+	for _, test := range []string{"changed", "truncated", "checksum", "oversized", "missing", "unexpected", "producer"} {
 		t.Run(test, func(t *testing.T) {
 			root := copyBundle(t, "../../../testdata/approval-prepared-v1")
+			path := filepath.Join(root, "corpus.json.gz")
 			switch test {
-			case "changed":
-				write(t, filepath.Join(root, "corpus.json"), []byte(`[]`))
+			case "changed", "oversized":
+				raw := []byte(`[]`)
+				if test == "oversized" {
+					raw = bytes.Repeat([]byte(" "), 2*1024*1024+1)
+				}
+				var compressed bytes.Buffer
+				writer := gzip.NewWriter(&compressed)
+				if _, err := writer.Write(raw); err != nil {
+					t.Fatal(err)
+				}
+				if err := writer.Close(); err != nil {
+					t.Fatal(err)
+				}
+				write(t, path, compressed.Bytes())
+			case "truncated", "checksum":
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if test == "truncated" {
+					raw = raw[:len(raw)/2]
+				} else {
+					raw[len(raw)-8] ^= 1
+				}
+				write(t, path, raw)
 			case "missing":
-				if e := os.Remove(filepath.Join(root, "corpus.json")); e != nil {
+				if e := os.Remove(path); e != nil {
 					t.Fatal(e)
 				}
 			case "unexpected":

@@ -17,6 +17,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 )
 
 func TestClaimIntentDecodesClosedEthereumPolicyContexts(t *testing.T) {
@@ -781,7 +783,7 @@ func TestDkgV1RejectsSignV2Fields(t *testing.T) {
 }
 
 func TestV2ApprovedClaimDecodesSharedProducerBindings(t *testing.T) {
-	raw, e := os.ReadFile("../../testdata/approval-prepared-v1/corpus.json")
+	raw, e := signingpolicy.ReadPreparedCorpus("../../testdata/approval-prepared-v1/corpus.json.gz")
 	if e != nil {
 		t.Fatal(e)
 	}

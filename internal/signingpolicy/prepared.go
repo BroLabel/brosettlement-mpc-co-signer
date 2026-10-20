@@ -106,9 +106,16 @@ func authObject(a wire.Object, k string) wire.Object {
 func number(v string) *big.Int                { n, _ := new(big.Int).SetString(v, 10); return n }
 func nullEqual(v json.RawMessage, w any) bool { b, _ := json.Marshal(w); return bytes.Equal(v, b) }
 
-// VerifyPrepared is pure: network membership for TRON is a separate trusted gate.
-// Authorization parsing verifies the sender public key, address and derivation hash.
-func VerifyPrepared(a *ApprovedExecution, prepared *PreparedTransfer, policy *Context, digest []byte, payloadType, algorithm string, now time.Time) (*Tapos, error) {
+// VerifiedPrepared carries validated authorization for the caller's claim identity
+// checks. TRON network membership still requires a separate trusted gate.
+type VerifiedPrepared struct {
+	Authorization wire.Object
+	Tapos         *Tapos
+}
+
+// VerifyPrepared verifies exact transaction bytes and their approved parameters.
+// Authorization parsing also verifies the sender key, address and derivation hash.
+func VerifyPrepared(a *ApprovedExecution, prepared *PreparedTransfer, policy *Context, digest []byte, payloadType, algorithm string, now time.Time) (*VerifiedPrepared, error) {
 	if a == nil || prepared == nil || policy == nil || a.Version != 1 || !wire.ValidReference(a.OutgoingID) || a.RequestID == "" || prepared.Version != 1 || prepared.Encoding != "hex" || !canonicalUint(prepared.NetworkFeeBudgetAtomic) {
 		return nil, ErrPrepared
 	}
@@ -170,7 +177,7 @@ func VerifyPrepared(a *ApprovedExecution, prepared *PreparedTransfer, policy *Co
 	if e != nil || budget == "" || budget != prepared.NetworkFeeBudgetAtomic || !bytes.Equal(got, digest) {
 		return nil, ErrPrepared
 	}
-	return tapos, nil
+	return &VerifiedPrepared{Authorization: auth, Tapos: tapos}, nil
 }
 
 type unsignedType2 struct {

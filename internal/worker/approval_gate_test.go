@@ -26,7 +26,7 @@ func (f trustedTronFunc) Verify(c context.Context, s string, p *signingpolicy.Ta
 }
 func approvalIntent(t *testing.T, tron bool) (monolith.Intent, int64) {
 	t.Helper()
-	raw, e := os.ReadFile("../../testdata/approval-prepared-v1/corpus.json")
+	raw, e := signingpolicy.ReadPreparedCorpus("../../testdata/approval-prepared-v1/corpus.json.gz")
 	if e != nil {
 		t.Fatal(e)
 	}

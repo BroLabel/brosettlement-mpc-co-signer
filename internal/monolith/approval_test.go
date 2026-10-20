@@ -3,13 +3,74 @@ package monolith
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+
+	wire "github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
 )
+
+func TestPendingApprovalsRejectsInvalidPagesAtHTTPBoundary(t *testing.T) {
+	raw, err := os.ReadFile("../../testdata/approval-v1/vectors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var corpus struct {
+		Vectors []wire.Vector `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &corpus); err != nil {
+		t.Fatal(err)
+	}
+	type testCase struct {
+		name, body, org string
+		ok              bool
+	}
+	var cases []testCase
+	for _, v := range corpus.Vectors {
+		if v.Kind != "page" {
+			continue
+		}
+		body, err := base64.StdEncoding.DecodeString(v.InputBase64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var binding struct {
+			OrgID string `json:"orgId"`
+		}
+		if err := json.Unmarshal(v.Binding, &binding); err != nil {
+			t.Fatal(err)
+		}
+		cases = append(cases, testCase{v.ID, string(body), binding.OrgID, v.Expected == "ACCEPT"})
+		if v.ID == "APPROVAL-V1-010-end-page" {
+			cases = append(cases,
+				testCase{"unknown field", string(body[:len(body)-1]) + `,"unknown":true}`, binding.OrgID, false},
+				testCase{"duplicate key", strings.Replace(string(body), `"version":1`, `"version":1,"version":1`, 1), binding.OrgID, false},
+				testCase{"changed hash", strings.Replace(string(body), `"authorizationHash":"`, `"authorizationHash":"0`, 1), binding.OrgID, false},
+			)
+		}
+	}
+	if len(cases) != 6 {
+		t.Fatalf("expected page boundary coverage, got %d cases", len(cases))
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer server.Close()
+			client, _ := newTestClient(t, server.URL)
+			if _, err := client.PendingApprovals(context.Background(), "", tc.org); (err == nil) != tc.ok {
+				t.Fatalf("accepted=%t want=%t err=%v", err == nil, tc.ok, err)
+			}
+		})
+	}
+}
 
 func TestApprovalTransportFreshHTTPAuthenticationAndExactSavedBody(t *testing.T) {
 	body := []byte(`{"version":1,"envelopeBase64":"saved","signatureBase64":"exact"}`)

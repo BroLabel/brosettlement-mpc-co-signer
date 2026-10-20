@@ -54,7 +54,7 @@ This table records the current completion status accepted by the main controller
 | STEP007 / PLAN-STEP-007 | Original ledger read, settlement and reconciliation ownership | Verified; controller approved |
 | STEP008 / PLAN-STEP-008 | Actual coordinated MPC/Anvil proof, retained evidence and rollout runbooks | Verified; controller approved |
 
-The [main controller review](../../validation/approval/controller-review.md) records exact reviewed revisions, coverage and limits. [Implementation rulings](../../validation/approval/implementation-rulings.md) retains all 21 decisions and their costs if wrong. No independent reviewers or review subagents were used. This local completion is not hosted CI, staging or deployment approval.
+The [main controller review](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/controller-review.md) records exact reviewed revisions, coverage and limits. [Implementation rulings](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/implementation-rulings.md) retains all 21 decisions and their costs if wrong. No independent reviewers or review subagents were used. This local completion is not hosted CI, staging or deployment approval.
 
 ## Responsibility map
 
@@ -341,7 +341,7 @@ Backend 005 and the backend portion of 006 both touch SIGN creation/claim contra
 
 ## Structural readiness
 
-Status: **ALL_NINE_STEPS_IMPLEMENTED / LOCAL_PROOF_VERIFIED / CONTROLLER_REVIEW_APPROVED**. User-approved R1–R3/S1 and all six v1 decisions are preserved. The pinned DESIGN snapshot at `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` and the historical review report are unchanged by this followup. STEP-000 was preparation only; STEP-001–008 subsequently implemented and locally verified the feature. The [main controller review](../../validation/approval/controller-review.md) preserves exact whole-branch scope and coverage. Hosted Linux CI, staging pilot, live capability enablement and deployment remain unperformed release gates. No independent review, push, PR, merge or deployment is claimed.
+Status: **ALL_NINE_STEPS_IMPLEMENTED / LOCAL_PROOF_VERIFIED / CONTROLLER_REVIEW_APPROVED**. User-approved R1–R3/S1 and all six v1 decisions are preserved. The pinned DESIGN snapshot at `37da3c1e8181db440a7f1c2e3cbef27b4ba8669a` and the historical review report are unchanged by this followup. STEP-000 was preparation only; STEP-001–008 subsequently implemented and locally verified the feature. The [main controller review](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/controller-review.md) preserves exact whole-branch scope and coverage. Hosted Linux CI, staging pilot, live capability enablement and deployment remain unperformed release gates. No independent review, push, PR, merge or deployment is claimed.
 
 ## GSTACK REVIEW REPORT
 
@@ -349,7 +349,7 @@ Status: **ALL_NINE_STEPS_IMPLEMENTED / LOCAL_PROOF_VERIFIED / CONTROLLER_REVIEW_
 
 Repeat review: 2026-10-19, after the user authorized incorporation of R1–R3 and S1. Result: **no remaining findings in the revised design/plan**. This clears the reviewed documentation; it is not feature implementation, executed-test or deployment evidence.
 
-Detailed closure and source evidence: [repeat review](../reviews/2026-10-19-co-signer-approval-rereview.md). The [first-pass report](../reviews/2026-10-19-co-signer-approval-review.md) is retained as historical evidence.
+Detailed closure and source evidence: [repeat review](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/superpowers/reviews/2026-10-19-co-signer-approval-rereview.md). The [first-pass report](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/superpowers/reviews/2026-10-19-co-signer-approval-review.md) is retained as historical evidence.
 
 | Review | Trigger / provenance | Result | Coverage |
 | --- | --- | --- | --- |

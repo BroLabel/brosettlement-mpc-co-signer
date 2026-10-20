@@ -1,5 +1,10 @@
 # Task9 local approval proof
 
+This is the historical implementation proof for the revisions below. Detailed
+test output and development reviews are linked to their retained Git revision;
+they are not current-tree test results. Subsequent cleanup preserves fixture
+values and operational guarantees, and must be validated separately.
+
 Status: **ALL_NINE_STEPS_IMPLEMENTED / LOCAL_PROOF_VERIFIED / CONTROLLER_REVIEW_APPROVED**. Main controller task and whole-branch reviews are approved for local handoff. No independent reviewers or review subagents ran.
 
 ## Authoritative completion table
@@ -18,7 +23,7 @@ This table records the current completion status accepted by the main controller
 | STEP007 / PLAN-STEP-007 | Original ledger read, settlement and reconciliation ownership | Verified; controller approved |
 | STEP008 / PLAN-STEP-008 | Actual coordinated MPC/Anvil proof, retained evidence and rollout runbooks | Verified; controller approved |
 
-The [main controller review](controller-review.md) records exact reviewed revisions, coverage and limits. [Implementation rulings](implementation-rulings.md) retains all 21 decisions and their costs if wrong. No independent reviewers or review subagents were used. This local completion is not hosted CI, staging or deployment approval.
+The [main controller review](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/controller-review.md) records exact reviewed revisions, coverage and limits. [Implementation rulings](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/implementation-rulings.md) retains all 21 decisions and their costs if wrong. No independent reviewers or review subagents were used. This local completion is not hosted CI, staging or deployment approval.
 
 ## Exact tested identities
 
@@ -47,7 +52,7 @@ Result: 1 executed Jest suite / 1 passed test, zero failed/skipped; 194.513 seco
 
 All three original caps are 1000000000000000 ETH atomic units. Prepared/actual fees are respectively 26251233908324/21382502841000, 25343605602448/21051622956000 and 25221111331852/21006967128000. Request stays APPROVED; execution status is derived from the confirmed outgoing. All four exact owned PostgreSQL/Vault/NATS/Anvil resources were removed and absence verified. Append-only evidence was retained until parent disposal; the separate focused PostgreSQL container was left temporarily for controller verification at the initial handoff.
 
-## Current local checks
+## Recorded implementation checks
 
 | Check | Result |
 | --- | --- |
@@ -69,7 +74,7 @@ GOWORK=off go run ./cmd/mpc-contracts verify
 GOTOOLCHAIN=go1.27.2 GOWORK=off go test ./internal/approval -run '^TestExternalPlatformRootProbe$' -v -count=1
 ~~~
 
-[Minimum-Go test results](go124-race-results.json) and [Linux results](linux-approval-race-results.json) retain every passing test identity, package/count summary and raw-output SHA-256. [TLS output](go127-tls-default-transport.log) and [contract verification](go-contract.log) are retained. Full coordinated command, output, PostgreSQL/Swagger/runner logs, negative selection exit codes, red/green record and AC-001–008 mapping are tracked in the backend repository under docs/validation/transfer-approval/.
+[Minimum-Go test results](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/go124-race-results.json) and [Linux results](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/linux-approval-race-results.json) retain every passing test identity, package/count summary and raw-output SHA-256. [TLS output](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/go127-tls-default-transport.log) and [contract verification](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/go-contract.log) are retained. Full coordinated command, output, PostgreSQL/Swagger/runner logs, negative selection exit codes, red/green record and AC-001–008 mapping are tracked in the backend repository under docs/validation/transfer-approval/.
 
 Linux uses local image mpc-v3-node22-go125:20260929, ID sha256:4b9f8087613ddd10644dd2ae0ab89e48d91b012abe2eb4bdd4e7642883378e25; read-only module cache, network none, source copied to native container storage. This is local Linux proof, not hosted CI.
 
@@ -81,7 +86,7 @@ The macOS full binary uses standard SSL_CERT_FILE and GODEBUG=x509sslcertoverrid
 
 Real monetary coordination covers ETH on Anvil. The other accepted native/token forms use pinned real backend producer corpus and scoped lifecycle/independent RPC proof; no real TRON network settlement is claimed. The actual old Co executable is tested. The other compatibility direction is the precisely recorded current-backend v2 null/null transport/application boundary; no arbitrary old backend executable or simultaneous double-old rollback is certified. Double-old rollback is prohibited while approval-origin records/holds exist.
 
-No primary .env, live provider/org/DB, real capability enablement, push/PR/merge/deployment or staging pilot was used. No frozen wire/schema/producer pin changed. Source changes are limited to missing backend security-module wiring, correct Swagger metadata, isolated harness/proof tests and documentation. Main controller review is approved for local handoff; its coverage and retained limits are recorded in [controller-review.md](controller-review.md).
+No primary .env, live provider/org/DB, real capability enablement, push/PR/merge/deployment or staging pilot was used. No frozen wire/schema/producer pin changed. Source changes are limited to missing backend security-module wiring, correct Swagger metadata, isolated harness/proof tests and documentation. Main controller review is approved for local handoff; its coverage and retained limits are recorded in [controller-review.md](https://github.com/BroLabel/brosettlement-mpc-co-signer/blob/24d3d43f6efa70c7095aa8c2b02a68f3971f5c17/docs/validation/approval/controller-review.md).
 
 The backend runbook docs/runbooks/transfer-approval-rollout.md covers controlled intake and legacy SIGN pause/drain, unseen backlog, explicit modes, durable volume/backup, pending cancellation, fee policy, journal loss, stuck activation and ambiguous broadcast. [Co-Signer operations](../../approval-operations.md) retains the local custody and journal recovery rules.
 

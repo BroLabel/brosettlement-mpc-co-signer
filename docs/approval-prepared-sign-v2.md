@@ -69,6 +69,25 @@ known boundary maps to signed `trc20`. Signed authorization is never rewritten.
 The same actual SDK/policy producer corpus is checked in TypeScript and Go.
 Legacy HTTP/descriptor/authorization trust bundles are retained independently.
 
+The prepared corpus is stored as `testdata/approval-prepared-v1/corpus.json.gz`.
+It contains all 202 cases (8 valid, 194 hostile), with no generated expectations.
+The manifest describes the logical `corpus.json` backend export: the Go verifier
+checks its SHA-256 after bounded gzip decompression. The compact export uses one
+JSON object per line; transaction, signature and digest values are unchanged.
+Gzip adds no dependency or wire-protocol change.
+
+To inspect the fixtures from the repository root:
+
+```sh
+gzip -dc testdata/approval-prepared-v1/corpus.json.gz | python3 -m json.tool
+GOWORK=off go run ./cmd/mpc-contracts verify
+```
+
+When importing an updated backend export, retain its manifest and compress the
+exact `corpus.json` bytes with `gzip -n -9 -c`; do not regenerate transaction or
+signature values in Go. Update the explicit bundle pin only for the reviewed
+manifest. Corrupt, truncated, oversized and changed fixtures fail verification.
+
 Both verifiers accept the intersection of existing producer numeric ranges:
 Ethereum nonce is at most 9007199254740991 (ethers JavaScript safe integer),
 gas is a positive uint64 (at most 18446744073709551615), and native TRX amount

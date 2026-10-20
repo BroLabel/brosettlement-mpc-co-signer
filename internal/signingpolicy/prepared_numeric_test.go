@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math/big"
-	"os"
 	"testing"
 	"time"
 
@@ -52,7 +51,7 @@ func TestEthereumPreparedNumericBounds(t *testing.T) {
 }
 
 func TestTronPreparedNumericBounds(t *testing.T) {
-	data, err := os.ReadFile("../../testdata/approval-prepared-v1/corpus.json")
+	data, err := ReadPreparedCorpus("../../testdata/approval-prepared-v1/corpus.json.gz")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,8 @@ import (
 type Item = wire.PendingItem
 type Page = wire.PendingPage
 type Backend interface {
+	// PendingApprovals returns a page validated against the closed wire contract
+	// and the authenticated organization at the HTTP boundary.
 	PendingApprovals(context.Context, string, string) (Page, error)
 	SendApprovalDecision(context.Context, string, []byte) ([]byte, error)
 }
@@ -127,13 +129,6 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 	page, e := d.backend.PendingApprovals(pageCtx, d.cursor, d.cfg.OrgID)
 	cancel()
 	if e != nil {
-		return errors.Join(result, e)
-	}
-	raw, e := json.Marshal(page)
-	if e != nil {
-		return errors.Join(result, e)
-	}
-	if e = wire.ParsePendingPage(raw, d.cfg.OrgID); e != nil {
 		return errors.Join(result, e)
 	}
 	if len(page.Items) > 50 {

@@ -1,12 +1,39 @@
 package signingpolicy
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
+
+// ReadPreparedCorpus expands the stored fixture without changing producer bytes.
+// The bundle verifier checks the original manifest hash after decompression.
+func ReadPreparedCorpus(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	reader, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	const maximum = 2 * 1024 * 1024
+	raw, err := io.ReadAll(io.LimitReader(reader, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maximum {
+		return nil, fmt.Errorf("prepared corpus exceeds size limit")
+	}
+	return raw, nil
+}
 
 type PreparedVector struct {
 	ID            string             `json:"id"`

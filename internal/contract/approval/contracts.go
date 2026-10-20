@@ -5,7 +5,6 @@ package approval
 import (
 	"bytes"
 	"crypto/ed25519"
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -35,7 +34,6 @@ var hex256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var uintPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
 var evmAddress = regexp.MustCompile(`^0x[0-9a-f]{40}$`)
 var timestampPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`)
-var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func invalid() error { return errors.New("invalid approval v1 contract") }
 func parse(raw []byte, maximum int, canonical bool) (Object, error) {
@@ -348,64 +346,6 @@ func ParseDecisionApplication(raw []byte) (Object, error) {
 	return v, nil
 }
 
-// VerifyPendingCursorFixture independently verifies the backend service's fixed
-// binding/domain/MAC contract. Runtime Co-Signer treats cursor bytes as opaque.
-func VerifyPendingCursorFixture(token string, binding json.RawMessage, secret []byte) error {
-	if len(token) == 0 || len(token) > 4096 {
-		return invalid()
-	}
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return invalid()
-	}
-	raw, e := base64.RawURLEncoding.DecodeString(parts[0])
-	if e != nil || base64.RawURLEncoding.EncodeToString(raw) != parts[0] {
-		return invalid()
-	}
-	canonicalBinding, e := jcs.Transform(binding)
-	if e != nil {
-		return e
-	}
-	mac := func(domain string) string {
-		h := hmac.New(sha256.New, secret)
-		_, _ = h.Write([]byte(domain))
-		return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
-	}
-	if !hmac.Equal([]byte(parts[1]), []byte(mac("token:v1\n"+parts[0]))) {
-		return invalid()
-	}
-	v, e := parse(raw, 4096, true)
-	if e != nil {
-		return e
-	}
-	var b Object
-	if json.Unmarshal(binding, &b) != nil {
-		return invalid()
-	}
-	if !closed(v, "v,resource,bindingHash,position") || integer(v, "v") != 1 || str(v, "resource") != str(b, "resource") || str(v, "bindingHash") != mac("binding:v1\n"+string(canonicalBinding)) {
-		return invalid()
-	}
-	return ValidatePendingPosition(v["position"])
-}
-func ValidatePendingPosition(raw []byte) error {
-	v, e := parse(raw, 4096, false)
-	if e != nil {
-		return e
-	}
-	if !closed(v, "upper,after") {
-		return invalid()
-	}
-	upper, after := rawObject(v, "upper"), rawObject(v, "after")
-	for _, pair := range []Object{upper, after} {
-		if !closed(pair, "createdAt,id") || !timestamp(str(pair, "createdAt")) || !uuidPattern.MatchString(str(pair, "id")) {
-			return invalid()
-		}
-	}
-	if str(after, "createdAt") > str(upper, "createdAt") || str(after, "createdAt") == str(upper, "createdAt") && str(after, "id") > str(upper, "id") {
-		return invalid()
-	}
-	return nil
-}
 func ParsePendingPage(raw []byte, orgID string) error {
 	v, e := parse(raw, 2*1024*1024, false)
 	if e != nil {

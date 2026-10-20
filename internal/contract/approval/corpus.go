@@ -17,7 +17,8 @@ type Vector struct {
 	ComparisonBase64 *string         `json:"comparisonBase64"`
 }
 
-// VerifyCorpus executes every positive and hostile cross-language fixture.
+// VerifyCorpus checks every fixture's integrity and executes consumer contracts.
+// Cursor MAC/position semantics are backend-only and tested by its producer.
 func VerifyCorpus(raw []byte) error {
 	v, e := parse(raw, 2*1024*1024, true)
 	if e != nil {
@@ -30,8 +31,7 @@ func VerifyCorpus(raw []byte) error {
 	if e != nil {
 		return e
 	}
-	secret, e := standardBase64(str(v, "cursorSecretBase64"), 32)
-	if e != nil {
+	if _, e := standardBase64(str(v, "cursorSecretBase64"), 32); e != nil {
 		return e
 	}
 	// The deliberately public deterministic seed is an explicit provenance aid.
@@ -68,7 +68,10 @@ func VerifyCorpus(raw []byte) error {
 		if e != nil || hash(input) != vector.InputSHA256 {
 			return fmt.Errorf("%s input integrity", vector.ID)
 		}
-		err := VerifyVector(vector, public, secret)
+		if vector.Kind == "cursor" {
+			continue
+		}
+		err := VerifyVector(vector, public)
 		if (err == nil) != (vector.Expected == "ACCEPT") {
 			return fmt.Errorf("%s expected %s: %v", vector.ID, vector.Expected, err)
 		}
@@ -80,7 +83,7 @@ func VerifyCorpus(raw []byte) error {
 	}
 	return nil
 }
-func VerifyVector(v Vector, public ed25519.PublicKey, secret []byte) error {
+func VerifyVector(v Vector, public ed25519.PublicKey) error {
 	raw, e := base64.StdEncoding.DecodeString(v.InputBase64)
 	if e != nil {
 		return e
@@ -113,12 +116,6 @@ func VerifyVector(v Vector, public ed25519.PublicKey, secret []byte) error {
 		if !same {
 			return invalid()
 		}
-	case "cursor":
-		input, err := parse(raw, 8192, false)
-		if err != nil || !closed(input, "cursor") {
-			return invalid()
-		}
-		e = VerifyPendingCursorFixture(str(input, "cursor"), v.Binding, secret)
 	case "page":
 		e = ParsePendingPage(raw, str(binding, "orgId"))
 	default:

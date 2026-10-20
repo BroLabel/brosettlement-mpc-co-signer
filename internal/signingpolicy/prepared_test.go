@@ -2,10 +2,7 @@ package signingpolicy
 
 import (
 	"encoding/hex"
-	"encoding/json"
-	"os"
 	"testing"
-	"time"
 )
 
 func TestEthereumPreparedStrictType2(t *testing.T) {
@@ -22,45 +19,11 @@ func TestEthereumPreparedStrictType2(t *testing.T) {
 }
 
 func TestSharedPreparedProducerCorpus(t *testing.T) {
-	raw, e := os.ReadFile("../../testdata/approval-prepared-v1/corpus.json")
+	raw, e := ReadPreparedCorpus("../../testdata/approval-prepared-v1/corpus.json.gz")
 	if e != nil {
 		t.Fatal(e)
 	}
-	var vectors []struct {
-		ID            string             `json:"id"`
-		Valid         bool               `json:"valid"`
-		Approval      *ApprovedExecution `json:"approval"`
-		Prepared      *PreparedTransfer  `json:"prepared"`
-		Policy        *Context           `json:"policy"`
-		Digest        []byte             `json:"digest"`
-		PayloadType   string             `json:"payloadType"`
-		HashAlgorithm string             `json:"hashAlgorithm"`
-		Now           int64              `json:"now"`
-	}
-	// Hostile policy schemas must reject during decoding, just as HTTP claims do.
-	var items []json.RawMessage
-	if e = json.Unmarshal(raw, &items); e != nil {
+	if e = VerifyPreparedCorpus(raw); e != nil {
 		t.Fatal(e)
-	}
-	for _, item := range items {
-		var identity struct {
-			ID    string `json:"id"`
-			Valid bool   `json:"valid"`
-		}
-		_ = json.Unmarshal(item, &identity)
-		t.Run(identity.ID, func(t *testing.T) {
-			vectors = nil
-			if e = json.Unmarshal(append(append([]byte{'['}, item...), ']'), &vectors); e != nil {
-				if identity.Valid {
-					t.Fatal(e)
-				}
-				return
-			}
-			v := vectors[0]
-			_, e := VerifyPrepared(v.Approval, v.Prepared, v.Policy, v.Digest, v.PayloadType, v.HashAlgorithm, time.UnixMilli(v.Now))
-			if (e == nil) != v.Valid {
-				t.Fatalf("accepted=%v want=%v err=%v", e == nil, v.Valid, e)
-			}
-		})
 	}
 }

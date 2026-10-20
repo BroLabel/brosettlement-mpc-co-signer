@@ -265,6 +265,12 @@ Backend enablement is the existing organization capability gate, not a client-pr
 
 ## Frozen vector registry
 
+Consumer test scope: Go checks the integrity of all 51 approval-v1 vectors and
+executes the 44 authorization, receipt, organization, application, replay and page
+cases. The seven cursor MAC/position cases are executed by the backend producer
+tests. Co-Signer treats cursors as opaque and verifies returned page identity,
+schema, ordering and authorization bindings at its HTTP boundary.
+
 IDs below are reserved immutable identifiers. STEP-001 now materializes authorization/receipt/schema/exact-evidence/cursor fixtures in IDs 001–010 (with descriptive subcases), with a backend-owned manifest and producer provenance. ID 009 proves wire outcomes and exact receipt equality, not the later transactional decision lifecycle. Materialization note (Task9): STEP-006 has now added the real backend-produced prepared-byte corpus under `testdata/approval-prepared-v1` and its pinned producer manifest; operational IDs 011–020 now have executable coverage in the dispatcher, journal, worker and coordinated lifecycle suites. The Task9 validation report records executed status and exact boundaries. The table remains a semantic ID registry, not a claim that every operational test is serialized as a byte vector. Frozen wire schemas, IDs and producer pins are unchanged. Each vector records producer repository/revision, schema versions, canonical input bytes/hash, expected outcome, and (where applicable) exact signature/digest/raw bytes. Never claim this preparation generated signed fixtures. Do not reuse a retired ID for new semantics.
 
 | Frozen ID | Required input / expected result | Plan proof |
