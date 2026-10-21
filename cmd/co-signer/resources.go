@@ -196,6 +196,7 @@ func openApplicationResources(
 		cfg.PrimaryStore.PartyID(),
 		cfg.FramePollInterval,
 		worker.SchedulerConfig{
+			SigningDisabled:    cfg.Approval == nil,
 			AuthorizeSign:      gate.Authorize,
 			MinInterval:        cfg.PollMinInterval,
 			MaxInterval:        cfg.PollMaxInterval,

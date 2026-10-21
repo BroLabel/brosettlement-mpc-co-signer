@@ -275,6 +275,27 @@ func TestCoordinatorFailsProcessReadinessWhenPrimarySigningCapabilityIsSystemica
 	}
 }
 
+func TestProvisioningOnlyCoordinatorKeepsDKGReady(t *testing.T) {
+	var events eventLog
+	deps := successfulDependencies(&events, reconcile.Result{Disposition: reconcile.DispositionEligible})
+	deps.SigningDisabled = true
+	coordinator := mustCoordinator(t, deps)
+	if err := coordinator.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = coordinator.Shutdown(context.Background()) })
+	assertReady := func() {
+		t.Helper()
+		got := deps.Readiness.Snapshot()
+		if !got.ProcessReady || got.SigningReady || !got.ProvisioningReady {
+			t.Fatalf("provisioning-only readiness = %#v", got)
+		}
+	}
+	assertReady()
+	coordinator.publicationDone(terminal.PublishResult{})
+	assertReady()
+}
+
 func TestCoordinatorRequiresStartedPublisherHandoffBeforeIntake(t *testing.T) {
 	job, err := terminal.NewFailedJob("intent-1", "session-1", "mpc_key_123e4567-e89b-42d3-a456-426614174000")
 	if err != nil {

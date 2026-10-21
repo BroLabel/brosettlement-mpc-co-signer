@@ -184,6 +184,25 @@ func TestHealthRefreshesProvisioningCapabilityAfterStartup(t *testing.T) {
 	}
 }
 
+func TestProvisioningOnlyHealthRefreshesDKGWithoutEnablingSign(t *testing.T) {
+	state := health.NewReadiness()
+	state.Set(health.Snapshot{ProcessReady: true, ProvisioningReason: health.ReasonProvisioningUnavailable})
+	available := true
+	h := health.NewLifecycleHandlerWithReadinessProbes(
+		"0.1.0", "test-revision", t.TempDir(), state,
+		func() bool { return true }, func() bool { return available },
+	)
+	got := serveReadiness(t, h)
+	if !got.Ready || !got.ProcessReady || got.SigningReady || !got.ProvisioningReady || got.Capabilities["sign"] || !got.Capabilities["dkg"] {
+		t.Fatalf("provisioning-only readiness = %#v", got)
+	}
+	available = false
+	got = serveReadiness(t, h)
+	if !got.Ready || got.SigningReady || got.ProvisioningReady || got.Capabilities["sign"] || got.Capabilities["dkg"] {
+		t.Fatalf("unavailable DKG readiness = %#v", got)
+	}
+}
+
 func TestHealthClosesOnlyProvisioningWhenDynamicCapabilityFalls(t *testing.T) {
 	state := health.NewReadiness()
 	state.Set(health.Snapshot{ProcessReady: true, SigningReady: true, ProvisioningReady: true})

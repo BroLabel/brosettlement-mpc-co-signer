@@ -198,6 +198,28 @@ func TestSchedulerSkipsBlockedDKGAndContinuesSIGN(t *testing.T) {
 	}
 }
 
+func TestProvisioningOnlySchedulerLeavesSignUnclaimed(t *testing.T) {
+	for _, status := range []string{"PENDING", "CLAIMED"} {
+		t.Run(status, func(t *testing.T) {
+			s := newDeterministicScheduler(t, 1, func() bool { return true })
+			s.cfg.SigningDisabled = true
+			var launched []launchedSession
+			s.launch = captureLaunches(&launched)
+			s.dispatchBatch(context.Background(), []monolith.Intent{
+				{IntentID: "sign-1", Type: "SIGN", DiscoveryStatus: status},
+				{IntentID: "dkg-1", Type: "DKG"},
+			})
+			defer releaseLaunches(launched)
+			if len(launched) != 1 || launched[0].intent.IntentID != "dkg-1" {
+				t.Fatalf("launched = %v, want DKG only without claiming or failing SIGN", launchedIntentIDs(launched))
+			}
+			if _, reserved := s.inFlightIntentIDs["sign-1"]; reserved {
+				t.Fatal("disabled SIGN consumed an intent reservation")
+			}
+		})
+	}
+}
+
 func TestSchedulerCleansOrphanWithoutClaimReplay(t *testing.T) {
 	discovery, claim := rediscoveredSignFixture(t)
 	client := &stubPendingClient{claimResult: claim, claimErrors: make(map[string]error)}

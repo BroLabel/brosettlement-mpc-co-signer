@@ -14,6 +14,7 @@ import (
 )
 
 type Dependencies struct {
+	SigningDisabled     bool
 	AcquireLock         func() (io.Closer, error)
 	OpenCapabilities    func(context.Context) (io.Closer, error)
 	StartPublisher      func(context.Context) error
@@ -149,7 +150,7 @@ func (c *Coordinator) Start(parent context.Context) (err error) {
 	}
 
 	signingReady := c.deps.SigningReady == nil || c.deps.SigningReady()
-	snapshot := health.Snapshot{ProcessReady: signingReady, SigningReady: signingReady}
+	snapshot := health.Snapshot{ProcessReady: signingReady, SigningReady: signingReady && !c.deps.SigningDisabled}
 	switch result.Disposition {
 	case reconcile.DispositionEligible:
 		snapshot.ProvisioningReady = signingReady && c.deps.ProvisioningReady()
@@ -199,7 +200,7 @@ func (c *Coordinator) publicationDone(result terminal.PublishResult) {
 		return
 	}
 	snapshot := c.deps.Readiness.Snapshot()
-	snapshot.ProvisioningReady = snapshot.SigningReady && c.deps.ProvisioningReady()
+	snapshot.ProvisioningReady = snapshot.ProcessReady && c.deps.ProvisioningReady()
 	if snapshot.ProvisioningReady {
 		snapshot.ProvisioningReason = health.ReasonNone
 	} else {

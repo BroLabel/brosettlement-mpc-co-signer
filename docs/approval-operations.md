@@ -1,6 +1,6 @@
 # Approval dispatcher operations
 
-Approval support remains disabled on the backend until the complete v1 discovery/receipt and v2 prepared-claim rollout has been reviewed, compatible old writers have drained, and the organization capability has been explicitly enabled. Installing this worker does not advertise or enable that capability. Activation and prepared-transaction verification are separate steps.
+Approval is mandatory for every new backend transfer and every SIGN. Upgrade backend and Co-Signer together under the coordinated cutover below; there is no organization capability flag. V1 discovery and signed receipts precede activation; v2 prepared claims verify the approved parameters and exact transaction bytes before MPC.
 
 ## First installation
 
@@ -26,7 +26,7 @@ Set all trusted approval settings together:
 
 The bearer credential is never copied into persisted evidence, receipt envelopes, organization payloads or formatted configuration. Platform API credentials are used only for signed backend requests. Endpoint redirects are disabled. Every organization call has one transport attempt, including on reused connections; automatic HTTP body replay is disabled. Standard TLS server authentication remains required.
 
-With no approval settings, startup supports provisioning only: every SIGN is rejected before MPC. There is no non-approval SIGN mode. A partial or invalid explicit approval configuration fails startup. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
+With no approval settings, startup supports provisioning only: the scheduler leaves SIGN work untouched, and health reports `signingReady: false` while process and DKG readiness follow their own capability checks. It does not claim or publish failures for SIGN requests. The pre-MPC authorization gate still rejects missing approval evidence. There is no non-approval SIGN mode. A partial or invalid explicit approval configuration fails startup. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
 
 Selecting `auto_approve` for an unseen backlog is an explicit operational decision requiring review before changing configuration. This mode produces durable signed APPROVED receipts through the same path and makes zero organization calls. Endpoint and token settings are ignored in auto mode.
 
@@ -50,7 +50,7 @@ Execution evidence uses the frozen `ExecutionBindingV1` and one narrow create-on
 
 ## Recovery and restore
 
-Stop admission and coordinate with the backend operator before repairing or restoring storage. Keep the organization capability disabled during initial rollout or recovery until the complete workflow is proven. Retain all journal files and historical public keys. Use a coordinated whole-volume backup/restore with the backend, preserving file ownership, permissions and all admission/receipt/ACK/execution/marker/revision evidence. Do not delete evidence, manually rewrite a decision, create an empty replacement, restore an older subset or silently switch modes to bypass a conflict. Preserve partial artifacts for investigation; external idempotency alone is not sufficient authorization to reconstruct local history.
+Stop admission and coordinate with the backend operator before repairing or restoring storage. Keep transfer intake and SIGN admission paused during cutover or recovery until the complete workflow is proven. Retain all journal files and historical public keys. Use a coordinated whole-volume backup/restore with the backend, preserving file ownership, permissions and all admission/receipt/ACK/execution/marker/revision evidence. Do not delete evidence, manually rewrite a decision, create an empty replacement, restore an older subset or silently switch modes to bypass a conflict. Preserve partial artifacts for investigation; external idempotency alone is not sufficient authorization to reconstruct local history.
 
 Detected missing dependencies or a single missing execution artifact fail closed. This does not claim detection of arbitrary rollback or deletion of every related file: erasing both execution artifacts or all request evidence can remove the local fact that they existed. Preventing that event relies on the approved coordinated-volume/restore discipline; this feature does not introduce a global history registry. Investigate the original publication outcome and authoritative backend state, then restore verified exact evidence under a reviewed operational procedure. Never regenerate a business decision or execution binding from a claim echo.
 
