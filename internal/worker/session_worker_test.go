@@ -316,6 +316,7 @@ func runSessionWithExecutorsForTest(
 	clocks ...readinessClock,
 ) {
 	clock := realReadinessClock()
+	clock.authorize = allowSignForTest
 	if len(clocks) > 0 {
 		clock = clocks[0]
 	}
@@ -781,7 +782,7 @@ func TestDuplicateRunningPollsAndWallCorrectionsKeepOneRunnerAndTimer(t *testing
 		}
 		return monolith.MessagesResult{Session: lifecycle}, nil
 	}}
-	clock := readinessClock{sample: func() (time.Time, time.Time) { samples.Add(1); return wall.Add(time.Duration(offset.Load())), wall }, arm: func(parent context.Context, at time.Time) (context.Context, context.CancelFunc) {
+	clock := readinessClock{authorize: allowSignForTest, sample: func() (time.Time, time.Time) { samples.Add(1); return wall.Add(time.Duration(offset.Load())), wall }, arm: func(parent context.Context, at time.Time) (context.Context, context.CancelFunc) {
 		arms.Add(1)
 		return context.WithDeadline(parent, at)
 	}}

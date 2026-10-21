@@ -348,7 +348,7 @@ func TestSchedulerRunsDifferentIntentIDsInParallel(t *testing.T) {
 		},
 		claimErrors: make(map[string]error),
 	}
-	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 2)
+	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, slog.Default(), 2)
 	defer close(release)
 
 	scheduler.dispatchBatch(context.Background(), []monolith.Intent{firstDiscovery, secondDiscovery})

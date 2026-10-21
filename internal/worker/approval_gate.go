@@ -11,10 +11,7 @@ import (
 
 func authorizeSign(ctx context.Context, i monolith.Intent, gate func(context.Context, monolith.Intent) error, log *slog.Logger) error {
 	if gate == nil {
-		if i.Approval != nil || i.Prepared != nil {
-			return signingpolicy.ErrPrepared
-		}
-		return nil
+		return signingpolicy.ErrPrepared
 	}
 	logged := false
 	for {

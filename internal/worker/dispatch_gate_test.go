@@ -77,6 +77,7 @@ func TestTransportStopBeforeSignDispatchPreventsCoreCall(t *testing.T) {
 			var calls atomic.Int64
 			runner := signRunnerFunc(func(context.Context, coretss.SignSessionRequest) error { calls.Add(1); return nil })
 			clock := realReadinessClock()
+			clock.authorize = allowSignForTest
 			clock.beforeDispatch = func(tr *transport.HTTPTransport) {
 				close(allowStop)
 				select {
