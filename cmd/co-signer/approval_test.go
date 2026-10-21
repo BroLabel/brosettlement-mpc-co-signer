@@ -60,6 +60,6 @@ func TestApprovalStartupRequiresProvisionedDirectoryAndIndependentWorker(t *test
 	reopened.Close()
 	cfg.Approval = nil
 	if j, d, e := openApprovalWorker(cfg, key, b); e != nil || j != nil || d != nil {
-		t.Fatal("legacy startup requires approval configuration")
+		t.Fatal("provisioning-only startup unexpectedly requires approval configuration")
 	}
 }

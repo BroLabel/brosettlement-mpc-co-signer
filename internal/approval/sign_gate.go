@@ -24,10 +24,10 @@ type TronNetworkEvidence interface {
 // SignGate reuses the application-owned journal and immutable retained keys.
 // It never recreates missing admission, decision, ACK or execution artifacts.
 type SignGate struct {
-	RequiredOrgID string
-	Journal       ExecutionJournal
-	Tron          TronNetworkEvidence
-	Now           func() time.Time
+	OrgID   string
+	Journal ExecutionJournal
+	Tron    TronNetworkEvidence
+	Now     func() time.Time
 }
 
 func (g SignGate) Authorize(ctx context.Context, i monolith.Intent) error {
@@ -35,13 +35,7 @@ func (g SignGate) Authorize(ctx context.Context, i monolith.Intent) error {
 		return signingpolicy.ErrPrepared
 	}
 	a, p := i.Approval, i.Prepared
-	if a == nil && p == nil {
-		if g.RequiredOrgID != "" {
-			return signingpolicy.ErrPrepared
-		}
-		return nil
-	}
-	if a == nil || p == nil || a.OutgoingID != i.IntentID || g.Journal == nil || g.RequiredOrgID != "" && i.Payload.OrgID != g.RequiredOrgID {
+	if a == nil || p == nil || a.OutgoingID != i.IntentID || g.Journal == nil || g.OrgID == "" || i.Payload.OrgID != g.OrgID {
 		return signingpolicy.ErrPrepared
 	}
 	state, e := g.Journal.Load(i.Payload.OrgID, a.RequestID)

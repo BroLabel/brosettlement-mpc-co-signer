@@ -26,7 +26,7 @@ Set all trusted approval settings together:
 
 The bearer credential is never copied into persisted evidence, receipt envelopes, organization payloads or formatted configuration. Platform API credentials are used only for signed backend requests. Endpoint redirects are disabled. Every organization call has one transport attempt, including on reused connections; automatic HTTP body replay is disabled. Standard TLS server authentication remains required.
 
-With no approval settings, legacy startup runs without an approval worker. A partial or invalid explicit approval configuration fails startup. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
+With no approval settings, startup supports provisioning only: every SIGN is rejected before MPC. There is no non-approval SIGN mode. A partial or invalid explicit approval configuration fails startup. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
 
 Selecting `auto_approve` for an unseen backlog is an explicit operational decision requiring review before changing configuration. This mode produces durable signed APPROVED receipts through the same path and makes zero organization calls. Endpoint and token settings are ignored in auto mode.
 
@@ -64,4 +64,10 @@ Task9 adds an explicitly required backend suite, `test/mpc-2of3/approval.externa
 
 The macOS synthetic organization HTTPS proof uses a Go 1.27.2 Co-Signer executable and the standard `SSL_CERT_FILE` with `GODEBUG=x509sslcertoverrideplatform=1`. The module's minimum Go 1.24 and production configuration are unchanged. A Go 1.27 build-tagged default-transport subprocess test separately proves trusted CA success, wrong CA rejection and hostname rejection. These are standard verified trust roots, not an insecure TLS bypass. Report the actual build toolchain independently from minimum-toolchain race tests.
 
-The backend runbook `docs/runbooks/transfer-approval-rollout.md` specifies the controlled organization intake/legacy SIGN pause and drain required at cutover, supported mixed-version pairs, pending-hold cancellation, exact journal restore and prohibited double-old rollback. Never treat a local synthetic capability fixture as live enablement authority.
+The backend runbook `docs/runbooks/transfer-approval-rollout.md` specifies the controlled organization intake/legacy SIGN pause and drain required at cutover, mandatory approval cutover, pending-hold cancellation, exact journal restore and prohibited double-old rollback. Never treat a local synthetic capability fixture as live enablement authority.
+
+## Mandatory approval cutover
+
+Every SIGN requires a v2 claim with nonnull approval and prepared bytes, the configured organization, and the matching durable local receipt and application ACK. Missing configuration, journal, approval, or byte binding never permits signing. `auto_approve` remains an explicit decision mode and writes the same signed evidence.
+
+Upgrade backend and Co-Signer together under paused transfer intake and SIGN admission. The backend migration refuses nonterminal transfers or active SIGN sessions without approval. Drain them with the compatible old release before retrying; never rewrite their origin, delete their holds, or synthesize approval evidence. Historical settled transfers remain readable.

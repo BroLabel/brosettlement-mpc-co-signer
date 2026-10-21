@@ -694,8 +694,22 @@ func signV2Fixture(raw []byte) []byte {
 		v["payload"], _ = json.Marshal(payload)
 	}
 	v["version"] = json.RawMessage(`2`)
-	v["approval"] = json.RawMessage(`null`)
-	v["prepared"] = json.RawMessage(`null`)
+	// These transport tests vary the payload independently. The real SignGate
+	// tests verify the cryptographic match against the same producer corpus.
+	corpus, err := signingpolicy.ReadPreparedCorpus("../../testdata/approval-prepared-v1/corpus.json.gz")
+	if err != nil {
+		panic(err)
+	}
+	var vectors []map[string]json.RawMessage
+	if err = json.Unmarshal(corpus, &vectors); err != nil {
+		panic(err)
+	}
+	for _, vector := range vectors {
+		if string(vector["valid"]) == "true" {
+			v["approval"], v["prepared"] = vector["approval"], vector["prepared"]
+			break
+		}
+	}
 	b, _ := json.Marshal(v)
 	return b
 }
@@ -710,11 +724,14 @@ func TestV2InvalidEnvelopeRetainsUnknownClaimOwnership(t *testing.T) {
 		IntentID string `json:"intentId"`
 	}
 	_ = json.Unmarshal(good, &identity)
-	for _, test := range []string{"old-v1", "missing", "unknown", "duplicate", "invalid-utf8", "oversized", "missing-prepared-field", "partial-approval"} {
+	for _, test := range []string{"old-v1", "missing", "unknown", "duplicate", "invalid-utf8", "oversized", "missing-prepared-field", "partial-approval", "both-null"} {
 		t.Run(test, func(t *testing.T) {
 			var v map[string]any
 			_ = json.Unmarshal(good, &v)
 			switch test {
+			case "both-null":
+				v["approval"] = nil
+				v["prepared"] = nil
 			case "missing":
 				delete(v, "approval")
 			case "unknown":

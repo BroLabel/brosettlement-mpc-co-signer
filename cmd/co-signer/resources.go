@@ -187,7 +187,7 @@ func openApplicationResources(
 		gate.Journal = approvalJournal
 	}
 	if cfg.Approval != nil {
-		gate.RequiredOrgID = cfg.Approval.OrgID
+		gate.OrgID = cfg.Approval.OrgID
 	}
 	scheduler := worker.NewScheduler(
 		client,

@@ -251,7 +251,7 @@ func (r *ClaimResult) retainExactResponseFields(raw []byte) error {
 				return ErrClaimEnvelopeInvalid
 			}
 		}
-		if (r.Approval == nil) != (r.Prepared == nil) {
+		if r.Approval == nil || r.Prepared == nil {
 			return ErrClaimEnvelopeInvalid
 		}
 		var payload map[string]json.RawMessage
