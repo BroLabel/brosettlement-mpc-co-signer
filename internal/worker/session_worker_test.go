@@ -39,11 +39,6 @@ func (s *stubClient) ClaimIntent(_ context.Context, _ string, _ string) (monolit
 	return s.claimResult, s.claimErr
 }
 
-func (s *stubClient) PostResult(_ context.Context, _ string, result monolith.IntentResult) error {
-	s.lastResult = result
-	return nil
-}
-
 func (s *stubClient) PostSignResult(ctx context.Context, id string, result monolith.SignResultRequest) error {
 	body, err := result.MarshalJSON()
 	if err != nil {
@@ -53,7 +48,8 @@ func (s *stubClient) PostSignResult(ctx context.Context, id string, result monol
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return err
 	}
-	return s.PostResult(ctx, id, decoded)
+	s.lastResult = decoded
+	return nil
 }
 
 func (s *stubClient) PostMessage(_ context.Context, sessionID string, frame monolith.OutboundFrame) error {

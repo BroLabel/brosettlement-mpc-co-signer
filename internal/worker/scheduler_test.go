@@ -93,13 +93,6 @@ func (s *stubPendingClient) ClaimIntent(ctx context.Context, kind string, intent
 	return s.claimResult, s.claimErr
 }
 
-func (s *stubPendingClient) PostResult(ctx context.Context, id string, result monolith.IntentResult) error {
-	if s.postFunc != nil {
-		return s.postFunc(ctx, id, result)
-	}
-	return nil
-}
-
 func (s *stubPendingClient) PostSignResult(ctx context.Context, id string, result monolith.SignResultRequest) error {
 	body, err := result.MarshalJSON()
 	if err != nil {
@@ -109,7 +102,10 @@ func (s *stubPendingClient) PostSignResult(ctx context.Context, id string, resul
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return err
 	}
-	return s.PostResult(ctx, id, decoded)
+	if s.postFunc != nil {
+		return s.postFunc(ctx, id, decoded)
+	}
+	return nil
 }
 
 func (s *stubPendingClient) PostMessage(context.Context, string, monolith.OutboundFrame) error {

@@ -35,7 +35,11 @@ func TestSessionRequestsAllowResponsesWithinConfiguredTimeout(t *testing.T) {
 			name: "result",
 			body: `{"authoritativeStatus":"COMPLETED","httpStatus":200,"outcome":"ACCEPTED"}`,
 			call: func(ctx context.Context, c *Client) error {
-				return c.PostResult(ctx, "intent-1", IntentResult{Status: "COMPLETED"})
+				request, err := NewSignResultRequest(IntentResult{Status: "COMPLETED"})
+				if err != nil {
+					return err
+				}
+				return c.PostSignResult(ctx, "intent-1", request)
 			},
 		},
 	} {
