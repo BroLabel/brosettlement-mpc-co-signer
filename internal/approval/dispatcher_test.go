@@ -41,7 +41,7 @@ func pendingItem(t *testing.T, id string) Item {
 			a["requestId"] = id
 			b, _ = json.Marshal(a)
 			b, _ = jcs.Transform(b)
-			return Item{id, "2026-10-19T01:00:00.000Z", b, digest(b)}
+			return Item{RequestID: id, CreatedAt: "2026-10-19T01:00:00.000Z", Authorization: b, AuthorizationHash: digest(b)}
 		}
 	}
 	t.Fatal("missing fixture")
