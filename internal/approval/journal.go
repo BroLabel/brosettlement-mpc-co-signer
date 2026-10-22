@@ -41,7 +41,7 @@ func OpenJournal(directory string) (*Journal, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = privateDirectory(info); err != nil {
+	if err = safeJournalDirectory(info); err != nil {
 		return nil, err
 	}
 	lockPath := filepath.Join(dir, ".approval.lock")
@@ -175,5 +175,5 @@ func (j *Journal) check() error {
 	if !os.SameFile(info, j.identity) {
 		return ErrIntegrity
 	}
-	return privateDirectory(info)
+	return safeJournalDirectory(info)
 }

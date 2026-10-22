@@ -81,7 +81,7 @@ func TestJournalReopenPreservesExactReceiptAndRejectsConflict(t *testing.T) {
 		t.Fatal("missing known receipt accepted")
 	}
 }
-func TestJournalPrivateExistingDirectoryAndSeparateProcessLock(t *testing.T) {
+func TestJournalExistingDirectoryAndSeparateProcessLock(t *testing.T) {
 	dir := privateDir(t)
 	if _, e := OpenJournal(filepath.Join(dir, "missing")); !errors.Is(e, os.ErrNotExist) {
 		t.Fatalf("missing journal recreated: %v", e)
@@ -96,11 +96,95 @@ func TestJournalPrivateExistingDirectoryAndSeparateProcessLock(t *testing.T) {
 	if out, e := c.CombinedOutput(); e != nil {
 		t.Fatalf("lock child: %s %v", out, e)
 	}
-	if e = os.Chmod(dir, 0755); e != nil {
+	if e = os.Chmod(dir, 0775); e != nil {
 		t.Fatal(e)
 	}
 	if e = j.Admit(testAdmission()); e == nil {
 		t.Fatal("unsafe permissions accepted")
+	}
+}
+
+func TestJournalAcceptsOwnerControlledDirectoriesAndKeepsFilesPrivate(t *testing.T) {
+	for _, mode := range []os.FileMode{0700, 0750, 0755} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			dir := privateDir(t)
+			if err := os.Chmod(dir, mode); err != nil {
+				t.Fatal(err)
+			}
+			journal, err := OpenJournal(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { journal.Close() })
+			admission := testAdmission()
+			if err := journal.Admit(admission); err != nil {
+				t.Fatal(err)
+			}
+			receipt := testReceipt(t, admission)
+			if err := journal.SaveReceipt(receipt); err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := OpenJournal(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			state, err := reopened.Load(admission.OrgID, admission.RequestID)
+			if err != nil || state.Receipt == nil || !bytes.Equal(state.Receipt.Bytes, receipt.Bytes) {
+				t.Fatalf("saved decision did not survive reopen: %v", err)
+			}
+			info, err := os.Stat(dir)
+			if err != nil || info.Mode().Perm() != mode {
+				t.Fatalf("journal changed directory permissions: %v", err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				info, err := entry.Info()
+				if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+					t.Fatalf("journal file is not private: %s, %v", entry.Name(), err)
+				}
+			}
+			if err := os.Chmod(reopened.path(admission.OrgID, admission.RequestID, "receipt"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := reopened.Load(admission.OrgID, admission.RequestID); !errors.Is(err, ErrIntegrity) {
+				t.Fatalf("accepted public receipt file: %v", err)
+			}
+		})
+	}
+}
+
+func TestJournalRejectsDirectoryWriteAccessForOthers(t *testing.T) {
+	for _, mode := range []os.FileMode{0720, 0702, 0770, 0775, 0777} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			dir := privateDir(t)
+			journal, err := OpenJournal(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer journal.Close()
+			if err := os.Chmod(dir, mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.Admit(testAdmission()); !errors.Is(err, ErrIntegrity) {
+				t.Fatalf("accepted writable directory at runtime: %v", err)
+			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if reopened, err := OpenJournal(dir); !errors.Is(err, ErrIntegrity) {
+				if reopened != nil {
+					reopened.Close()
+				}
+				t.Fatalf("accepted writable directory at startup: %v", err)
+			}
+		})
 	}
 }
 func TestJournalLockChild(t *testing.T) {

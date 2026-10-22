@@ -4,20 +4,22 @@ Approval is mandatory for every new backend transfer and every SIGN. Upgrade bac
 
 ## First installation
 
-Provision a **new**, empty private durable directory deliberately, owned by the user running Co-Signer, outside both primary and recovery share directories. For example, as that user:
+Provision a **new**, empty durable directory on the intended storage, owned by the user running Co-Signer, outside both primary and recovery share directories. Under a parent directory writable by that user, ordinary directory creation is sufficient with the usual `022` or `027` umask:
 
 ```sh
-install -d -m 0700 /var/lib/co-signer/approval
+mkdir -p /var/lib/co-signer/approval
 ```
 
-This is first-time provisioning only. Never run this as a repair for a missing journal after an installation has admitted work. The application requires the directory to exist; it never creates a replacement. Both lexical and resolved symlink overlap with share directories are rejected. The directory must support create-only rename, file fsync and directory fsync. Linux uses RENAME_NOREPLACE; macOS uses RENAME_EXCL and F_FULLFSYNC for files. Startup probes these operations, checks directory ownership/0700 and retains an independent lifetime writer lock. A second installation using different primary shares still cannot share this journal concurrently. Files are 0600 and read without following symlinks.
+This is first-time provisioning only. Never run this as a repair for a missing journal after an installation has admitted work. The application requires the directory to exist; it never creates a replacement. Both lexical and resolved symlink overlap with share directories are rejected. The directory must support create-only rename, file fsync and directory fsync. Linux uses RENAME_NOREPLACE; macOS uses RENAME_EXCL and F_FULLFSYNC for files. Startup probes these operations, checks directory ownership and permissions, and retains an independent lifetime writer lock. The owner must have read/write/search access; group and other write access are rejected. Standard `0755`, `0750` and private `0700` directories are accepted without changing their permissions. Directory listing may expose filenames and metadata to other local users; file contents remain private. A second installation using different primary shares still cannot share this journal concurrently. Files are 0600 and read without following symlinks.
+
+The Docker image stages the default approval directory with the same service ownership as the share stores. All three directories still require durable storage; image contents are not a backup, and a mounted host directory must grant the container user access.
 
 Configure approval as follows:
 
 | Setting | Value |
 | --- | --- |
 | `CO_SIGNER_APPROVAL_MODE` | `external` or `auto_approve`; defaults to `auto_approve`, including when no approval variables are set |
-| `CO_SIGNER_APPROVAL_JOURNAL_DIR` | Defaults to `/var/lib/co-signer/approval`; the private durable directory must already exist |
+| `CO_SIGNER_APPROVAL_JOURNAL_DIR` | Defaults to `/var/lib/co-signer/approval`; the durable directory must already exist and be owned by the service user |
 | `CO_SIGNER_APPROVAL_ENDPOINT` | For external mode, the exact HTTPS URL; no userinfo or fragment |
 | `CO_SIGNER_APPROVAL_BEARER_TOKEN` | For external mode, a dedicated organization integration credential |
 

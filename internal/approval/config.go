@@ -27,7 +27,7 @@ func (c Config) Validate() error {
 		return errors.New("approval mode must be external or auto_approve")
 	}
 	if !filepath.IsAbs(c.JournalDir) || filepath.Clean(c.JournalDir) == "/" {
-		return errors.New("approval journal must be an absolute private directory")
+		return errors.New("approval journal must be an absolute dedicated directory")
 	}
 	if c.MinInterval <= 0 || c.MaxInterval < c.MinInterval || c.Timeout <= 0 || math.IsNaN(c.BackoffFactor) || math.IsInf(c.BackoffFactor, 0) || c.BackoffFactor < 1 {
 		return errors.New("invalid approval timeout or backoff configuration")

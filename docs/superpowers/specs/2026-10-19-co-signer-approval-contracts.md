@@ -246,7 +246,7 @@ Approval settings (updated before deployment on 2026-10-22):
 | Setting | Exact rule |
 | --- | --- |
 | CO_SIGNER_APPROVAL_MODE | `external` or `auto_approve`; defaults to `auto_approve`. Invalid external configuration and API failures never fall back to auto. |
-| CO_SIGNER_APPROVAL_JOURNAL_DIR | Defaults to `/var/lib/co-signer/approval`; must already exist as an absolute private durable directory, distinct from primary/recovery share directories; files 0600, directory 0700, single-writer lock and fsync support required. |
+| CO_SIGNER_APPROVAL_JOURNAL_DIR | Defaults to `/var/lib/co-signer/approval`; must already exist as an absolute durable directory owned by the process user, distinct from primary/recovery share directories; owner read/write/search required, group/other write forbidden (0700, 0750 and 0755 accepted), files 0600, single-writer lock and fsync support required. |
 | CO_SIGNER_APPROVAL_ENDPOINT | Required only for external; absolute HTTPS URL with authority, no userinfo/fragment; exact configured URL, no payload override. |
 | CO_SIGNER_APPROVAL_BEARER_TOKEN | Required nonempty only for external; dedicated integration secret; never included in receipts, persisted public config, logs or organization payload. |
 

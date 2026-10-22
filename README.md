@@ -99,12 +99,12 @@ staging development. Publishing a release does not update an installed client.
 
 ### Configure
 
-Create two separate private artifact directories:
+Create two separate private artifact directories and the approval journal:
 
 ```bash
 install -d -m 0700 "$PWD/.local/co-signer/primary"
 install -d -m 0700 "$PWD/.local/co-signer/recovery"
-install -d -m 0700 "$PWD/.local/co-signer/approval"
+mkdir -p "$PWD/.local/co-signer/approval"
 ```
 
 The configuration below targets production. For an explicitly selected staging
@@ -291,6 +291,6 @@ the same reviewed Core revision, without local module replacements in builds.
 
 ### Durable transfer approvals
 
-Approval dispatch is enabled by default. `CO_SIGNER_APPROVAL_MODE` defaults to `auto_approve`; set `external` explicitly to require organization approval. `CO_SIGNER_APPROVAL_JOURNAL_DIR` defaults to `/var/lib/co-signer/approval` and must be provisioned as a private durable directory before startup. External mode also requires the exact HTTPS `CO_SIGNER_APPROVAL_ENDPOINT` and dedicated `CO_SIGNER_APPROVAL_BEARER_TOKEN`; invalid configuration or API failures never fall back to auto mode. Backend derives the organization from the API key. Co-Signer uses each validated authorization's `orgId` for its journal, organization API request and signed decision, without a separate startup lookup. No organization ID or configuration revision variable is required. The journal pins each request's mode/endpoint and exact signed decision; saved receipts retry independently of backend pending discovery. Automatic mode uses the same durable path and makes no organization calls. The worker is independent of SIGN permits. Deployments must use separate API signing keys.
+Approval dispatch is enabled by default. `CO_SIGNER_APPROVAL_MODE` defaults to `auto_approve`; set `external` explicitly to require organization approval. `CO_SIGNER_APPROVAL_JOURNAL_DIR` defaults to `/var/lib/co-signer/approval` and must be provisioned as a durable directory owned by the service user before startup. Standard `0755` and `0750` directory permissions are accepted; group/other write access is rejected, and journal files remain `0600`. External mode also requires the exact HTTPS `CO_SIGNER_APPROVAL_ENDPOINT` and dedicated `CO_SIGNER_APPROVAL_BEARER_TOKEN`; invalid configuration or API failures never fall back to auto mode. Backend derives the organization from the API key. Co-Signer uses each validated authorization's `orgId` for its journal, organization API request and signed decision, without a separate startup lookup. No organization ID or configuration revision variable is required. The journal pins each request's mode/endpoint and exact signed decision; saved receipts retry independently of backend pending discovery. Automatic mode uses the same durable path and makes no organization calls. The worker is independent of SIGN permits. Deployments must use separate API signing keys.
 
 Read [approval operations](docs/approval-operations.md) before provisioning storage, changing modes or restoring history. A missing existing journal is an integrity/recovery event, never a reason to create an empty replacement. Backend and Co-Signer require a coordinated mandatory-approval cutover.
