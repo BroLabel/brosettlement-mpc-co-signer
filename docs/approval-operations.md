@@ -12,22 +12,20 @@ install -d -m 0700 /var/lib/co-signer/approval
 
 This is first-time provisioning only. Never run this as a repair for a missing journal after an installation has admitted work. The application requires the directory to exist; it never creates a replacement. Both lexical and resolved symlink overlap with share directories are rejected. The directory must support create-only rename, file fsync and directory fsync. Linux uses RENAME_NOREPLACE; macOS uses RENAME_EXCL and F_FULLFSYNC for files. Startup probes these operations, checks directory ownership/0700 and retains an independent lifetime writer lock. A second installation using different primary shares still cannot share this journal concurrently. Files are 0600 and read without following symlinks.
 
-Set all trusted approval settings together:
+Configure approval as follows:
 
 | Setting | Value |
 | --- | --- |
-| `CO_SIGNER_APPROVAL_MODE` | `external` or `auto_approve`; defaults to `auto_approve` when the approval block is configured |
-| `CO_SIGNER_APPROVAL_ORG_ID` | The authenticated backend organization |
-| `CO_SIGNER_APPROVAL_CONFIG_REVISION` | An immutable operational revision |
-| `CO_SIGNER_APPROVAL_JOURNAL_DIR` | The provisioned absolute directory |
+| `CO_SIGNER_APPROVAL_MODE` | `external` or `auto_approve`; defaults to `auto_approve`, including when no approval variables are set |
+| `CO_SIGNER_APPROVAL_JOURNAL_DIR` | Defaults to `/var/lib/co-signer/approval`; the private durable directory must already exist |
 | `CO_SIGNER_APPROVAL_ENDPOINT` | For external mode, the exact HTTPS URL; no userinfo or fragment |
 | `CO_SIGNER_APPROVAL_BEARER_TOKEN` | For external mode, a dedicated organization integration credential |
 
 The bearer credential is never copied into persisted evidence, receipt envelopes, organization payloads or formatted configuration. Platform API credentials are used only for signed backend requests. Endpoint redirects are disabled. Every organization call has one transport attempt, including on reused connections; automatic HTTP body replay is disabled. Standard TLS server authentication remains required.
 
-With no approval settings, startup supports provisioning only: the scheduler leaves SIGN work untouched, and health reports `signingReady: false` while process and DKG readiness follow their own capability checks. It does not claim or publish failures for SIGN requests. The pre-MPC authorization gate still rejects missing approval evidence. There is no non-approval SIGN mode. A partial or invalid explicit approval configuration fails startup. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
+With no approval variables, startup selects auto approval and the default journal path. A missing or unsafe journal or an invalid configuration fails startup. Backend derives the organization from the authenticated API key; Co-Signer uses each validated `authorization.orgId` for journal keys, organization calls and signed receipts. There is no separate startup organization lookup. Backend checks that the API key, request and signed decision belong to the same organization. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
 
-Omitting `CO_SIGNER_APPROVAL_MODE` selects `auto_approve` for a configured approval block. Set `external` explicitly to require organization approval. Review unseen pending backlog before enabling auto mode. This mode produces durable signed APPROVED receipts through the same path and makes zero organization calls. Endpoint and token settings are ignored in auto mode.
+Omitting `CO_SIGNER_APPROVAL_MODE` selects `auto_approve` even when no other approval variables are set. Set `external` explicitly to require organization approval. Review unseen pending backlog before enabling auto mode. This mode produces durable signed APPROVED receipts through the same path and makes zero organization calls. Endpoint and token settings are ignored in auto mode.
 
 TRON signing requires no blockchain RPC settings. Local transaction verification
 trusts Backend for the selected TRON network and TAPOS reference. Mainnet and
@@ -49,7 +47,7 @@ Recovery streams at most 50 directory names and holds at most one receipt body p
 
 ## Immutable evidence and configuration changes
 
-Names use SHA-256 of org ID, a NUL separator and request ID; arbitrary wire identifiers are never path segments. Local records include admission, revision configuration, exact receipt plus retained public key, delivery ACK and execution evidence. Reads check exact org/request/authorization hash, closed fields, signature, source/revision and application bindings. Reusing a revision for a different mode/endpoint conflicts. A new revision does not migrate an existing admission; restore its pinned integration configuration to resume. The dedicated credential may rotate for the same integration. Saved final receipts are independent of current mode/key and continue delivery using their retained evidence.
+Names use SHA-256 of org ID, a NUL separator and request ID; arbitrary wire identifiers are never path segments. Local records include admission, exact receipt plus retained public key, delivery ACK and execution evidence. Reads check exact org/request/authorization hash, closed fields, signature, source and application bindings. The admission itself pins mode and exact endpoint per request; no manual configuration revision or separate revision record is needed. New requests may use changed settings, but changing mode or endpoint for an unresolved admitted request conflicts. Restore its pinned integration configuration to resume. The dedicated credential may rotate for the same integration. Saved final receipts are independent of current mode/key and continue delivery using their retained evidence.
 
 Publication is temp write, 0600, file fsync, create-only rename and directory fsync. Any failure prevents delivery or execution admission. If rename succeeded but directory fsync failed, finding the final record never re-evaluates the organization; file/directory durability must first be re-established. Missing required dependencies, unsafe metadata, changed bindings or bytes, unsupported filesystem operations and a replaced directory fail closed. A closed journal object cannot continue writing after another owner acquires its lock.
 

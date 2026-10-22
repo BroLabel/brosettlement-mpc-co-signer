@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	admissionFields       = "version,orgId,requestId,authorizationHash,mode,environment,configRevision,endpoint,admittedAt"
+	admissionFields       = "version,orgId,requestId,authorizationHash,mode,endpoint,admittedAt"
 	receiptFields         = "version,orgId,requestId,authorizationHash,signingKeyId,publicKey,bytes"
 	acknowledgementFields = "version,orgId,requestId,receiptHash,application"
 	executionFields       = "version,orgId,requestId,outgoingId,authorizationHash,executionDigest,payloadType,hashAlgorithm"
@@ -23,8 +23,6 @@ type Admission struct {
 	RequestID         string  `json:"requestId"`
 	AuthorizationHash string  `json:"authorizationHash"`
 	Mode              string  `json:"mode"`
-	Environment       string  `json:"environment"`
-	ConfigRevision    string  `json:"configRevision"`
 	Endpoint          *string `json:"endpoint"`
 	AdmittedAt        string  `json:"admittedAt"`
 }
@@ -64,17 +62,9 @@ type deliveryAck struct {
 	ReceiptHash string `json:"receiptHash"`
 	Application []byte `json:"application"`
 }
-type revisionRecord struct {
-	Version        int     `json:"version"`
-	OrgID          string  `json:"orgId"`
-	Mode           string  `json:"mode"`
-	Environment    string  `json:"environment"`
-	ConfigRevision string  `json:"configRevision"`
-	Endpoint       *string `json:"endpoint"`
-}
 
 func (a Admission) validate() error {
-	if a.Version != 1 || !wire.ValidReference(a.OrgID) || !wire.ValidReference(a.RequestID) || !wire.ValidAuthorizationHash(a.AuthorizationHash) || !wire.ValidReference(a.Environment) || !wire.ValidReference(a.ConfigRevision) || !wire.ValidTimestamp(a.AdmittedAt) {
+	if a.Version != 1 || !wire.ValidReference(a.OrgID) || !wire.ValidReference(a.RequestID) || !wire.ValidAuthorizationHash(a.AuthorizationHash) || !wire.ValidTimestamp(a.AdmittedAt) {
 		return ErrIntegrity
 	}
 	if a.Mode == "auto_approve" && a.Endpoint == nil {
@@ -86,16 +76,6 @@ func (a Admission) validate() error {
 	return ErrIntegrity
 }
 
-func (a Admission) revision() revisionRecord {
-	return revisionRecord{
-		Version:        1,
-		OrgID:          a.OrgID,
-		Mode:           a.Mode,
-		Environment:    a.Environment,
-		ConfigRevision: a.ConfigRevision,
-		Endpoint:       a.Endpoint,
-	}
-}
 
 func equalJSON(a, b any) bool {
 	x, _ := json.Marshal(a)
@@ -106,11 +86,11 @@ func validateReceipt(a Admission, r SavedReceipt) error {
 	if r.Version != 1 || r.OrgID != a.OrgID || r.RequestID != a.RequestID || r.AuthorizationHash != a.AuthorizationHash {
 		return ErrIntegrity
 	}
-	v, e := wire.VerifyReceipt(r.Bytes, wire.TrustedReceipt{OrgID: a.OrgID, RequestID: a.RequestID, AuthorizationHash: a.AuthorizationHash, Environment: a.Environment, SigningKeyID: r.SigningKeyID, PublicKey: ed25519.PublicKey(r.PublicKey), Eligible: true})
+	v, e := wire.VerifyReceipt(r.Bytes, wire.TrustedReceipt{OrgID: a.OrgID, RequestID: a.RequestID, AuthorizationHash: a.AuthorizationHash, SigningKeyID: r.SigningKeyID, PublicKey: ed25519.PublicKey(r.PublicKey), Eligible: true})
 	if e != nil {
 		return e
 	}
-	if field(v.Envelope, "source") != a.Mode || field(v.Envelope, "configRevision") != a.ConfigRevision {
+	if field(v.Envelope, "source") != a.Mode {
 		return ErrIntegrity
 	}
 	return nil

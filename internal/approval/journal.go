@@ -97,9 +97,6 @@ func (j *Journal) Admit(admission Admission) error {
 		}
 		return nil
 	}
-	if err = j.put(j.revisionPath(admission.OrgID, admission.ConfigRevision), admission.revision()); err != nil {
-		return err
-	}
 	return j.put(j.path(admission.OrgID, admission.RequestID, "admission"), admission)
 }
 

@@ -117,7 +117,7 @@ func VerifyVector(v Vector, public ed25519.PublicKey) error {
 			return invalid()
 		}
 	case "page":
-		e = ParsePendingPage(raw, str(binding, "orgId"))
+		e = ParsePendingPage(raw)
 	default:
 		e = fmt.Errorf("unknown vector kind %s", v.Kind)
 	}

@@ -106,7 +106,7 @@ func TestApprovalTransportFreshHTTPAuthenticationAndExactSavedBody(t *testing.T)
 	}))
 	defer server.Close()
 	client.baseURL = server.URL
-	if _, e := client.PendingApprovals(context.Background(), "opaque+/=", "org-1"); e != nil {
+	if _, e := client.PendingApprovals(context.Background(), "opaque+/="); e != nil {
 		t.Fatal(e)
 	}
 	for i := 0; i < 2; i++ {

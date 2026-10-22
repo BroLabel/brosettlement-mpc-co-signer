@@ -10,28 +10,21 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	wire "github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
 )
 
 type Config struct {
-	Mode, OrgID, Revision, JournalDir, Endpoint string
-	BearerToken                                 string
-	MinInterval, MaxInterval, Timeout           time.Duration
-	BackoffFactor                               float64
+	Mode, JournalDir, Endpoint        string
+	BearerToken                       string
+	MinInterval, MaxInterval, Timeout time.Duration
+	BackoffFactor                     float64
 }
 
 func (c Config) String() string {
-	return fmt.Sprintf("approval{mode=%s org=%s revision=%s}", c.Mode, c.OrgID, c.Revision)
+	return fmt.Sprintf("approval{mode=%s}", c.Mode)
 }
 func (c Config) Validate() error {
 	if c.Mode != "external" && c.Mode != "auto_approve" {
 		return errors.New("approval mode must be external or auto_approve")
-	}
-	for _, s := range []string{c.OrgID, c.Revision} {
-		if !wire.ValidReference(s) {
-			return errors.New("approval identity and revision must be bounded references")
-		}
 	}
 	if !filepath.IsAbs(c.JournalDir) || filepath.Clean(c.JournalDir) == "/" {
 		return errors.New("approval journal must be an absolute private directory")

@@ -25,15 +25,15 @@ func privateDir(t *testing.T) string {
 	return p
 }
 func testConfig(t *testing.T) Config {
-	return Config{Mode: "auto_approve", OrgID: "org-1", Revision: "rev-1", JournalDir: privateDir(t), MinInterval: time.Millisecond, MaxInterval: time.Second, Timeout: time.Second, BackoffFactor: 2}
+	return Config{Mode: "auto_approve", JournalDir: privateDir(t), MinInterval: time.Millisecond, MaxInterval: time.Second, Timeout: time.Second, BackoffFactor: 2}
 }
 func testAdmission() Admission {
-	return Admission{1, "org-1", "../../request", string(bytes.Repeat([]byte("a"), 64)), "auto_approve", "rev-1", nil, "2026-10-19T01:00:00.000Z"}
+	return Admission{1, "org-1", "../../request", string(bytes.Repeat([]byte("a"), 64)), "auto_approve", nil, "2026-10-19T01:00:00.000Z"}
 }
 func testReceipt(t *testing.T, a Admission) SavedReceipt {
 	t.Helper()
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
-	env := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": "APPROVED", "reason": nil, "source": a.Mode, "externalDecisionReference": nil, "decidedAt": "2026-10-19T02:00:00.000Z", "signingKeyId": "key-1", "configRevision": a.ConfigRevision}
+	env := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": "APPROVED", "reason": nil, "source": a.Mode, "externalDecisionReference": nil, "decidedAt": "2026-10-19T02:00:00.000Z", "signingKeyId": "key-1"}
 	raw, _ := json.Marshal(env)
 	raw, _ = jcs.Transform(raw)
 	sig := ed25519.Sign(key, append([]byte("brosettlement.co-signer.approval-decision/v1\n"), raw...))
@@ -186,7 +186,7 @@ func (f *faultFile) Sync() error {
 	return f.journalFile.Sync()
 }
 
-func TestJournalRejectsMissingAndSubstitutedEvidenceAndRevisionReuse(t *testing.T) {
+func TestJournalPinsConfigurationPerRequestAndRejectsMissingOrSubstitutedEvidence(t *testing.T) {
 	j, e := OpenJournal(privateDir(t))
 	if e != nil {
 		t.Fatal(e)
@@ -197,12 +197,15 @@ func TestJournalRejectsMissingAndSubstitutedEvidenceAndRevisionReuse(t *testing.
 		t.Fatal(e)
 	}
 	changed := a
-	changed.RequestID = "other"
 	changed.Mode = "external"
 	endpoint := "https://org.test"
 	changed.Endpoint = &endpoint
 	if e = j.Admit(changed); e == nil {
-		t.Fatal("revision reused for changed nonsecret config")
+		t.Fatal("pending request changed its pinned approval configuration")
+	}
+	changed.RequestID = "other"
+	if e = j.Admit(changed); e != nil {
+		t.Fatalf("new request could not use new configuration: %v", e)
 	}
 	r := testReceipt(t, a)
 	if e = j.SaveReceipt(r); e != nil {

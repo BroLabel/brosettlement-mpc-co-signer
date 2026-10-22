@@ -60,11 +60,6 @@ func (j *Journal) loadAdmission(org, request string) (*Admission, error) {
 	if admission.OrgID != org || admission.RequestID != request || admission.validate() != nil {
 		return nil, ErrIntegrity
 	}
-	expected, _ := json.Marshal(admission.revision())
-	raw, err := readJournalFile(j.revisionPath(org, admission.ConfigRevision))
-	if err != nil || !bytes.Equal(raw, expected) {
-		return admission, ErrIntegrity
-	}
 	return admission, nil
 }
 

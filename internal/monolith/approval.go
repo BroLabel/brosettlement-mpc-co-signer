@@ -36,7 +36,7 @@ func (c *Client) approvalHTTP(ctx context.Context, method, path string, body []b
 	}
 	return resp.StatusCode, raw, nil
 }
-func (c *Client) PendingApprovals(ctx context.Context, cursor, org string) (wire.PendingPage, error) {
+func (c *Client) PendingApprovals(ctx context.Context, cursor string) (wire.PendingPage, error) {
 	var page wire.PendingPage
 	query := url.Values{"limit": []string{"50"}}
 	if cursor != "" {
@@ -58,7 +58,7 @@ func (c *Client) PendingApprovals(ctx context.Context, cursor, org string) (wire
 		}
 		return page, fmt.Errorf("approval discovery HTTP status %d", status)
 	}
-	if e = wire.ParsePendingPage(raw, org); e != nil {
+	if e = wire.ParsePendingPage(raw); e != nil {
 		return page, e
 	}
 	if e = json.Unmarshal(raw, &page); e != nil {

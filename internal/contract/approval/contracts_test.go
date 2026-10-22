@@ -27,7 +27,6 @@ func TestPendingPageRejectsUnboundedDuplicateUnorderedAndNonASCIICursor(t *testi
 	auth, _ := base64.StdEncoding.DecodeString(corpus.Vectors[0].InputBase64)
 	var a map[string]any
 	json.Unmarshal(auth, &a)
-	org := a["orgId"].(string)
 	req := a["requestId"].(string)
 	item := map[string]any{"requestId": req, "createdAt": "2026-10-19T01:00:00.000Z", "authorization": json.RawMessage(auth), "authorizationHash": hash(auth)}
 	a["requestId"] = req + "-later"
@@ -51,7 +50,7 @@ func TestPendingPageRejectsUnboundedDuplicateUnorderedAndNonASCIICursor(t *testi
 	} {
 		t.Run(name, func(t *testing.T) {
 			b, _ := json.Marshal(page)
-			if ParsePendingPage(b, org) == nil {
+			if ParsePendingPage(b) == nil {
 				t.Fatal("unsafe page accepted")
 			}
 		})
@@ -69,7 +68,7 @@ func TestPendingPageRejectsCursorSpaces(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if ParsePendingPage(raw, "org-1") == nil {
+			if ParsePendingPage(raw) == nil {
 				t.Fatal("cursor containing a literal space accepted")
 			}
 		})

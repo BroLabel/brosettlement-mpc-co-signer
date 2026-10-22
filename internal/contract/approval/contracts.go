@@ -180,10 +180,10 @@ func ParseDecisionEnvelope(raw []byte) (Object, error) {
 	if e != nil {
 		return nil, e
 	}
-	if !closed(v, "version,domain,audience,orgId,requestId,authorizationHash,decision,reason,source,externalDecisionReference,decidedAt,signingKeyId,configRevision") || integer(v, "version") != 1 || str(v, "domain") != "brosettlement.co-signer.approval-decision" || str(v, "audience") != "brosettlement-transfer-approval" {
+	if !closed(v, "version,domain,audience,orgId,requestId,authorizationHash,decision,reason,source,externalDecisionReference,decidedAt,signingKeyId") || integer(v, "version") != 1 || str(v, "domain") != "brosettlement.co-signer.approval-decision" || str(v, "audience") != "brosettlement-transfer-approval" {
 		return nil, invalid()
 	}
-	for _, k := range []string{"orgId", "requestId", "signingKeyId", "configRevision"} {
+	for _, k := range []string{"orgId", "requestId", "signingKeyId"} {
 		if !bounded(str(v, k), 128) {
 			return nil, invalid()
 		}
@@ -283,7 +283,7 @@ func ParseDecisionApplication(raw []byte) (Object, error) {
 	return v, nil
 }
 
-func ParsePendingPage(raw []byte, orgID string) error {
+func ParsePendingPage(raw []byte) error {
 	v, e := parse(raw, 2*1024*1024, false)
 	if e != nil {
 		return e
@@ -306,7 +306,7 @@ func ParsePendingPage(raw []byte, orgID string) error {
 		return invalid()
 	}
 	seen := make(map[string]bool, len(items))
-	previousTime, previousID := "", ""
+	previousTime, previousID, pageOrgID := "", "", ""
 	for _, item := range items {
 		row, e := parse(item, 32768, false)
 		if e != nil {
@@ -321,17 +321,14 @@ func ParsePendingPage(raw []byte, orgID string) error {
 		}
 		seen[id] = true
 		previousTime, previousID = created, id
-		auth, e := jcs.Transform(row["authorization"])
+		orgID, e := (PendingItem{RequestID: id, Authorization: row["authorization"], AuthorizationHash: str(row, "authorizationHash")}).OrganizationID()
 		if e != nil {
 			return e
 		}
-		a, e := ParseAuthorization(auth)
-		if e != nil {
-			return e
-		}
-		if str(a, "orgId") != orgID || str(row, "requestId") != str(a, "requestId") || hash(auth) != str(row, "authorizationHash") {
+		if pageOrgID != "" && pageOrgID != orgID {
 			return invalid()
 		}
+		pageOrgID = orgID
 	}
 	return nil
 }
@@ -356,6 +353,24 @@ type PendingItem struct {
 	Authorization     json.RawMessage `json:"authorization"`
 	AuthorizationHash string          `json:"authorizationHash"`
 }
+
+// OrganizationID derives the request organization only after validating the
+// immutable authorization and its request/hash binding.
+func (item PendingItem) OrganizationID() (string, error) {
+	auth, e := jcs.Transform(item.Authorization)
+	if e != nil {
+		return "", e
+	}
+	a, e := ParseAuthorization(auth)
+	if e != nil {
+		return "", e
+	}
+	if item.RequestID != str(a, "requestId") || hash(auth) != item.AuthorizationHash {
+		return "", invalid()
+	}
+	return str(a, "orgId"), nil
+}
+
 type PendingPage struct {
 	Version    int           `json:"version"`
 	Items      []PendingItem `json:"items"`

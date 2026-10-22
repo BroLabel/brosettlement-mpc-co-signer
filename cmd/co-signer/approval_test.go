@@ -14,7 +14,7 @@ import (
 
 type idleApprovalBackend struct{ calls chan struct{} }
 
-func (b idleApprovalBackend) PendingApprovals(context.Context, string, string) (approval.Page, error) {
+func (b idleApprovalBackend) PendingApprovals(context.Context, string) (approval.Page, error) {
 	select {
 	case b.calls <- struct{}{}:
 	default:
@@ -28,7 +28,7 @@ func TestApprovalStartupRequiresProvisionedDirectoryAndIndependentWorker(t *test
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
-	a := approval.Config{Mode: "auto_approve", OrgID: "org", Revision: "rev", JournalDir: filepath.Join(dir, "missing"), MinInterval: time.Millisecond, MaxInterval: time.Second, Timeout: time.Second, BackoffFactor: 2}
+	a := approval.Config{Mode: "auto_approve", JournalDir: filepath.Join(dir, "missing"), MinInterval: time.Millisecond, MaxInterval: time.Second, Timeout: time.Second, BackoffFactor: 2}
 	b := idleApprovalBackend{make(chan struct{}, 1)}
 	cfg := config.Config{APIKeyID: "key", Approval: &a}
 	if _, _, e := openApprovalWorker(cfg, key, b); !errors.Is(e, os.ErrNotExist) {

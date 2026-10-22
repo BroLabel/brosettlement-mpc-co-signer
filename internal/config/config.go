@@ -15,6 +15,7 @@ import (
 
 const (
 	defaultPreParamsGenerationParallelism = 2
+	defaultApprovalJournalDir             = "/var/lib/co-signer/approval"
 )
 
 type Config struct {
@@ -129,20 +130,16 @@ func Load() (Config, error) {
 		return Config{}, errors.New("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM must be >= 1")
 	}
 
-	if os.Getenv("CO_SIGNER_APPROVAL_MODE") != "" || os.Getenv("CO_SIGNER_APPROVAL_ORG_ID") != "" || os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR") != "" || os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT") != "" || os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN") != "" || os.Getenv("CO_SIGNER_APPROVAL_CONFIG_REVISION") != "" {
-		mode := os.Getenv("CO_SIGNER_APPROVAL_MODE")
-		if mode == "" {
-			mode = "auto_approve"
-		}
-		a := approval.Config{Mode: mode, OrgID: os.Getenv("CO_SIGNER_APPROVAL_ORG_ID"), Revision: os.Getenv("CO_SIGNER_APPROVAL_CONFIG_REVISION"), JournalDir: os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR"), Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
-		if err := a.Validate(); err != nil {
-			return Config{}, err
-		}
-		if err := approval.ValidateDirectories(a.JournalDir, primaryStore.Directory(), recoveryStore.Directory()); err != nil {
-			return Config{}, err
-		}
-		cfg.Approval = &a
+	mode := os.Getenv("CO_SIGNER_APPROVAL_MODE")
+	if mode == "" {
+		mode = "auto_approve"
 	}
+	journalDir := os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR")
+	if journalDir == "" { journalDir = defaultApprovalJournalDir }
+	a := approval.Config{Mode: mode, JournalDir: journalDir, Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
+	if err := a.Validate(); err != nil { return Config{}, err }
+	if err := approval.ValidateDirectories(a.JournalDir, primaryStore.Directory(), recoveryStore.Directory()); err != nil { return Config{}, err }
+	cfg.Approval = &a
 	return cfg, nil
 }
 

@@ -87,14 +87,14 @@ func approvalJournalAwaitingACK(t *testing.T, i monolith.Intent) *approval.Journ
 	}
 	t.Cleanup(func() { j.Close() })
 	endpoint := "https://synthetic.example/approval"
-	if e = j.Admit(approval.Admission{Version: 1, OrgID: i.Payload.OrgID, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, Mode: "external", ConfigRevision: "synthetic-config-v1", Endpoint: &endpoint, AdmittedAt: "2026-10-19T10:00:00.000Z"}); e != nil {
+	if e = j.Admit(approval.Admission{Version: 1, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, Mode: "external", Endpoint: &endpoint, AdmittedAt: "2026-10-19T10:00:00.000Z"}); e != nil {
 		t.Fatal(e)
 	}
 	seed := make([]byte, 32)
 	for k := range seed {
 		seed[k] = 0x42
 	}
-	if e = j.SaveReceipt(approval.SavedReceipt{Version: 1, OrgID: i.Payload.OrgID, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, SigningKeyID: "synthetic-approval-ed25519", PublicKey: ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey), Bytes: i.Approval.DecisionReceipt}); e != nil {
+	if e = j.SaveReceipt(approval.SavedReceipt{Version: 1, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, SigningKeyID: "synthetic-approval-ed25519", PublicKey: ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey), Bytes: i.Approval.DecisionReceipt}); e != nil {
 		t.Fatal(e)
 	}
 	return j
@@ -104,7 +104,7 @@ func TestApprovalGateDurableBindingAndReplay(t *testing.T) {
 		t.Run(map[bool]string{false: "ethereum", true: "tron"}[tron], func(t *testing.T) {
 			i, now := approvalIntent(t, tron)
 			j := approvalJournal(t, i)
-			g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
+			g := ApprovalGate{Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 			if e := g.Authorize(context.Background(), i); e != nil {
 				t.Fatal(e)
 			}
@@ -126,7 +126,7 @@ func TestApprovalGateDurableBindingAndReplay(t *testing.T) {
 func TestApprovalGateRejectsSubstitutedOutgoingBeforeBinding(t *testing.T) {
 	i, now := approvalIntent(t, false)
 	j := approvalJournal(t, i)
-	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
+	g := ApprovalGate{Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 	// A different intent cannot borrow an approved outgoing, even on first binding.
 	i.IntentID = "substituted-intent"
 	if e := g.Authorize(context.Background(), i); e == nil {
@@ -140,7 +140,7 @@ func TestApprovalGateRejectsSubstitutedOutgoingBeforeBinding(t *testing.T) {
 func TestApprovalGateRejectsNullDowngradeAndMissingLocalEvidence(t *testing.T) {
 	i, now := approvalIntent(t, false)
 	j := approvalJournal(t, i)
-	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
+	g := ApprovalGate{Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 	for _, test := range []string{"null", "one-null", "tenant", "hash", "receipt", "context", "v1"} {
 		t.Run(test, func(t *testing.T) {
 			v := i
@@ -197,7 +197,7 @@ func TestApprovalRuntimeGateBeforeCoreAndACKDeadline(t *testing.T) {
 			} else {
 				j = approvalJournal(t, i)
 			}
-			g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
+			g := ApprovalGate{Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 			if test == "expired-tron" {
 				now += 86_340_000
 			}
@@ -289,7 +289,7 @@ func (j *brokenExecutionJournal) BindExecution(approval.ExecutionBinding) error 
 func TestApprovalGateDoesNotRepairLostLocalHistory(t *testing.T) {
 	i, now := approvalIntent(t, false)
 	j := &brokenExecutionJournal{}
-	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
+	g := ApprovalGate{Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 	if e := g.Authorize(context.Background(), i); !errors.Is(e, approval.ErrIntegrity) || j.binds != 0 {
 		t.Fatalf("claim reconstructed missing history: binds=%d err=%v", j.binds, e)
 	}
@@ -297,7 +297,7 @@ func TestApprovalGateDoesNotRepairLostLocalHistory(t *testing.T) {
 func TestApprovalExecutionRaceHasOneDurableOutgoing(t *testing.T) {
 	i, now := approvalIntent(t, false)
 	j := approvalJournal(t, i)
-	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
+	g := ApprovalGate{Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 	other := i
 	a := *i.Approval
 	other.Approval = &a
@@ -322,7 +322,7 @@ func TestApprovalExecutionRaceHasOneDurableOutgoing(t *testing.T) {
 func TestApprovalGateRejectsExpiredTronBeforeBinding(t *testing.T) {
 	i, now := approvalIntent(t, true)
 	j := approvalJournal(t, i)
-	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now + 86_340_000) }}
+	g := ApprovalGate{Journal: j, Now: func() time.Time { return time.UnixMilli(now + 86_340_000) }}
 	if e := g.Authorize(context.Background(), i); !errors.Is(e, signingpolicy.ErrPrepared) {
 		t.Fatalf("expired TRON transaction accepted: %v", e)
 	}
