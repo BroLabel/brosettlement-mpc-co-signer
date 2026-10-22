@@ -140,13 +140,8 @@ func Load() (Config, error) {
 		}
 		cfg.Approval = &a
 	}
-	cfg.TronApprovalRPCEndpoints = make(map[string]string)
-	for chain, name := range map[string]string{"tron:mainnet": "CO_SIGNER_APPROVAL_TRON_MAINNET_RPC_URL", "tron:nile": "CO_SIGNER_APPROVAL_TRON_NILE_RPC_URL"} {
-		if value := os.Getenv(name); value != "" {
-			cfg.TronApprovalRPCEndpoints[chain] = value
-		}
-	}
-	if _, err := approval.NewTronNetworkChecker(cfg.TronApprovalRPCEndpoints, cfg.HTTPTimeout, nil); err != nil {
+	cfg.TronApprovalRPCEndpoints, err = loadTronApprovalRPC(cfg.HTTPTimeout)
+	if err != nil {
 		return Config{}, err
 	}
 	return cfg, nil

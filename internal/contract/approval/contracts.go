@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"math/big"
 	"regexp"
 	"strings"
 	"time"
@@ -21,9 +20,7 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 	coretss "github.com/BroLabel/brosettlement-mpc-core/tss"
 	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcutil/base58"
 	"github.com/gowebpki/jcs"
-	"golang.org/x/crypto/sha3"
 )
 
 const DecisionDomain = "brosettlement.co-signer.approval-decision/v1\n"
@@ -32,7 +29,6 @@ type Object map[string]json.RawMessage
 
 var hex256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var uintPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
-var evmAddress = regexp.MustCompile(`^0x[0-9a-f]{40}$`)
 var timestampPattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$`)
 
 func invalid() error { return errors.New("invalid approval v1 contract") }
@@ -106,13 +102,6 @@ func validReason(v Object, key string, rejected bool) bool {
 	r := rawObject(v, key)
 	return closed(r, "code,text") && regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`).MatchString(str(r, "code")) && bounded(str(r, "text"), 512)
 }
-func canonicalAddress(s string, ethereum bool) bool {
-	if ethereum {
-		return evmAddress.MatchString(s)
-	}
-	payload, version, e := base58.CheckDecode(s)
-	return e == nil && version == 0x41 && len(payload) == 20 && base58.CheckEncode(payload, version) == s
-}
 
 // ParseAuthorization validates immutable exact JCS bytes, preserving all signed fields.
 func ParseAuthorization(raw []byte) (Object, error) {
@@ -138,8 +127,8 @@ func ParseAuthorization(raw []byte) (Object, error) {
 		return nil, invalid()
 	}
 	chain := str(v, "chain")
-	ethereum := strings.HasPrefix(chain, "ethereum:")
-	if chain != "ethereum:mainnet" && chain != "ethereum:sepolia" && chain != "tron:mainnet" && chain != "tron:nile" {
+	validateChain, ok := authorizationValidator(chain)
+	if !ok {
 		return nil, invalid()
 	}
 	d := rawObject(v, "derivationContext")
@@ -172,41 +161,8 @@ func ParseAuthorization(raw []byte) (Object, error) {
 	if e != nil {
 		return nil, invalid()
 	}
-	h := sha3.NewLegacyKeccak256()
-	_, _ = h.Write(pub.SerializeUncompressed()[1:])
-	addr := h.Sum(nil)[12:]
-	expected := "0x" + hex.EncodeToString(addr)
-	encoding := "evm_hex"
-	native := "ETH"
-	standard := "erc20"
-	if !ethereum {
-		expected = base58.CheckEncode(addr, 0x41)
-		encoding = "tron_base58"
-		native = "TRX"
-		standard = "trc20"
-	}
-	if str(v, "fromAddress") != expected || str(d, "addressEncoding") != encoding || !canonicalAddress(str(v, "toAddress"), ethereum) || !canonicalAddress(str(v, "fromAddress"), ethereum) {
-		return nil, invalid()
-	}
-	amount := str(v, "amountAtomic")
-	cap := str(v, "maxNetworkFeeAtomic")
-	if !uintPattern.MatchString(amount) || amount == "0" || !uintPattern.MatchString(cap) || !bounded(str(v, "asset"), 128) || str(v, "networkFeeAsset") != native {
-		return nil, invalid()
-	}
-	amountN, _ := new(big.Int).SetString(amount, 10)
-	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
-	if !ethereum && isNull(v, "tokenStandard") {
-		maximum = big.NewInt(9007199254740991)
-	}
-	if amountN.Cmp(maximum) > 0 {
-		return nil, invalid()
-	}
-	if isNull(v, "tokenStandard") {
-		if !isNull(v, "tokenContractCanonical") || !isNull(v, "tokenDecimals") || str(v, "asset") != native {
-			return nil, invalid()
-		}
-	} else if str(v, "tokenStandard") != standard || !evmAddress.MatchString(str(v, "tokenContractCanonical")) || integer(v, "tokenDecimals") < 0 || integer(v, "tokenDecimals") > 255 {
-		return nil, invalid()
+	if err := validateChain(v, pub.SerializeUncompressed()); err != nil {
+		return nil, err
 	}
 	if str(v, "transferKind") == "INTERNAL_TRANSFER" {
 		r := rawObject(v, "internalRecipient")
@@ -215,25 +171,6 @@ func ParseAuthorization(raw []byte) (Object, error) {
 		}
 	} else if str(v, "transferKind") != "EXTERNAL_WITHDRAWAL" || !isNull(v, "internalRecipient") {
 		return nil, invalid()
-	}
-	if !isNull(v, "requestedChainParams") {
-		p := rawObject(v, "requestedChainParams")
-		if ethereum {
-			q := rawObject(p, "ethereum")
-			if !closed(p, "ethereum") || !closed(q, "maxFeePerGas,maxPriorityFeePerGas") || !uintPattern.MatchString(str(q, "maxFeePerGas")) || !uintPattern.MatchString(str(q, "maxPriorityFeePerGas")) {
-				return nil, invalid()
-			}
-			a, _ := new(big.Int).SetString(str(q, "maxFeePerGas"), 10)
-			b, _ := new(big.Int).SetString(str(q, "maxPriorityFeePerGas"), 10)
-			if b.Cmp(a) > 0 {
-				return nil, invalid()
-			}
-		} else {
-			q := rawObject(p, "tron")
-			if !closed(p, "tron") || !closed(q, "feeLimitSun") || !isNull(q, "feeLimitSun") && !uintPattern.MatchString(str(q, "feeLimitSun")) {
-				return nil, invalid()
-			}
-		}
 	}
 	return v, nil
 }

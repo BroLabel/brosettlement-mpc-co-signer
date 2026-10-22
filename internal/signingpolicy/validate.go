@@ -1,5 +1,5 @@
 // Package signingpolicy validates supported transaction-signing protocols.
-// It has no transport, storage, RPC, or MPC execution dependencies.
+// Protocol implementations own transaction rules; the workflow owns persistence and MPC.
 package signingpolicy
 
 import (
@@ -37,15 +37,9 @@ func ValidateTuple(tuple Tuple) error {
 	if tuple.Algorithm != "ecdsa" || tuple.Curve != "secp256k1" || tuple.DigestType != "transaction" {
 		return errors.New("unsupported signing tuple")
 	}
-	switch tuple.PayloadType {
-	case tronPayloadType:
-		if validTronTuple(tuple) {
-			return nil
-		}
-	case ethereumPayloadType:
-		if validEthereumTuple(tuple) {
-			return nil
-		}
+	p, ok := protocolForPayload(tuple.PayloadType)
+	if ok && tuple.HashAlgorithm == p.hashAlgorithm && p.validTuple(tuple) {
+		return nil
 	}
 	return errors.New("unsupported signing tuple")
 }
@@ -55,20 +49,15 @@ func ValidateContext(policy *Context, chain, payloadType, expectedAddress string
 	if policy == nil || policy.Asset == "" || policy.AmountAtomic == "" || policy.FromAddress == "" || policy.ToAddress == "" || policy.Chain == "" {
 		return errors.New("SIGN claim policy context is incomplete")
 	}
-	if payloadType == ethereumPayloadType {
-		if err := validateEthereumAddresses(policy); err != nil {
-			return err
-		}
+	p, ok := protocolForPayload(payloadType)
+	if !ok {
+		return errors.New("SIGN claim signing payload type is unsupported")
+	}
+	if err := p.validateContext(policy); err != nil {
+		return err
 	}
 	if policy.Chain != chain || policy.FromAddress != expectedAddress {
 		return errors.New("SIGN claim policy context mismatch")
 	}
-	switch payloadType {
-	case tronPayloadType:
-		return validateTronContext(policy)
-	case ethereumPayloadType:
-		return validateEthereumContext(policy)
-	default:
-		return errors.New("SIGN claim signing payload type is unsupported")
-	}
+	return nil
 }

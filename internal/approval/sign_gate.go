@@ -17,16 +17,13 @@ type ExecutionJournal interface {
 	Load(string, string) (State, error)
 	BindExecution(ExecutionBinding) error
 }
-type TronNetworkEvidence interface {
-	Verify(context.Context, string, *signingpolicy.Tapos) error
-}
 
 // SignGate reuses the application-owned journal and immutable retained keys.
 // It never recreates missing admission, decision, ACK or execution artifacts.
 type SignGate struct {
 	OrgID   string
 	Journal ExecutionJournal
-	Tron    TronNetworkEvidence
+	Network signingpolicy.NetworkEvidence
 	Now     func() time.Time
 }
 
@@ -73,15 +70,15 @@ func (g SignGate) Authorize(ctx context.Context, i monolith.Intent) error {
 	if disposition != "APPLIED" {
 		return ErrIntegrity
 	}
-	now := time.Now()
-	if g.Now != nil {
-		now = g.Now()
+	now := g.Now
+	if now == nil {
+		now = time.Now
 	}
-	verified, e := signingpolicy.VerifyPrepared(a, p, i.Payload.PolicyContext, i.Payload.Digest, i.Payload.SigningPayloadType, i.Payload.HashAlgorithm, now)
+	verified, e := signingpolicy.VerifyPrepared(a, p, i.Payload.PolicyContext, i.Payload.Digest, i.Payload.SigningPayloadType, i.Payload.HashAlgorithm, now())
 	if e != nil {
 		return e
 	}
-	auth, tapos := verified.Authorization, verified.Tapos
+	auth := verified.Authorization
 	for k, w := range map[string]string{"orgId": i.Payload.OrgID, "walletId": i.Payload.WalletID, "keyId": i.Payload.KeyID, "derivationContextHash": i.Payload.DerivationContextHash} {
 		var got string
 		_ = json.Unmarshal(auth[k], &got)
@@ -103,22 +100,8 @@ func (g SignGate) Authorize(ctx context.Context, i monolith.Intent) error {
 	if state.Execution != nil && *state.Execution != binding {
 		return ErrConflict
 	}
-	if tapos != nil {
-		if g.Tron == nil {
-			return ErrNetworkUnavailable
-		}
-		if e = g.Tron.Verify(ctx, i.Payload.Chain, tapos); e != nil {
-			return e
-		}
-		// A bounded RPC read may consume the remaining freshness margin. Check
-		// the unchanged raw expiration again immediately before durable admission.
-		checkedAt := time.Now()
-		if g.Now != nil {
-			checkedAt = g.Now()
-		}
-		if tapos.Expiration-checkedAt.UnixMilli() <= 60000 {
-			return signingpolicy.ErrPrepared
-		}
+	if e = verified.VerifyNetwork(ctx, g.Network, now); e != nil {
+		return e
 	}
 	if e = ctx.Err(); e != nil {
 		return e

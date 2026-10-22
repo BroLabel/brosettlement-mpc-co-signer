@@ -3,6 +3,7 @@ package signingpolicy
 import "errors"
 
 const tronPayloadType = "tron-transaction"
+const tronHashAlgorithm = "sha256"
 
 var tronPolicyFields = []string{
 	"amountAtomic", "asset", "chain", "feeLimitSun", "fromAddress", "toAddress",
@@ -25,6 +26,6 @@ func validateTronContext(policy *Context) error {
 }
 
 func validTronTuple(tuple Tuple) bool {
-	return isTronChain(tuple.Chain) && tuple.HashAlgorithm == "sha256" &&
+	return isTronChain(tuple.Chain) &&
 		(tuple.AddressEncoding == "tron_base58" || tuple.AddressEncoding == "base58check" || tuple.AddressEncoding == "tron_base58check")
 }

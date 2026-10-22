@@ -1,4 +1,4 @@
-package approval
+package tron
 
 import (
 	"context"
@@ -12,7 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
+	core "github.com/fbsobreira/gotron-sdk/pkg/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestTrustedTronNetworkEvidence(t *testing.T) {
@@ -101,11 +102,15 @@ func TestTrustedTronNetworkEvidence(t *testing.T) {
 			if test == "timeout" {
 				timeout = 10 * time.Millisecond
 			}
-			checker, e := NewTronNetworkChecker(endpoints, timeout, srv.Client().Transport)
+			checker, e := NewChecker(endpoints, timeout, srv.Client().Transport)
 			if e != nil {
 				t.Fatal(e)
 			}
-			e = checker.Verify(context.Background(), chain, &signingpolicy.Tapos{RefBytes: []byte{0x12, 0x34}, RefHash: id[8:16]})
+			raw, err := proto.Marshal(&core.TransactionRaw{RefBlockBytes: []byte{0x12, 0x34}, RefBlockHash: id[8:16]})
+			if err != nil {
+				t.Fatal(err)
+			}
+			e = checker.Verify(context.Background(), chain, raw)
 			if test == "valid" || test == "mainnet" {
 				if e != nil || len(requests) != 3 {
 					t.Fatalf("requests=%v err=%v", requests, e)
@@ -124,16 +129,16 @@ func TestTrustedTronNetworkEvidence(t *testing.T) {
 }
 func TestTronNetworkConfiguration(t *testing.T) {
 	for _, endpoint := range []string{"http://example.test", "https://user:secret@example.test", "https://example.test/#fragment", "https:///missing"} {
-		if _, e := NewTronNetworkChecker(map[string]string{"tron:nile": endpoint}, time.Second, nil); e == nil {
+		if _, e := NewChecker(map[string]string{"tron:nile": endpoint}, time.Second, nil); e == nil {
 			t.Fatal("invalid endpoint accepted")
 		}
 	}
 }
 func TestEmptyTronCheckerPreservesLegacyZeroTimeout(t *testing.T) {
-	if _, e := NewTronNetworkChecker(nil, 0, nil); e != nil {
+	if _, e := NewChecker(nil, 0, nil); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := NewTronNetworkChecker(map[string]string{"tron:nile": "https://synthetic.example"}, 0, nil); e == nil {
+	if _, e := NewChecker(map[string]string{"tron:nile": "https://synthetic.example"}, 0, nil); e == nil {
 		t.Fatal("configured checker without bounded timeout")
 	}
 }

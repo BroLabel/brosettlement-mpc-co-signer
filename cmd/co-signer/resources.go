@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/chainrpc/tron"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/config"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/health"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/monolith"
@@ -178,11 +179,11 @@ func openApplicationResources(
 		)
 	}
 	signingReady := func() bool { return primaryReader.ProbeReadCapability() == nil }
-	tronChecker, err := approval.NewTronNetworkChecker(cfg.TronApprovalRPCEndpoints, cfg.HTTPTimeout, nil)
+	tronChecker, err := tron.NewChecker(cfg.TronApprovalRPCEndpoints, cfg.HTTPTimeout, nil)
 	if err != nil {
 		return nil, err
 	}
-	gate := approval.SignGate{Tron: tronChecker}
+	gate := approval.SignGate{Network: tronChecker}
 	if approvalJournal != nil {
 		gate.Journal = approvalJournal
 	}

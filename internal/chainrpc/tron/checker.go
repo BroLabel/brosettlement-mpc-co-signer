@@ -1,4 +1,5 @@
-package approval
+// Package tron verifies TRON network membership through trusted JSON-RPC endpoints.
+package tron
 
 import (
 	"bytes"
@@ -15,20 +16,22 @@ import (
 
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
+	core "github.com/fbsobreira/gotron-sdk/pkg/proto/core"
+	"google.golang.org/protobuf/proto"
 )
 
 var ErrNetworkUnavailable = signingpolicy.ErrNetworkUnavailable
 var ErrNetworkMismatch = signingpolicy.ErrNetworkMismatch
 
-// TronNetworkChecker trusts only operator-configured exact HTTPS endpoints.
+// Checker trusts only operator-configured exact HTTPS endpoints.
 // URLs and transport errors are never returned, persisted or logged.
-type TronNetworkChecker struct {
+type Checker struct {
 	endpoints map[string]string
 	client    *http.Client
 	timeout   time.Duration
 }
 
-func NewTronNetworkChecker(endpoints map[string]string, timeout time.Duration, transport http.RoundTripper) (*TronNetworkChecker, error) {
+func NewChecker(endpoints map[string]string, timeout time.Duration, transport http.RoundTripper) (*Checker, error) {
 	if len(endpoints) > 0 && timeout <= 0 {
 		return nil, ErrNetworkUnavailable
 	}
@@ -40,9 +43,9 @@ func NewTronNetworkChecker(endpoints map[string]string, timeout time.Duration, t
 		}
 		copyEndpoints[chain] = endpoint
 	}
-	return &TronNetworkChecker{copyEndpoints, &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, timeout}, nil
+	return &Checker{copyEndpoints, &http.Client{Transport: transport, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, timeout}, nil
 }
-func (c *TronNetworkChecker) call(ctx context.Context, endpoint, method string, params any) (json.RawMessage, error) {
+func (c *Checker) call(ctx context.Context, endpoint, method string, params any) (json.RawMessage, error) {
 	body, _ := json.Marshal(struct {
 		JSONRPC string `json:"jsonrpc"`
 		ID      int    `json:"id"`
@@ -105,8 +108,9 @@ func block(raw []byte) (uint64, []byte, error) {
 	}
 	return n, id, nil
 }
-func (c *TronNetworkChecker) Verify(ctx context.Context, chain string, t *signingpolicy.Tapos) error {
-	if c == nil || t == nil || len(t.RefBytes) != 2 || len(t.RefHash) != 8 {
+func (c *Checker) Verify(ctx context.Context, chain string, rawTransaction []byte) error {
+	var t core.TransactionRaw
+	if c == nil || proto.Unmarshal(rawTransaction, &t) != nil || len(t.RefBlockBytes) != 2 || len(t.RefBlockHash) != 8 {
 		return ErrNetworkUnavailable
 	}
 	endpoint := c.endpoints[chain]
@@ -135,7 +139,7 @@ func (c *TronNetworkChecker) Verify(ctx context.Context, chain string, t *signin
 	if e != nil {
 		return e
 	}
-	ref := (head & ^uint64(65535)) | uint64(binary.BigEndian.Uint16(t.RefBytes))
+	ref := (head & ^uint64(65535)) | uint64(binary.BigEndian.Uint16(t.RefBlockBytes))
 	if ref > head {
 		if ref < 65536 {
 			return ErrNetworkMismatch
@@ -150,7 +154,7 @@ func (c *TronNetworkChecker) Verify(ctx context.Context, chain string, t *signin
 	if e != nil {
 		return e
 	}
-	if height != ref || !bytes.Equal(hash[6:8], t.RefBytes) || !bytes.Equal(hash[8:16], t.RefHash) {
+	if height != ref || !bytes.Equal(hash[6:8], t.RefBlockBytes) || !bytes.Equal(hash[8:16], t.RefBlockHash) {
 		return ErrNetworkMismatch
 	}
 	return nil

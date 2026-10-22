@@ -15,6 +15,7 @@ import (
 
 	wire "github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/lifecycle"
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
 )
 
@@ -429,10 +430,8 @@ func validateExecution(s State, x ExecutionBinding) error {
 	if x.Version != 1 || x.OrgID != s.Admission.OrgID || x.RequestID != s.Admission.RequestID || x.AuthorizationHash != s.Admission.AuthorizationHash || !wire.ValidReference(x.OutgoingID) {
 		return ErrIntegrity
 	}
-	if x.PayloadType != "ethereum-transaction" || x.HashAlgorithm != "keccak256" {
-		if x.PayloadType != "tron-transaction" || x.HashAlgorithm != "sha256" {
-			return ErrIntegrity
-		}
+	if !signingpolicy.ValidPayloadHash(x.PayloadType, x.HashAlgorithm) {
+		return ErrIntegrity
 	}
 	return validateDigest(x.ExecutionDigest)
 }

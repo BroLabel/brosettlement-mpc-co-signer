@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -19,9 +20,9 @@ import (
 
 type ApprovalGate = approval.SignGate
 
-type trustedTronFunc func(context.Context, string, *signingpolicy.Tapos) error
+type networkEvidenceFunc func(context.Context, string, []byte) error
 
-func (f trustedTronFunc) Verify(c context.Context, s string, p *signingpolicy.Tapos) error {
+func (f networkEvidenceFunc) Verify(c context.Context, s string, p []byte) error {
 	return f(c, s, p)
 }
 func approvalIntent(t *testing.T, tron bool) (monolith.Intent, int64) {
@@ -109,7 +110,14 @@ func TestApprovalGateDurableBindingAndReplay(t *testing.T) {
 		t.Run(map[bool]string{false: "ethereum", true: "tron"}[tron], func(t *testing.T) {
 			i, now := approvalIntent(t, tron)
 			j := approvalJournal(t, i)
-			g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }, Tron: trustedTronFunc(func(context.Context, string, *signingpolicy.Tapos) error { return nil })}
+			networkReads := 0
+			g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }, Network: networkEvidenceFunc(func(_ context.Context, chain string, raw []byte) error {
+				networkReads++
+				if !tron || chain != i.Payload.Chain || hex.EncodeToString(raw) != i.Prepared.UnsignedTransaction {
+					t.Fatal("network evidence was requested for a different chain or transaction")
+				}
+				return nil
+			})}
 			if e := g.Authorize(context.Background(), i); e != nil {
 				t.Fatal(e)
 			}
@@ -120,10 +128,20 @@ func TestApprovalGateDurableBindingAndReplay(t *testing.T) {
 			if e = g.Authorize(context.Background(), i); e != nil {
 				t.Fatal("same byte retry", e)
 			}
+			wantReads := 0
+			if tron {
+				wantReads = 2
+			}
+			if networkReads != wantReads {
+				t.Fatalf("network reads=%d want=%d", networkReads, wantReads)
+			}
 			i.Approval.OutgoingID = "replacement"
 			i.IntentID = "replacement"
 			if e = g.Authorize(context.Background(), i); !errors.Is(e, approval.ErrConflict) {
 				t.Fatalf("replacement accepted: %v", e)
+			}
+			if networkReads != wantReads {
+				t.Fatal("replacement reached the network provider")
 			}
 		})
 	}
@@ -204,7 +222,7 @@ func TestApprovalRuntimeGateBeforeCoreAndOutageDeadline(t *testing.T) {
 			}
 			g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 			if test == "outage" {
-				g.Tron = trustedTronFunc(func(context.Context, string, *signingpolicy.Tapos) error { return approval.ErrNetworkUnavailable })
+				g.Network = networkEvidenceFunc(func(context.Context, string, []byte) error { return signingpolicy.ErrNetworkUnavailable })
 			}
 			if test == "hostile" {
 				i.Prepared.NetworkFeeBudgetAtomic = "0"
@@ -327,7 +345,7 @@ func TestApprovalExecutionRaceHasOneDurableOutgoing(t *testing.T) {
 func TestApprovalTronFreshnessIsRecheckedAfterTrustedRead(t *testing.T) {
 	i, now := approvalIntent(t, true)
 	j := approvalJournal(t, i)
-	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }, Tron: trustedTronFunc(func(context.Context, string, *signingpolicy.Tapos) error { now += 86_340_000; return nil })}
+	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }, Network: networkEvidenceFunc(func(context.Context, string, []byte) error { now += 86_340_000; return nil })}
 	if e := g.Authorize(context.Background(), i); !errors.Is(e, signingpolicy.ErrPrepared) {
 		t.Fatalf("expired during trusted read: %v", e)
 	}
