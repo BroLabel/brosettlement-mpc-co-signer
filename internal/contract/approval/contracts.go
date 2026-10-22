@@ -180,10 +180,10 @@ func ParseDecisionEnvelope(raw []byte) (Object, error) {
 	if e != nil {
 		return nil, e
 	}
-	if !closed(v, "version,domain,audience,environment,orgId,requestId,authorizationHash,decision,reason,source,externalDecisionReference,decidedAt,signingKeyId,configRevision") || integer(v, "version") != 1 || str(v, "domain") != "brosettlement.co-signer.approval-decision" || str(v, "audience") != "brosettlement-transfer-approval" {
+	if !closed(v, "version,domain,audience,orgId,requestId,authorizationHash,decision,reason,source,externalDecisionReference,decidedAt,signingKeyId,configRevision") || integer(v, "version") != 1 || str(v, "domain") != "brosettlement.co-signer.approval-decision" || str(v, "audience") != "brosettlement-transfer-approval" {
 		return nil, invalid()
 	}
-	for _, k := range []string{"environment", "orgId", "requestId", "signingKeyId", "configRevision"} {
+	for _, k := range []string{"orgId", "requestId", "signingKeyId", "configRevision"} {
 		if !bounded(str(v, k), 128) {
 			return nil, invalid()
 		}
@@ -225,9 +225,9 @@ func ParseReceipt(raw []byte) (Receipt, error) {
 }
 
 type TrustedReceipt struct {
-	OrgID, RequestID, AuthorizationHash, Environment, SigningKeyID string
-	PublicKey                                                      ed25519.PublicKey
-	Eligible                                                       bool
+	OrgID, RequestID, AuthorizationHash, SigningKeyID string
+	PublicKey                                         ed25519.PublicKey
+	Eligible                                          bool
 }
 
 func VerifyReceipt(raw []byte, trusted TrustedReceipt) (Receipt, error) {
@@ -235,7 +235,7 @@ func VerifyReceipt(raw []byte, trusted TrustedReceipt) (Receipt, error) {
 	if e != nil {
 		return Receipt{}, e
 	}
-	for k, want := range map[string]string{"orgId": trusted.OrgID, "requestId": trusted.RequestID, "authorizationHash": trusted.AuthorizationHash, "environment": trusted.Environment, "signingKeyId": trusted.SigningKeyID} {
+	for k, want := range map[string]string{"orgId": trusted.OrgID, "requestId": trusted.RequestID, "authorizationHash": trusted.AuthorizationHash, "signingKeyId": trusted.SigningKeyID} {
 		if str(r.Envelope, k) != want {
 			return Receipt{}, invalid()
 		}

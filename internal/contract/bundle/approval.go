@@ -10,9 +10,9 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
 )
 
-const expectedApprovalProducerCommit = "3ce3e8bbf3e2140e651e67f5fbd33603f7985463"
-const expectedApprovalProducerSHA256 = "cdf529d72e50a857e5c9db4f5823675cc95e09eb7c7492bf059c97542a39eabc"
-const expectedApprovalBundleIdentity = "swh_m0-Yrvbi7HnDxQ8GoXAha21AZpkco7g2_tfLaC8"
+const expectedApprovalProducerCommit = "f08681f99a19b55a1e9e7070a3213e51e35db503"
+const expectedApprovalProducerSHA256 = "8d74adbd7d1ea9201025b17218e771033e141fbecfb6281718784b8edb2abb24"
+const expectedApprovalBundleIdentity = "gucEBO1r3CQ0qsdcHw0VVBbn-B8tFNsFYLeeK-E5eGY"
 
 type approvalManifest struct {
 	BundleVersion      int    `json:"bundleVersion"`
@@ -36,7 +36,7 @@ func VerifyApprovalBundle(root string) (string, error) {
 		if err := decodeClosed(raw, &m, []string{"bundleVersion", "producerRepository", "producerCommit", "producerPath", "producerSHA256", "schemaVersions", "files"}); err != nil {
 			return err
 		}
-		if m.BundleVersion != 1 || m.ProducerRepository != "https://github.com/BroLabel/BroSettlement" || m.ProducerCommit != expectedApprovalProducerCommit || !gitCommitPattern.MatchString(m.ProducerCommit) || m.ProducerPath != "apps/client-api/src/transactions/approval/approval-corpus.ts" || m.ProducerSHA256 != expectedApprovalProducerSHA256 || m.SchemaVersions.Authorization != 1 || m.SchemaVersions.Receipt != 1 || m.SchemaVersions.PendingCursor != 1 {
+		if m.BundleVersion != 1 || m.ProducerRepository != "https://github.com/BroLabel/BroSettlement" || m.ProducerCommit != expectedApprovalProducerCommit || !gitCommitPattern.MatchString(m.ProducerCommit) || m.ProducerPath != "apps/client-api/test/contracts/approval/approval-corpus.ts" || m.ProducerSHA256 != expectedApprovalProducerSHA256 || m.SchemaVersions.Authorization != 1 || m.SchemaVersions.Receipt != 1 || m.SchemaVersions.PendingCursor != 1 {
 			return fmt.Errorf("invalid approval manifest provenance")
 		}
 		if len(m.Files) != 1 || m.Files[0].Path != "vectors.json" {

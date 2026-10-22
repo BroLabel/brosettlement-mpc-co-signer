@@ -96,7 +96,7 @@ func VerifyVector(v Vector, public ed25519.PublicKey) error {
 	case "receipt":
 		var eligible bool
 		_ = json.Unmarshal(binding["eligible"], &eligible)
-		_, e = VerifyReceipt(raw, TrustedReceipt{str(binding, "orgId"), str(binding, "requestId"), str(binding, "authorizationHash"), str(binding, "environment"), str(binding, "signingKeyId"), public, eligible})
+		_, e = VerifyReceipt(raw, TrustedReceipt{str(binding, "orgId"), str(binding, "requestId"), str(binding, "authorizationHash"), str(binding, "signingKeyId"), public, eligible})
 	case "organization":
 		_, e = ParseOrganizationResponse(raw, str(binding, "orgId"), str(binding, "requestId"), str(binding, "authorizationHash"))
 	case "application":

@@ -34,7 +34,7 @@ func VerifyPreparedBundle(root string) (string, error) {
 		if e := decodeClosed(raw, &m, []string{"bundleVersion", "producerRepository", "producerCommit", "producerPath", "producerSHA256", "claimVersion", "preparedVersion", "files"}); e != nil {
 			return e
 		}
-		if m.BundleVersion != 1 || m.ProducerRepository != "https://github.com/BroLabel/BroSettlement" || m.ProducerCommit != expectedPreparedProducerCommit || m.ProducerPath != "apps/client-api/src/transactions/approval/prepared-sign.fixture.ts" || m.ProducerSHA256 != expectedPreparedProducerSHA256 || m.ClaimVersion != 2 || m.PreparedVersion != 1 || len(m.Files) != 1 || m.Files[0].Path != "corpus.json" {
+		if m.BundleVersion != 1 || m.ProducerRepository != "https://github.com/BroLabel/BroSettlement" || m.ProducerCommit != expectedPreparedProducerCommit || m.ProducerPath != "apps/client-api/test/contracts/approval/prepared-sign.producer.ts" || m.ProducerSHA256 != expectedPreparedProducerSHA256 || m.ClaimVersion != 2 || m.PreparedVersion != 1 || len(m.Files) != 1 || m.Files[0].Path != "corpus.json" {
 			return fmt.Errorf("invalid prepared bundle provenance")
 		}
 		var e error

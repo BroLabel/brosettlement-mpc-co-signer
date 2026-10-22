@@ -15,10 +15,10 @@ import (
 )
 
 type Config struct {
-	Mode, OrgID, Environment, Revision, JournalDir, Endpoint string
-	BearerToken                                              string
-	MinInterval, MaxInterval, Timeout                        time.Duration
-	BackoffFactor                                            float64
+	Mode, OrgID, Revision, JournalDir, Endpoint string
+	BearerToken                                 string
+	MinInterval, MaxInterval, Timeout           time.Duration
+	BackoffFactor                               float64
 }
 
 func (c Config) String() string {
@@ -26,11 +26,11 @@ func (c Config) String() string {
 }
 func (c Config) Validate() error {
 	if c.Mode != "external" && c.Mode != "auto_approve" {
-		return errors.New("approval mode must be explicitly external or auto_approve")
+		return errors.New("approval mode must be external or auto_approve")
 	}
-	for _, s := range []string{c.OrgID, c.Environment, c.Revision} {
+	for _, s := range []string{c.OrgID, c.Revision} {
 		if !wire.ValidReference(s) {
-			return errors.New("approval identity, environment and revision must be bounded references")
+			return errors.New("approval identity and revision must be bounded references")
 		}
 	}
 	if !filepath.IsAbs(c.JournalDir) || filepath.Clean(c.JournalDir) == "/" {

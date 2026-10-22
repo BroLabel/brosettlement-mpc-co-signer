@@ -129,8 +129,12 @@ func Load() (Config, error) {
 		return Config{}, errors.New("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM must be >= 1")
 	}
 
-	if os.Getenv("CO_SIGNER_APPROVAL_MODE") != "" || os.Getenv("CO_SIGNER_APPROVAL_ORG_ID") != "" || os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR") != "" || os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT") != "" || os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN") != "" || os.Getenv("CO_SIGNER_APPROVAL_ENVIRONMENT") != "" || os.Getenv("CO_SIGNER_APPROVAL_CONFIG_REVISION") != "" {
-		a := approval.Config{Mode: os.Getenv("CO_SIGNER_APPROVAL_MODE"), OrgID: os.Getenv("CO_SIGNER_APPROVAL_ORG_ID"), Environment: os.Getenv("CO_SIGNER_APPROVAL_ENVIRONMENT"), Revision: os.Getenv("CO_SIGNER_APPROVAL_CONFIG_REVISION"), JournalDir: os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR"), Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
+	if os.Getenv("CO_SIGNER_APPROVAL_MODE") != "" || os.Getenv("CO_SIGNER_APPROVAL_ORG_ID") != "" || os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR") != "" || os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT") != "" || os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN") != "" || os.Getenv("CO_SIGNER_APPROVAL_CONFIG_REVISION") != "" {
+		mode := os.Getenv("CO_SIGNER_APPROVAL_MODE")
+		if mode == "" {
+			mode = "auto_approve"
+		}
+		a := approval.Config{Mode: mode, OrgID: os.Getenv("CO_SIGNER_APPROVAL_ORG_ID"), Revision: os.Getenv("CO_SIGNER_APPROVAL_CONFIG_REVISION"), JournalDir: os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR"), Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
 		if err := a.Validate(); err != nil {
 			return Config{}, err
 		}

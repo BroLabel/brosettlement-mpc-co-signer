@@ -180,7 +180,7 @@ func (d *Dispatcher) process(ctx context.Context, item Item) error {
 		v := d.cfg.Endpoint
 		endpoint = &v
 	}
-	a := Admission{1, d.cfg.OrgID, item.RequestID, item.AuthorizationHash, d.cfg.Mode, d.cfg.Environment, d.cfg.Revision, endpoint, d.now().UTC().Format("2006-01-02T15:04:05.000Z")}
+	a := Admission{1, d.cfg.OrgID, item.RequestID, item.AuthorizationHash, d.cfg.Mode, d.cfg.Revision, endpoint, d.now().UTC().Format("2006-01-02T15:04:05.000Z")}
 	if e = d.journal.Admit(a); e != nil {
 		return e
 	}
@@ -214,7 +214,7 @@ func (d *Dispatcher) process(ctx context.Context, item Item) error {
 	return d.deliver(ctx, saved)
 }
 func (d *Dispatcher) receipt(a Admission, response wire.Object) ([]byte, error) {
-	envelope := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "environment": a.Environment, "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": field(response, "status"), "reason": response["reason"], "source": a.Mode, "externalDecisionReference": response["decisionReference"], "decidedAt": d.now().UTC().Format("2006-01-02T15:04:05.000Z"), "signingKeyId": d.keyID, "configRevision": a.ConfigRevision}
+	envelope := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": field(response, "status"), "reason": response["reason"], "source": a.Mode, "externalDecisionReference": response["decisionReference"], "decidedAt": d.now().UTC().Format("2006-01-02T15:04:05.000Z"), "signingKeyId": d.keyID, "configRevision": a.ConfigRevision}
 	raw, e := json.Marshal(envelope)
 	if e != nil {
 		return nil, e

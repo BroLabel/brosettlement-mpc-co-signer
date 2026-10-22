@@ -25,15 +25,15 @@ func privateDir(t *testing.T) string {
 	return p
 }
 func testConfig(t *testing.T) Config {
-	return Config{Mode: "auto_approve", OrgID: "org-1", Environment: "test", Revision: "rev-1", JournalDir: privateDir(t), MinInterval: time.Millisecond, MaxInterval: time.Second, Timeout: time.Second, BackoffFactor: 2}
+	return Config{Mode: "auto_approve", OrgID: "org-1", Revision: "rev-1", JournalDir: privateDir(t), MinInterval: time.Millisecond, MaxInterval: time.Second, Timeout: time.Second, BackoffFactor: 2}
 }
 func testAdmission() Admission {
-	return Admission{1, "org-1", "../../request", string(bytes.Repeat([]byte("a"), 64)), "auto_approve", "test", "rev-1", nil, "2026-10-19T01:00:00.000Z"}
+	return Admission{1, "org-1", "../../request", string(bytes.Repeat([]byte("a"), 64)), "auto_approve", "rev-1", nil, "2026-10-19T01:00:00.000Z"}
 }
 func testReceipt(t *testing.T, a Admission) SavedReceipt {
 	t.Helper()
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
-	env := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "environment": a.Environment, "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": "APPROVED", "reason": nil, "source": a.Mode, "externalDecisionReference": nil, "decidedAt": "2026-10-19T02:00:00.000Z", "signingKeyId": "key-1", "configRevision": a.ConfigRevision}
+	env := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": "APPROVED", "reason": nil, "source": a.Mode, "externalDecisionReference": nil, "decidedAt": "2026-10-19T02:00:00.000Z", "signingKeyId": "key-1", "configRevision": a.ConfigRevision}
 	raw, _ := json.Marshal(env)
 	raw, _ = jcs.Transform(raw)
 	sig := ed25519.Sign(key, append([]byte("brosettlement.co-signer.approval-decision/v1\n"), raw...))

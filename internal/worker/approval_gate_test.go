@@ -87,7 +87,7 @@ func approvalJournalAwaitingACK(t *testing.T, i monolith.Intent) *approval.Journ
 	}
 	t.Cleanup(func() { j.Close() })
 	endpoint := "https://synthetic.example/approval"
-	if e = j.Admit(approval.Admission{Version: 1, OrgID: i.Payload.OrgID, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, Mode: "external", Environment: "synthetic-test", ConfigRevision: "synthetic-config-v1", Endpoint: &endpoint, AdmittedAt: "2026-10-19T10:00:00.000Z"}); e != nil {
+	if e = j.Admit(approval.Admission{Version: 1, OrgID: i.Payload.OrgID, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, Mode: "external", ConfigRevision: "synthetic-config-v1", Endpoint: &endpoint, AdmittedAt: "2026-10-19T10:00:00.000Z"}); e != nil {
 		t.Fatal(e)
 	}
 	seed := make([]byte, 32)

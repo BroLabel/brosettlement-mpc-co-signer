@@ -184,7 +184,7 @@ func TestDispatcherAutoAndPinnedAdmissionAcrossRestart(t *testing.T) {
 	}
 	// An unresolved admission stays pinned even when absent from a cancellation page.
 	item2 := pendingItem(t, "request-2")
-	a := Admission{1, c.OrgID, item2.RequestID, item2.AuthorizationHash, "auto_approve", c.Environment, "rev-1", nil, "2026-10-19T01:00:00.000Z"}
+	a := Admission{1, c.OrgID, item2.RequestID, item2.AuthorizationHash, "auto_approve", "rev-1", nil, "2026-10-19T01:00:00.000Z"}
 	if e = j.Admit(a); e != nil {
 		t.Fatal(e)
 	}
@@ -435,7 +435,7 @@ func TestPublishedFinalAfterDirectorySyncFailureNeverRepollsOrganization(t *test
 	o := &fakeOrganization{status: "APPROVED"}
 	d, j := makeDispatcher(t, c, b, o)
 	endpoint := c.Endpoint
-	if e := j.Admit(Admission{1, c.OrgID, item.RequestID, item.AuthorizationHash, c.Mode, c.Environment, c.Revision, &endpoint, "2026-10-19T01:00:00.000Z"}); e != nil {
+	if e := j.Admit(Admission{1, c.OrgID, item.RequestID, item.AuthorizationHash, c.Mode, c.Revision, &endpoint, "2026-10-19T01:00:00.000Z"}); e != nil {
 		t.Fatal(e)
 	}
 	j.ops = &faultOperations{journalOperations: j.ops, stage: "directory-sync"}

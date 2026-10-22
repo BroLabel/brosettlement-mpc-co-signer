@@ -16,9 +16,8 @@ Set all trusted approval settings together:
 
 | Setting | Value |
 | --- | --- |
-| `CO_SIGNER_APPROVAL_MODE` | Exactly `external` or `auto_approve` |
+| `CO_SIGNER_APPROVAL_MODE` | `external` or `auto_approve`; defaults to `auto_approve` when the approval block is configured |
 | `CO_SIGNER_APPROVAL_ORG_ID` | The authenticated backend organization |
-| `CO_SIGNER_APPROVAL_ENVIRONMENT` | The same trusted environment used by backend receipt verification |
 | `CO_SIGNER_APPROVAL_CONFIG_REVISION` | An immutable operational revision |
 | `CO_SIGNER_APPROVAL_JOURNAL_DIR` | The provisioned absolute directory |
 | `CO_SIGNER_APPROVAL_ENDPOINT` | For external mode, the exact HTTPS URL; no userinfo or fragment |
@@ -28,7 +27,7 @@ The bearer credential is never copied into persisted evidence, receipt envelopes
 
 With no approval settings, startup supports provisioning only: the scheduler leaves SIGN work untouched, and health reports `signingReady: false` while process and DKG readiness follow their own capability checks. It does not claim or publish failures for SIGN requests. The pre-MPC authorization gate still rejects missing approval evidence. There is no non-approval SIGN mode. A partial or invalid explicit approval configuration fails startup. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
 
-Selecting `auto_approve` for an unseen backlog is an explicit operational decision requiring review before changing configuration. This mode produces durable signed APPROVED receipts through the same path and makes zero organization calls. Endpoint and token settings are ignored in auto mode.
+Omitting `CO_SIGNER_APPROVAL_MODE` selects `auto_approve` for a configured approval block. Set `external` explicitly to require organization approval. Review unseen pending backlog before enabling auto mode. This mode produces durable signed APPROVED receipts through the same path and makes zero organization calls. Endpoint and token settings are ignored in auto mode.
 
 TRON signing requires no blockchain RPC settings. Local transaction verification
 trusts Backend for the selected TRON network and TAPOS reference. Mainnet and
@@ -50,7 +49,7 @@ Recovery streams at most 50 directory names and holds at most one receipt body p
 
 ## Immutable evidence and configuration changes
 
-Names use SHA-256 of org ID, a NUL separator and request ID; arbitrary wire identifiers are never path segments. Local records include admission, revision configuration, exact receipt plus retained public key, delivery ACK and execution evidence. Reads check exact org/request/authorization hash, closed fields, signature, source/environment/revision and application bindings. Reusing a revision for a different mode/environment/endpoint conflicts. A new revision does not migrate an existing admission; restore its pinned integration configuration to resume. The dedicated credential may rotate for the same integration. Saved final receipts are independent of current mode/environment/key and continue delivery using their retained evidence.
+Names use SHA-256 of org ID, a NUL separator and request ID; arbitrary wire identifiers are never path segments. Local records include admission, revision configuration, exact receipt plus retained public key, delivery ACK and execution evidence. Reads check exact org/request/authorization hash, closed fields, signature, source/revision and application bindings. Reusing a revision for a different mode/endpoint conflicts. A new revision does not migrate an existing admission; restore its pinned integration configuration to resume. The dedicated credential may rotate for the same integration. Saved final receipts are independent of current mode/key and continue delivery using their retained evidence.
 
 Publication is temp write, 0600, file fsync, create-only rename and directory fsync. Any failure prevents delivery or execution admission. If rename succeeded but directory fsync failed, finding the final record never re-evaluates the organization; file/directory durability must first be re-established. Missing required dependencies, unsafe metadata, changed bindings or bytes, unsupported filesystem operations and a replaced directory fail closed. A closed journal object cannot continue writing after another owner acquires its lock.
 
