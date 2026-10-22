@@ -39,6 +39,15 @@ Because the Co-Signer host contains both B and C, it is a quorum-bearing trust
 domain. Treat access to the host, both artifact stores, and their shared
 encryption key as security-critical.
 
+TRON signing does not require a blockchain RPC endpoint. Co-Signer checks the
+transaction bytes and approved transfer terms locally, but trusts Backend for
+the selected TRON network and TAPOS block reference. Mainnet and Nile may
+currently share the same derived wallet key/address. A compromised Backend can
+therefore present mainnet transaction bytes under a Nile approval when the
+approved transfer terms match. See the [TRON network trust boundary](docs/approval-prepared-sign-v2.md#tron-network-trust-boundary)
+and the planned derivation-branch separation in
+[BROSET-156](https://brolabel.atlassian.net/browse/BROSET-156).
+
 For the wider product and integration model, see the
 [BroSettlement documentation](https://www.brolabel.io/en/api-reference/brosettlement)
 and the [Co-Signer guide](https://www.brolabel.io/en/api-reference/co-signer).

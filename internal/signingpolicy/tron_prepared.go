@@ -44,8 +44,7 @@ func verifyTronPrepared(raw []byte, prepared *PreparedTransfer, policy *Context,
 	if prepared.NetworkFeeAsset != "TRX" || json.Unmarshal(prepared.FeeEvidence, &quote) != nil || quote == nil || !nullEqual(auth["tokenStandard"], canonicalTronPolicyToken(policy)) {
 		return preparedVerification{}, ErrPrepared
 	}
-	validUntil, err := verifyTronBytes(raw, policy, now)
-	if err != nil {
+	if err := verifyTronBytes(raw, policy, now); err != nil {
 		return preparedVerification{}, err
 	}
 	params := authObject(auth, "requestedChainParams")
@@ -58,7 +57,6 @@ func verifyTronPrepared(raw []byte, prepared *PreparedTransfer, policy *Context,
 	h := sha256.Sum256(raw)
 	return preparedVerification{
 		digest: h[:], budget: tronBudget(raw, policy, quote),
-		network: &networkRequirement{chain: policy.Chain, raw: raw, validUntil: validUntil},
 	}, nil
 }
 
@@ -85,19 +83,19 @@ func tronAddress(address string) []byte {
 	}
 	return append([]byte{v}, p...)
 }
-func verifyTronBytes(raw []byte, p *Context, now time.Time) (time.Time, error) {
+func verifyTronBytes(raw []byte, p *Context, now time.Time) error {
 	tx := new(tron.TransactionRaw)
 	if strictProto(raw, tx) != nil || len(tx.Contract) != 1 || len(tx.RefBlockBytes) != 2 || len(tx.RefBlockHash) != 8 || tx.RefBlockNum != 0 || len(tx.Auths) != 0 || len(tx.Data) != 0 || len(tx.Scripts) != 0 || tx.Timestamp <= 0 || tx.Timestamp > now.UnixMilli()+1000 || tx.Expiration-now.UnixMilli() <= 60000 || tx.Expiration <= tx.Timestamp || tx.Expiration-tx.Timestamp > 86340000 || tx.FeeLimit < 0 || tx.FeeLimit > maxProducerSafeInteger {
-		return time.Time{}, ErrPrepared
+		return ErrPrepared
 	}
 	c := tx.Contract[0]
 	if len(c.ProtoReflect().GetUnknown()) != 0 || c.PermissionId != 0 || len(c.Provider) != 0 || len(c.ContractName) != 0 || c.Parameter == nil || len(c.Parameter.ProtoReflect().GetUnknown()) != 0 {
-		return time.Time{}, ErrPrepared
+		return ErrPrepared
 	}
 	if p.TokenStandard == nil {
 		v := new(tron.TransferContract)
 		if c.Type != tron.Transaction_Contract_TransferContract || c.Parameter.TypeUrl != "type.googleapis.com/protocol.TransferContract" || strictProto(c.Parameter.Value, v) != nil || !bytes.Equal(v.OwnerAddress, tronAddress(p.FromAddress)) || !bytes.Equal(v.ToAddress, tronAddress(p.ToAddress)) || v.Amount <= 0 || v.Amount > maxProducerSafeInteger || big.NewInt(v.Amount).String() != p.AmountAtomic || tx.FeeLimit != 0 || p.FeeLimitSun != nil || p.Asset != "TRX" {
-			return time.Time{}, ErrPrepared
+			return ErrPrepared
 		}
 	} else {
 		v := new(tron.TriggerSmartContract)
@@ -108,10 +106,10 @@ func verifyTronBytes(raw []byte, p *Context, now time.Time) (time.Time, error) {
 			contract = append([]byte{0x41}, h...)
 		}
 		if (*p.TokenStandard != "trc20" && *p.TokenStandard != "TRC20") || c.Type != tron.Transaction_Contract_TriggerSmartContract || c.Parameter.TypeUrl != "type.googleapis.com/protocol.TriggerSmartContract" || strictProto(c.Parameter.Value, v) != nil || !bytes.Equal(v.OwnerAddress, tronAddress(p.FromAddress)) || !bytes.Equal(v.ContractAddress, contract) || len(addr) != 21 || !bytes.Equal(v.Data, transferCall("0x"+hex.EncodeToString(addr[1:]), p.AmountAtomic)) || v.CallValue != 0 || v.CallTokenValue != 0 || v.TokenId != 0 || p.FeeLimitSun == nil || big.NewInt(tx.FeeLimit).String() != *p.FeeLimitSun || tx.FeeLimit <= 0 {
-			return time.Time{}, ErrPrepared
+			return ErrPrepared
 		}
 	}
-	return time.UnixMilli(tx.Expiration - 60000), nil
+	return nil
 }
 func tronBudget(raw []byte, p *Context, q *TronFeeQuote) string {
 	if q == nil || q.Version != 1 {

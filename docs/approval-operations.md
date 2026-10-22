@@ -30,6 +30,14 @@ With no approval settings, startup supports provisioning only: the scheduler lea
 
 Selecting `auto_approve` for an unseen backlog is an explicit operational decision requiring review before changing configuration. This mode produces durable signed APPROVED receipts through the same path and makes zero organization calls. Endpoint and token settings are ignored in auto mode.
 
+TRON signing requires no blockchain RPC settings. Local transaction verification
+trusts Backend for the selected TRON network and TAPOS reference. Mainnet and
+Nile wallet keys/paths are not yet separated; a matching test-network approval
+can therefore expose real funds at a shared mainnet address if Backend supplies
+mainnet bytes. Review the [TRON network trust boundary](approval-prepared-sign-v2.md#tron-network-trust-boundary)
+before operating either approval mode. The follow-up is
+[BROSET-156](https://brolabel.atlassian.net/browse/BROSET-156).
+
 ## Discovery and delivery
 
 Backend pending pages are the authoritative unresolved queue. One page of at most 50 items is processed per tick in server order. The opaque tenant-bound cursor carries the backend's fixed sweep upper bound. Suppressed items do not stop page progress. An explicit backend HTTP 400 `INVALID_CURSOR` restarts discovery from the first page on the next tick without changing saved decisions or suppression hints. Transport/authentication errors retain the current cursor. Null nextCursor wraps on the next tick; continuous arrivals join later sweeps. Empty pages and missing items are never cancellation notifications. A cancellation can race with a previously selected bounded page; backend NOT_APPLIED_CANCELLED is retained as a non-executable application result.

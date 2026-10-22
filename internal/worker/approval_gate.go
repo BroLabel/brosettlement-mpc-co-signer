@@ -16,7 +16,7 @@ func authorizeSign(ctx context.Context, i monolith.Intent, gate func(context.Con
 	logged := false
 	for {
 		err := gate(ctx, i)
-		if !errors.Is(err, signingpolicy.ErrNetworkUnavailable) && !errors.Is(err, signingpolicy.ErrApprovalApplicationPending) {
+		if !errors.Is(err, signingpolicy.ErrApprovalApplicationPending) {
 			return err
 		}
 		if !logged && log != nil {

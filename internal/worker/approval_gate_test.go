@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -20,11 +19,6 @@ import (
 
 type ApprovalGate = approval.SignGate
 
-type networkEvidenceFunc func(context.Context, string, []byte) error
-
-func (f networkEvidenceFunc) Verify(c context.Context, s string, p []byte) error {
-	return f(c, s, p)
-}
 func approvalIntent(t *testing.T, tron bool) (monolith.Intent, int64) {
 	t.Helper()
 	raw, e := signingpolicy.ReadPreparedCorpus("../../testdata/approval-prepared-v1/corpus.json.gz")
@@ -110,14 +104,7 @@ func TestApprovalGateDurableBindingAndReplay(t *testing.T) {
 		t.Run(map[bool]string{false: "ethereum", true: "tron"}[tron], func(t *testing.T) {
 			i, now := approvalIntent(t, tron)
 			j := approvalJournal(t, i)
-			networkReads := 0
-			g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }, Network: networkEvidenceFunc(func(_ context.Context, chain string, raw []byte) error {
-				networkReads++
-				if !tron || chain != i.Payload.Chain || hex.EncodeToString(raw) != i.Prepared.UnsignedTransaction {
-					t.Fatal("network evidence was requested for a different chain or transaction")
-				}
-				return nil
-			})}
+			g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
 			if e := g.Authorize(context.Background(), i); e != nil {
 				t.Fatal(e)
 			}
@@ -128,20 +115,10 @@ func TestApprovalGateDurableBindingAndReplay(t *testing.T) {
 			if e = g.Authorize(context.Background(), i); e != nil {
 				t.Fatal("same byte retry", e)
 			}
-			wantReads := 0
-			if tron {
-				wantReads = 2
-			}
-			if networkReads != wantReads {
-				t.Fatalf("network reads=%d want=%d", networkReads, wantReads)
-			}
 			i.Approval.OutgoingID = "replacement"
 			i.IntentID = "replacement"
 			if e = g.Authorize(context.Background(), i); !errors.Is(e, approval.ErrConflict) {
 				t.Fatalf("replacement accepted: %v", e)
-			}
-			if networkReads != wantReads {
-				t.Fatal("replacement reached the network provider")
 			}
 		})
 	}
@@ -209,10 +186,10 @@ func TestApprovalGateRejectsNullDowngradeAndMissingLocalEvidence(t *testing.T) {
 		t.Fatal("valid evidence accepted without a configured organization")
 	}
 }
-func TestApprovalRuntimeGateBeforeCoreAndOutageDeadline(t *testing.T) {
-	for _, test := range []string{"valid", "hostile", "null", "outage", "missing-checker", "ack-delayed", "ack-timeout"} {
+func TestApprovalRuntimeGateBeforeCoreAndACKDeadline(t *testing.T) {
+	for _, test := range []string{"valid", "valid-tron", "hostile", "null", "expired-tron", "ack-delayed", "ack-timeout"} {
 		t.Run(test, func(t *testing.T) {
-			tron := test == "outage" || test == "missing-checker"
+			tron := test == "valid-tron" || test == "expired-tron"
 			i, now := approvalIntent(t, tron)
 			var j *approval.Journal
 			if test == "ack-delayed" || test == "ack-timeout" {
@@ -221,8 +198,8 @@ func TestApprovalRuntimeGateBeforeCoreAndOutageDeadline(t *testing.T) {
 				j = approvalJournal(t, i)
 			}
 			g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }}
-			if test == "outage" {
-				g.Network = networkEvidenceFunc(func(context.Context, string, []byte) error { return signingpolicy.ErrNetworkUnavailable })
+			if test == "expired-tron" {
+				now += 86_340_000
 			}
 			if test == "hostile" {
 				i.Prepared.NetworkFeeBudgetAtomic = "0"
@@ -271,7 +248,7 @@ func TestApprovalRuntimeGateBeforeCoreAndOutageDeadline(t *testing.T) {
 				}
 			}
 			timeout := 5 * time.Second
-			if test == "outage" || test == "missing-checker" || test == "ack-timeout" {
+			if test == "ack-timeout" {
 				timeout = 100 * time.Millisecond
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -280,18 +257,18 @@ func TestApprovalRuntimeGateBeforeCoreAndOutageDeadline(t *testing.T) {
 			permit <- struct{}{}
 			runSessionWithExecutorsForTest(ctx, i, client, runner, nil, nil, primaryPartyID, time.Millisecond, permit, nil, slog.Default(), clock)
 			want := int64(0)
-			if test == "valid" || test == "ack-delayed" {
+			if test == "valid" || test == "valid-tron" || test == "ack-delayed" {
 				want = 1
 			}
 			if calls.Load() != want {
 				t.Fatalf("Core calls=%d want=%d", calls.Load(), want)
 			}
-			if test == "outage" || test == "missing-checker" || test == "ack-timeout" {
+			if test == "ack-timeout" {
 				if client.lastResult.ErrorCode != ErrorCodeSessionTimeout {
-					t.Fatalf("outage terminal code=%s", client.lastResult.ErrorCode)
+					t.Fatalf("pending ACK terminal code=%s", client.lastResult.ErrorCode)
 				}
 			}
-			if test == "hostile" || test == "null" {
+			if test == "hostile" || test == "null" || test == "expired-tron" {
 				if client.lastResult.ErrorCode != ErrorCodeInvalidIntent {
 					t.Fatalf("hostile terminal code=%s", client.lastResult.ErrorCode)
 				}
@@ -342,12 +319,12 @@ func TestApprovalExecutionRaceHasOneDurableOutgoing(t *testing.T) {
 	}
 }
 
-func TestApprovalTronFreshnessIsRecheckedAfterTrustedRead(t *testing.T) {
+func TestApprovalGateRejectsExpiredTronBeforeBinding(t *testing.T) {
 	i, now := approvalIntent(t, true)
 	j := approvalJournal(t, i)
-	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now) }, Network: networkEvidenceFunc(func(context.Context, string, []byte) error { now += 86_340_000; return nil })}
+	g := ApprovalGate{OrgID: i.Payload.OrgID, Journal: j, Now: func() time.Time { return time.UnixMilli(now + 86_340_000) }}
 	if e := g.Authorize(context.Background(), i); !errors.Is(e, signingpolicy.ErrPrepared) {
-		t.Fatalf("expired during trusted read: %v", e)
+		t.Fatalf("expired TRON transaction accepted: %v", e)
 	}
 	state, e := j.Load(i.Payload.OrgID, i.Approval.RequestID)
 	if e != nil || state.Execution != nil {

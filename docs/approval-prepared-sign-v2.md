@@ -17,39 +17,47 @@ execution binding artifacts must be durable before Core. Exact byte retry still
 requires the same live worker ownership. An orphaned session is cleanup only.
 Missing local evidence is never reconstructed from a backend claim.
 
-## TRON network evidence
+## TRON network trust boundary
 
-TRON Transaction.raw has no chain ID. The pure protobuf decoder does not claim
-network membership. Approved TRON execution additionally requires a trusted,
-operator-configured exact HTTPS JSON-RPC endpoint for that network:
+Co-Signer performs no blockchain RPC requests. The former
+`CO_SIGNER_APPROVAL_TRON_MAINNET_RPC_URL` and
+`CO_SIGNER_APPROVAL_TRON_NILE_RPC_URL` settings are unused and can be removed
+from an installation. Backend remains responsible for constructing a transaction
+for the selected network with a valid TAPOS block reference and broadcasting it.
 
-- `CO_SIGNER_APPROVAL_TRON_MAINNET_RPC_URL` for `tron:mainnet`.
-- `CO_SIGNER_APPROVAL_TRON_NILE_RPC_URL` for `tron:nile`.
+TRON Transaction.raw has no chain ID, and a TRON address does not identify a
+network. Co-Signer verifies the declared network consistently across the
+authorization, policy and derivation context, but cannot independently prove
+that the raw transaction belongs to that network or that its TAPOS reference
+exists on the selected chain. TAPOS validation by a blockchain node at broadcast
+does not establish that Co-Signer signed for the network the organization
+approved: an incorrect Backend could supply that other network's reference
+before the signature is created.
 
-There is no public default, backend URL, discovery or redirect following. URLs
-may carry provider credentials in their path/query; they are not logged, copied
-into public errors, receipts or the journal. Userinfo and fragments are rejected.
-The existing positive `CO_SIGNER_HTTP_TIMEOUT` bounds the entire three-read verification;
-responses are bounded to 8 MiB each because block(false) includes transaction
-hashes. No live RPC is required for tests.
+Local checks still require canonical protobuf encoding, exactly one supported
+transfer contract, the approved sender/public-key/address and derivation
+identity, recipient, amount, token contract/calldata, fee limit and fee budget,
+SHA-256 digest, two-byte reference number and eight-byte reference hash, and a
+valid timestamp/expiration with more than 60 seconds remaining. Durable approved
+receipt/APPLIED evidence and one immutable execution binding remain mandatory
+for approval-backed execution. External approval and auto_approve have the same
+transaction verification boundary; neither mode adds independent network proof.
 
-The checker verifies `eth_chainId` (mainnet `0x2b6653dc`, Nile `0xcd8690dc`),
-reads the latest block and derives the nearest height <= head with the raw
-TAPOS two-byte number within 65536 blocks. It fetches that canonical height,
-validates the block number and 32-byte blockID height prefix, then compares the
-number bytes[6:8] and blockID bytes[8:16] to raw references. Normal standard
-block fields are accepted; malformed wrappers/duplicate JSON/invalid required
-number/hash fields fail closed. This trusts the configured provider and TLS;
-it is not a light client or proof against provider dishonesty. Rotation must
-preserve the selected network and operational provider trust.
+Mainnet and Nile can currently use the same MPC root key and child path, which
+produces the same wallet key/address. A compromised or incorrect Backend can
+provide mainnet transaction bytes under an approved Nile transfer when the
+other approved parameters match. The resulting signature could spend real
+mainnet funds controlled by that shared address. This is an explicit limitation
+of the current RPC-free configuration, not protection against cross-network
+substitution. Ethereum retains its local chain-ID check in the signed preimage.
 
-A missing endpoint, timeout, malformed/unavailable RPC response or outage is
-operational unavailability. The same owned SIGN retries identical saved bytes
-at one-second intervals inside the existing operation deadline and execution
-TTL; it cannot create a new session, replace raw data, call Core or directly
-release holds. At expiry/shutdown it uses the existing terminal failure delivery
-and outgoing lifecycle. A wrong network or TAPOS mismatch is invalid evidence,
-not an organization rejection. Approval request stays APPROVED after activation.
+[BROSET-156](https://brolabel.atlassian.net/browse/BROSET-156) tracks separate
+TRON derivation branches (/0/{index} for mainnet and /1/{index} for Nile),
+independent enforcement in Backend, MPC-Signer and Co-Signer, and transition of
+legacy wallets/approvals. This separation is not implemented here. It will
+protect designated mainnet wallet keys from Nile approvals, but will not prove
+the network of TRON bytes. Real mainnet funds sent to a designated test address
+would still be controlled by that test key.
 
 ## Decoder scope and dependencies
 

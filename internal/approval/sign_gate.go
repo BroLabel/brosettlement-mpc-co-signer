@@ -23,7 +23,6 @@ type ExecutionJournal interface {
 type SignGate struct {
 	OrgID   string
 	Journal ExecutionJournal
-	Network signingpolicy.NetworkEvidence
 	Now     func() time.Time
 }
 
@@ -95,13 +94,10 @@ func (g SignGate) Authorize(ctx context.Context, i monolith.Intent) error {
 		return signingpolicy.ErrPrepared
 	}
 	binding := ExecutionBinding{Version: 1, OrgID: i.Payload.OrgID, RequestID: a.RequestID, OutgoingID: a.OutgoingID, AuthorizationHash: a.AuthorizationHash, ExecutionDigest: base64.StdEncoding.EncodeToString(i.Payload.Digest), PayloadType: i.Payload.SigningPayloadType, HashAlgorithm: i.Payload.HashAlgorithm}
-	// Reject a replacement before any provider read. BindExecution also compares
+	// Reject a replacement before binding. BindExecution also compares
 	// all fields under the journal lock and returns after both fsync barriers.
 	if state.Execution != nil && *state.Execution != binding {
 		return ErrConflict
-	}
-	if e = verified.VerifyNetwork(ctx, g.Network, now); e != nil {
-		return e
 	}
 	if e = ctx.Err(); e != nil {
 		return e

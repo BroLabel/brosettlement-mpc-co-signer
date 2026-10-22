@@ -19,7 +19,6 @@ const (
 
 type Config struct {
 	Approval                       *approval.Config
-	TronApprovalRPCEndpoints       map[string]string
 	MonolithURL                    string
 	APIKeyID                       string
 	APIPrivateKey                  string
@@ -139,10 +138,6 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.Approval = &a
-	}
-	cfg.TronApprovalRPCEndpoints, err = loadTronApprovalRPC(cfg.HTTPTimeout)
-	if err != nil {
-		return Config{}, err
 	}
 	return cfg, nil
 }

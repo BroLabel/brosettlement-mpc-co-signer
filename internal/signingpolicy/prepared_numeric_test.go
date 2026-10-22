@@ -120,7 +120,7 @@ func TestTronPreparedNumericBounds(t *testing.T) {
 						if err != nil {
 							t.Fatal(err)
 						}
-						_, err = verifyTronBytes(raw, &p, time.UnixMilli(v.Now))
+						err = verifyTronBytes(raw, &p, time.UnixMilli(v.Now))
 						if (err == nil) != (n <= 9007199254740991) {
 							t.Fatalf("accepted=%v want=%v err=%v", err == nil, n <= 9007199254740991, err)
 						}

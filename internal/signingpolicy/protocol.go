@@ -18,9 +18,8 @@ type protocol struct {
 }
 
 type preparedVerification struct {
-	digest  []byte
-	budget  string
-	network *networkRequirement
+	digest []byte
+	budget string
 }
 
 func protocolForPayload(payloadType string) (protocol, bool) {

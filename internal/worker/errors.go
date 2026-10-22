@@ -34,7 +34,7 @@ func BuildResult(runErr error, sessionCtx context.Context) monolith.IntentResult
 		return failedResult(ErrorCodeSessionTimeout, runErr)
 	case errors.Is(runErr, context.Canceled):
 		return failedResult(ErrorCodeWorkerShutdown, runErr)
-	case errors.Is(runErr, errInvalidIntent), errors.Is(runErr, signingpolicy.ErrPrepared), errors.Is(runErr, signingpolicy.ErrNetworkMismatch),
+	case errors.Is(runErr, errInvalidIntent), errors.Is(runErr, signingpolicy.ErrPrepared),
 		errors.Is(runErr, coretss.ErrInvalidSessionDescriptor),
 		errors.Is(runErr, coretss.ErrLocalPartyRequired),
 		errors.Is(runErr, coretss.ErrTransportRequired),

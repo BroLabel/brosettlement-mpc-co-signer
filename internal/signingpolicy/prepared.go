@@ -75,14 +75,13 @@ func authObject(a wire.Object, k string) wire.Object {
 func number(v string) *big.Int                { n, _ := new(big.Int).SetString(v, 10); return n }
 func nullEqual(v json.RawMessage, w any) bool { b, _ := json.Marshal(w); return bytes.Equal(v, b) }
 
-// VerifiedPrepared carries validated authorization and any network requirement.
-// Its private requirement is derived from the verified transaction bytes.
+// VerifiedPrepared carries authorization validated against exact transaction bytes.
 type VerifiedPrepared struct {
 	Authorization wire.Object
-	network       *networkRequirement
 }
 
-// VerifyPrepared verifies exact transaction bytes and their approved parameters.
+// VerifyPrepared verifies exact transaction bytes and approved terms without RPC.
+// TRON network membership cannot be inferred from raw transaction bytes.
 // Authorization parsing also verifies the sender key, address and derivation hash.
 func VerifyPrepared(a *ApprovedExecution, prepared *PreparedTransfer, policy *Context, digest []byte, payloadType, algorithm string, now time.Time) (*VerifiedPrepared, error) {
 	if a == nil || prepared == nil || policy == nil || a.Version != 1 || !wire.ValidReference(a.OutgoingID) || a.RequestID == "" || prepared.Version != 1 || prepared.Encoding != "hex" || !canonicalUint(prepared.NetworkFeeBudgetAtomic) {
@@ -120,5 +119,5 @@ func VerifyPrepared(a *ApprovedExecution, prepared *PreparedTransfer, policy *Co
 	if e != nil || verified.budget == "" || verified.budget != prepared.NetworkFeeBudgetAtomic || !bytes.Equal(verified.digest, digest) {
 		return nil, ErrPrepared
 	}
-	return &VerifiedPrepared{Authorization: auth, network: verified.network}, nil
+	return &VerifiedPrepared{Authorization: auth}, nil
 }
