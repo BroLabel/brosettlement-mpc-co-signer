@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 )
 
 func TestClaimIntentDecodesClosedEthereumPolicyContexts(t *testing.T) {
@@ -41,7 +45,7 @@ func TestClaimIntentDecodesClosedEthereumPolicyContexts(t *testing.T) {
 			if err := json.Unmarshal(raw, &identity); err != nil {
 				t.Fatal(err)
 			}
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(raw) }))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(signV2Fixture(raw)) }))
 			defer srv.Close()
 			client, _ := newTestClient(t, srv.URL)
 			claim, err := client.ClaimIntent(context.Background(), "SIGN", identity.IntentID)
@@ -204,7 +208,7 @@ func TestClaimIntentSendsNoBodyAndIdempotencyHeader(t *testing.T) {
 		gotIdempotency = r.Header.Get("X-Idempotency-Key")
 		bodyHashHeaderIsAbsent = len(r.Header.Values("X-Api-Body-Hash")) == 0
 		signatureIsValid = verifyRequestSignature(t, r, pub, "")
-		_, _ = w.Write([]byte(`{"httpStatus":200,"status":"CLAIMED","type":"DKG","sessionId":"session-1","deadline":"2026-04-16T12:00:00Z","session":{"sessionId":"session-1","status":"PENDING","startedAt":null,"executionExpiresAt":null,"deadline":"2026-04-16T12:00:00Z"}}`))
+		_, _ = w.Write(signV2Fixture([]byte(`{"httpStatus":200,"status":"CLAIMED","type":"DKG","sessionId":"session-1","deadline":"2026-04-16T12:00:00Z","session":{"sessionId":"session-1","status":"PENDING","startedAt":null,"executionExpiresAt":null,"deadline":"2026-04-16T12:00:00Z"}}`)))
 	}))
 	defer srv.Close()
 
@@ -235,7 +239,7 @@ func TestClaimIntentRejectsUnsupportedTypeBeforeHTTP(t *testing.T) {
 
 func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{
+		_, _ = w.Write(signV2Fixture([]byte(`{
 			"httpStatus":200,
 			"intentId":"intent-1",
 			"sessionId":"session-1",
@@ -255,7 +259,7 @@ func TestClaimIntentDecodesExecutableIntentPayload(t *testing.T) {
 				"chainCodeHash":"AtRJox-7JnyPNS6ZaKeePl_JXBu-qlAv1kVOveWkvtw",
 				"derivationScheme":"bip32_secp256k1"
 			}
-		}`))
+		}`)))
 	}))
 	defer srv.Close()
 
@@ -282,7 +286,7 @@ func TestClaimIntentDecodesDualPartyContractFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(fixture)
+		_, _ = w.Write(signV2Fixture(fixture))
 	}))
 	defer srv.Close()
 
@@ -320,10 +324,10 @@ func TestClaimIntentPreservesSignClaimReplayPayloadAndDeadline(t *testing.T) {
 	requests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if r.URL.Path != "/api/v1/co-signer/intents/sign/"+intentID+"/claim" {
+		if r.URL.Path != "/api/v2/co-signer/intents/sign/"+intentID+"/claim" {
 			t.Fatalf("request path = %q", r.URL.Path)
 		}
-		_, _ = w.Write(fixture)
+		_, _ = w.Write(signV2Fixture(fixture))
 	}))
 	defer srv.Close()
 
@@ -342,7 +346,7 @@ func TestClaimIntentPreservesSignClaimReplayPayloadAndDeadline(t *testing.T) {
 	if first.IntentID != intentID || first.SessionID != sessionID || first.Type != "SIGN" || first.Status != "CLAIMED" ||
 		first.DeadlineRaw != "2026-07-30T00:00:00.000Z" ||
 		first.Payload.Type != "SIGN" || first.Payload.OrgID != "org-123" || first.Payload.KeyID != "mpc_key_123e4567-e89b-42d3-a456-426614174004" ||
-		!bytes.Equal(first.Payload.Digest, []byte{0xaa, 0xbb, 0xcc}) || !reflect.DeepEqual(first.Payload.Parties, []string{"mpc-signer", "co-signer-primary"}) ||
+		!bytes.Equal(first.Payload.Digest, append([]byte{0xaa, 0xbb, 0xcc}, make([]byte, 29)...)) || !reflect.DeepEqual(first.Payload.Parties, []string{"mpc-signer", "co-signer-primary"}) ||
 		first.Payload.DerivationContext == nil || first.Payload.DerivationContext.FullPath != "m/44'/195'/0'/0/0" ||
 		first.Payload.PolicyContext == nil || first.Payload.PolicyContext.Asset != "TRX" || first.Payload.PolicyContext.AmountAtomic != "100" ||
 		first.Payload.PolicyContext.FromAddress != "TAddress" || first.Payload.PolicyContext.ToAddress != "TDestination" ||
@@ -415,7 +419,7 @@ func TestClaimIntentRejectsUnknownSignClaimPayloadField(t *testing.T) {
 func TestClaimIntentClassifiesTypedForeignConflict(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"httpStatus":409,"code":"INTENT_FOREIGN_CLAIM"}`))
+		_, _ = w.Write(signV2Fixture([]byte(`{"httpStatus":409,"code":"INTENT_FOREIGN_CLAIM"}`)))
 	}))
 	defer srv.Close()
 	client, _ := newTestClient(t, srv.URL)
@@ -427,7 +431,7 @@ func TestClaimIntentClassifiesTypedForeignConflict(t *testing.T) {
 
 func TestClaimIntentRejectsUnknownBackendFixtureField(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"deadline":"2026-04-16T12:00:00Z","unexpected":true}`))
+		_, _ = w.Write(signV2Fixture([]byte(`{"deadline":"2026-04-16T12:00:00Z","unexpected":true}`)))
 	}))
 	defer srv.Close()
 
@@ -477,7 +481,7 @@ func TestClaimIntentRequiresMatchingHTTPStatusContract(t *testing.T) {
 
 func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{
+		_, _ = w.Write(signV2Fixture([]byte(`{
 			"httpStatus":200,
 			"intentId":"intent-1",
 			"sessionId":"session-1",
@@ -539,7 +543,7 @@ func TestClaimIntentDecodesHDIntentPayload(t *testing.T) {
 					"keyVersion":1
 				}
 			}
-		}`))
+		}`)))
 	}))
 	defer srv.Close()
 
@@ -659,7 +663,7 @@ func TestClaimIntentRetainsDeterministicSignPolicyRejection(t *testing.T) {
 			payload := wire["payload"].(map[string]any)
 			payload["policyContext"].(map[string]any)[field] = "0x222222222222222222222222222222222222222A"
 			raw, _ = json.Marshal(wire)
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(raw) }))
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(signV2Fixture(raw)) }))
 			defer srv.Close()
 			client, _ := newTestClient(t, srv.URL)
 			claim, err := client.ClaimIntent(context.Background(), "SIGN", wire["intentId"].(string))
@@ -671,5 +675,197 @@ func TestClaimIntentRetainsDeterministicSignPolicyRejection(t *testing.T) {
 				t.Fatalf("unsafe or imprecise diagnostic: %v", err)
 			}
 		})
+	}
+}
+
+func signV2Fixture(raw []byte) []byte {
+	var v map[string]json.RawMessage
+	if json.Unmarshal(raw, &v) != nil || string(v["type"]) != `"SIGN"` {
+		return raw
+	}
+	var payload map[string]json.RawMessage
+	_ = json.Unmarshal(v["payload"], &payload)
+	var encoded string
+	_ = json.Unmarshal(payload["digest"], &encoded)
+	decoded, _ := base64.StdEncoding.DecodeString(encoded)
+	if len(decoded) != 32 {
+		replacement := make([]byte, 32)
+		copy(replacement, decoded)
+		payload["digest"], _ = json.Marshal(base64.StdEncoding.EncodeToString(replacement))
+		v["payload"], _ = json.Marshal(payload)
+	}
+	v["version"] = json.RawMessage(`2`)
+	// These transport tests vary the payload independently. The real SignGate
+	// tests verify the cryptographic match against the same producer corpus.
+	corpus, err := signingpolicy.ReadPreparedCorpus("../../testdata/approval-prepared-v1/corpus.json.gz")
+	if err != nil {
+		panic(err)
+	}
+	var vectors []map[string]json.RawMessage
+	if err = json.Unmarshal(corpus, &vectors); err != nil {
+		panic(err)
+	}
+	for _, vector := range vectors {
+		if string(vector["valid"]) == "true" {
+			v["approval"], v["prepared"] = vector["approval"], vector["prepared"]
+			break
+		}
+	}
+	b, _ := json.Marshal(v)
+	return b
+}
+
+func TestV2InvalidEnvelopeRetainsUnknownClaimOwnership(t *testing.T) {
+	fixture, e := os.ReadFile("../../testdata/ethereum-wallet-v1/sign-claim-eth.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	good := signV2Fixture(fixture)
+	var identity struct {
+		IntentID string `json:"intentId"`
+	}
+	_ = json.Unmarshal(good, &identity)
+	for _, test := range []string{"old-v1", "missing", "unknown", "duplicate", "invalid-utf8", "oversized", "missing-prepared-field", "partial-approval", "both-null"} {
+		t.Run(test, func(t *testing.T) {
+			var v map[string]any
+			_ = json.Unmarshal(good, &v)
+			switch test {
+			case "both-null":
+				v["approval"] = nil
+				v["prepared"] = nil
+			case "missing":
+				delete(v, "approval")
+			case "unknown":
+				v["unknown"] = true
+			case "missing-prepared-field":
+				v["prepared"] = map[string]any{"version": 1}
+			case "partial-approval":
+				v["approval"] = map[string]any{"version": 1}
+			}
+			raw, _ := json.Marshal(v)
+			switch test {
+			case "old-v1":
+				raw = fixture
+			case "duplicate":
+				raw = append([]byte(`{"version":2,`), good[1:]...)
+			case "invalid-utf8":
+				raw = []byte{'{', '"', 'x', '"', ':', '"', 0xff, '"', '}'}
+			case "oversized":
+				raw = bytes.Repeat([]byte(" "), 128*1024+1)
+			}
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if !strings.HasPrefix(r.URL.Path, "/api/v2/") {
+					t.Error("legacy fallback")
+				}
+				_, _ = w.Write(raw)
+			}))
+			defer srv.Close()
+			client, _ := newTestClient(t, srv.URL)
+			_, e = client.ClaimIntent(context.Background(), "SIGN", identity.IntentID)
+			if !errors.Is(e, ErrClaimOutcomeUnknown) || !errors.Is(e, ErrClaimEnvelopeInvalid) || requests != 1 {
+				t.Fatalf("unsafe ownership classification: requests=%d err=%v", requests, e)
+			}
+		})
+	}
+}
+
+func TestDkgClaimRejectsSignFields(t *testing.T) {
+	raw, e := os.ReadFile("../../testdata/mpc-co-signer-http/v1/claim-response.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, field := range []string{"version", "approval", "prepared"} {
+		t.Run(field, func(t *testing.T) {
+			var v map[string]any
+			_ = json.Unmarshal(raw, &v)
+			v[field] = nil
+			if field == "version" {
+				v[field] = 0
+			}
+			poisoned, _ := json.Marshal(v)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasPrefix(r.URL.Path, "/api/v2/") {
+					t.Error("DKG endpoint changed")
+				}
+				_, _ = w.Write(poisoned)
+			}))
+			defer srv.Close()
+			c, _ := newTestClient(t, srv.URL)
+			if _, e := c.ClaimIntent(context.Background(), "DKG", "synthetic-dkg"); e == nil {
+				t.Fatal("SIGN-only field accepted on DKG claim")
+			}
+		})
+	}
+}
+
+func TestV2ApprovedClaimDecodesSharedProducerBindings(t *testing.T) {
+	raw, e := signingpolicy.ReadPreparedCorpus("../../testdata/approval-prepared-v1/corpus.json.gz")
+	if e != nil {
+		t.Fatal(e)
+	}
+	var items []map[string]json.RawMessage
+	if e = json.Unmarshal(raw, &items); e != nil {
+		t.Fatal(e)
+	}
+	for _, v := range items {
+		if string(v["valid"]) != "true" {
+			continue
+		}
+		var id string
+		_ = json.Unmarshal(v["id"], &id)
+		t.Run(id, func(t *testing.T) {
+			var a map[string]json.RawMessage
+			_ = json.Unmarshal(v["approval"], &a)
+			var auth map[string]json.RawMessage
+			_ = json.Unmarshal(a["authorization"], &auth)
+			var d map[string]json.RawMessage
+			_ = json.Unmarshal(auth["derivationContext"], &d)
+			payload := map[string]any{"type": "SIGN", "orgId": auth["orgId"], "walletId": auth["walletId"], "keyId": auth["keyId"], "profileId": d["profileId"], "profileTemplateId": d["profileTemplateId"], "profileVersion": d["profileVersion"], "algorithm": "ECDSA", "curve": "secp256k1", "chain": auth["chain"], "partyId": "co-signer-primary", "parties": []string{"mpc-signer", "co-signer-primary"}, "threshold": 2, "digest": v["digest"], "digestType": "transaction", "hashAlgorithm": v["hashAlgorithm"], "signingPayloadType": v["payloadType"], "policyContext": v["policy"], "derivationContext": auth["derivationContext"], "derivationContextHash": auth["derivationContextHash"]}
+			var outgoing string
+			_ = json.Unmarshal(a["outgoingId"], &outgoing)
+			response := map[string]any{"httpStatus": 200, "intentId": outgoing, "sessionId": "synthetic-session", "type": "SIGN", "payload": payload, "status": "CLAIMED", "deadline": "2027-01-01T00:00:00.000Z", "version": 2, "approval": v["approval"], "prepared": v["prepared"], "session": map[string]any{"sessionId": "synthetic-session", "status": "PENDING", "startedAt": nil, "deadline": "2027-01-01T00:00:00.000Z", "executionExpiresAt": nil}}
+			encoded, _ := json.Marshal(response)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if !strings.HasPrefix(r.URL.Path, "/api/v2/") {
+					t.Error("legacy path")
+				}
+				_, _ = w.Write(encoded)
+			}))
+			defer srv.Close()
+			c, _ := newTestClient(t, srv.URL)
+			claim, e := c.ClaimIntent(context.Background(), "SIGN", outgoing)
+			if e != nil {
+				t.Fatal(e)
+			}
+			if claim.Version != 2 || claim.Approval == nil || claim.Prepared == nil || claim.Intent().Approval != claim.Approval || claim.Intent().Prepared != claim.Prepared {
+				t.Fatal("approved binding lost across HTTP and worker intent")
+			}
+		})
+	}
+}
+
+func TestClaimIntentUsesOnlyV2WithoutFallback(t *testing.T) {
+	for _, kind := range []string{"DKG", "SIGN"} {
+		for _, status := range []int{http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError} {
+			t.Run(fmt.Sprintf("%s/%d", kind, status), func(t *testing.T) {
+				var paths []string
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					paths = append(paths, r.URL.Path)
+					w.WriteHeader(status)
+				}))
+				defer srv.Close()
+				client, _ := newTestClient(t, srv.URL)
+				_, err := client.ClaimIntent(context.Background(), kind, "intent-1")
+				if err == nil {
+					t.Fatal("failed claim accepted")
+				}
+				want := []string{"/api/v2/co-signer/intents/" + strings.ToLower(kind) + "/intent-1/claim"}
+				if !reflect.DeepEqual(paths, want) {
+					t.Fatalf("claim requests = %v, want %v", paths, want)
+				}
+			})
+		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/joho/godotenv"
 )
@@ -17,6 +18,7 @@ const (
 )
 
 type Config struct {
+	Approval                       *approval.Config
 	MonolithURL                    string
 	APIKeyID                       string
 	APIPrivateKey                  string
@@ -127,6 +129,16 @@ func Load() (Config, error) {
 		return Config{}, errors.New("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM must be >= 1")
 	}
 
+	if os.Getenv("CO_SIGNER_APPROVAL_MODE") != "" || os.Getenv("CO_SIGNER_APPROVAL_ORG_ID") != "" || os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR") != "" || os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT") != "" || os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN") != "" || os.Getenv("CO_SIGNER_APPROVAL_ENVIRONMENT") != "" || os.Getenv("CO_SIGNER_APPROVAL_CONFIG_REVISION") != "" {
+		a := approval.Config{Mode: os.Getenv("CO_SIGNER_APPROVAL_MODE"), OrgID: os.Getenv("CO_SIGNER_APPROVAL_ORG_ID"), Environment: os.Getenv("CO_SIGNER_APPROVAL_ENVIRONMENT"), Revision: os.Getenv("CO_SIGNER_APPROVAL_CONFIG_REVISION"), JournalDir: os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR"), Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
+		if err := a.Validate(); err != nil {
+			return Config{}, err
+		}
+		if err := approval.ValidateDirectories(a.JournalDir, primaryStore.Directory(), recoveryStore.Directory()); err != nil {
+			return Config{}, err
+		}
+		cfg.Approval = &a
+	}
 	return cfg, nil
 }
 

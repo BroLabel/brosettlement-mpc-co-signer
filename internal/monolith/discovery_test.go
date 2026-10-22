@@ -3,6 +3,7 @@ package monolith
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -183,5 +184,32 @@ func TestListActionableIntentsRejectsUnexpectedHTTPStatusWithValidBody(t *testin
 	client, _ := newTestClient(t, srv.URL)
 	if _, err := client.ListActionableIntents(context.Background()); err == nil {
 		t.Fatal("ListActionableIntents() error = nil")
+	}
+}
+
+func TestV1DiscoveryRejectsPreparedSignFields(t *testing.T) {
+	raw, e := os.ReadFile("../../testdata/mpc-co-signer-http/v1/listing-response.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, collection := range []string{"pending", "ownClaimedDkg", "ownClaimedSign"} {
+		for _, field := range []string{"version", "approval", "prepared"} {
+			t.Run(collection+"/"+field, func(t *testing.T) {
+				var v map[string]any
+				_ = json.Unmarshal(raw, &v)
+				items := v[collection].([]any)
+				if len(items) == 0 {
+					t.Fatal("fixture lacks collection")
+				}
+				items[0].(map[string]any)[field] = nil
+				poisoned, _ := json.Marshal(v)
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(poisoned) }))
+				defer srv.Close()
+				c, _ := newTestClient(t, srv.URL)
+				if _, e := c.GetPendingIntents(context.Background()); e == nil {
+					t.Fatal("SIGN-only field accepted on v1 discovery")
+				}
+			})
+		}
 	}
 }

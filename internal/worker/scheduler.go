@@ -20,6 +20,8 @@ type pendingClient interface {
 }
 
 type SchedulerConfig struct {
+	SigningDisabled    bool
+	AuthorizeSign      func(context.Context, monolith.Intent) error
 	MinInterval        time.Duration
 	MaxInterval        time.Duration
 	BackoffFactor      float64
@@ -230,6 +232,10 @@ func (s *Scheduler) dispatchBatch(ctx context.Context, intents []monolith.Intent
 				return
 			}
 		case intentKindSIGN:
+			// Provisioning-only startup must not take ownership of SIGN work.
+			if s.cfg.SigningDisabled {
+				continue
+			}
 			releaseIntent, reserved := s.reserveIntentID(intent.IntentID)
 			if !reserved {
 				continue
@@ -311,7 +317,9 @@ func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, p
 	go func() {
 		defer s.sessions.Done()
 		defer releaseIntent()
-		runSessionWithPermits(
+		clock := realReadinessClock()
+		clock.authorize = s.cfg.AuthorizeSign
+		runSessionWithClock(
 			ctx,
 			intent,
 			s.client,
@@ -323,6 +331,7 @@ func (s *Scheduler) launchSession(ctx context.Context, intent monolith.Intent, p
 			permits,
 			s.log,
 			func() { close(claimDispatched) },
+			clock,
 		)
 	}()
 	return claimDispatched

@@ -249,6 +249,12 @@ func runSessionWithClock(
 	// A rejected observation must never replace the trusted claim identity
 	// used to reconcile an ambiguous failure publication.
 	intent.Session = readyLifecycle
+	if admittedKind == intentKindSIGN {
+		if err := authorizeSign(executionCtx, intent, clock.authorize, log); err != nil {
+			deliverSignResult(ctx, client, intent, BuildResult(err, executionCtx), log)
+			return
+		}
+	}
 
 	frameCtx := transport.FrameContext{
 		Session:   intent.Session,

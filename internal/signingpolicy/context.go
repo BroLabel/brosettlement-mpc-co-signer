@@ -33,10 +33,7 @@ func (c *Context) UnmarshalJSON(raw []byte) error {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		return err
 	}
-	expected := tronPolicyFields
-	if _, ok := fields["version"]; ok {
-		expected = ethereumPolicyFields
-	}
+	expected := policyFieldsForContext(fields)
 	if len(fields) != len(expected) {
 		return errors.New("SIGN policy context has invalid fields")
 	}

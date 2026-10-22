@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "status": "PASS",
+  "simulatedDays": [
+    30,
+    365
+  ],
+  "withdrawals": [
+    {
+      "days": 30,
+      "requestId": "5bdec6c6-cac2-4e2a-91d8-fe101185ba1c",
+      "ledgerId": "d240780c-020b-4e6f-8cbb-4ab6b001d8f8",
+      "outgoingId": "691a31ce-3ce7-4faf-ac5b-50a20686296d",
+      "sessionId": "67b839c8-8bb3-4eeb-95bd-1d59f4148409",
+      "transactionHash": "0xac92be4e5cfa7fd2b1b297fc3e6902eafc89d8ca0b4a59cde2ab1bc61ceb64cd",
+      "principalJournalId": "16703415-32b3-4e00-b3ce-145647d12002",
+      "capJournalId": "af930d8b-a48a-4992-9a43-9b5b4fe52714",
+      "capAtomic": "1000000000000000",
+      "ethereumNonce": "1",
+      "unsignedRawSha256": "07ce56adb2f36184f9d5b1eef1454f569f2c0935c2fbcef31113ba78dc0861ae",
+      "preparedBudgetAtomic": "26251233908324",
+      "actualFeeAtomic": "21382502841000",
+      "approvalRecordedAt": "2026-10-19T15:30:22.338Z",
+      "outgoingPreparedAt": "2026-10-19T15:30:26.749Z",
+      "authorizationHash": "53579a93a4a402a3a6bfb87bdd0e21f8d8501c631b40c9e869a3d610e9046e6b",
+      "receiptSha256": "269c2150b178ee479025b747d4ee3224046c11ee3d787d0cd589f39d4b2b369c",
+      "decisionSource": "external"
+    },
+    {
+      "days": 365,
+      "requestId": "fa7dc7b1-c193-4a8e-a5ec-8ef3750afd63",
+      "ledgerId": "278899e4-da8c-4d2d-a8ff-f6313d798aeb",
+      "outgoingId": "4ea5e6f6-87dc-4576-a752-069bb259c94d",
+      "sessionId": "94c259c6-c777-4ec8-8e0c-52cb5749fffc",
+      "transactionHash": "0xbdca2da9fa9b2a65874bc973cd8248e926db2db9ecdbcccec6615c7a63654f6b",
+      "principalJournalId": "6b432c91-e6d6-4de6-955f-e2cdac9d5004",
+      "capJournalId": "65a5720c-1bfa-41bb-8b9f-927a84d20bc3",
+      "capAtomic": "1000000000000000",
+      "ethereumNonce": "2",
+      "unsignedRawSha256": "e98acf05d20fb29a4b34c859b8380a44305347709f848d4bf3a110806c4cd6ca",
+      "preparedBudgetAtomic": "25343605602448",
+      "actualFeeAtomic": "21051622956000",
+      "approvalRecordedAt": "2026-10-19T15:31:01.794Z",
+      "outgoingPreparedAt": "2026-10-19T15:31:04.870Z",
+      "authorizationHash": "333d9415474c12a50e25cb0075c994bd0caa47a1357379b050c9a395728fbe11",
+      "receiptSha256": "6d57839c07ef4143606018e93d5b62e6dcd397966dfc16d6dbcded4461e37d68",
+      "decisionSource": "external"
+    },
+    {
+      "requestId": "c6a83c33-703a-499c-a5ce-a798622afb60",
+      "ledgerId": "e512ee26-0bd5-46a3-b852-61551ae5b9a6",
+      "outgoingId": "b9523197-59ef-4bf1-9f07-b28e3e9f0f2d",
+      "sessionId": "2176c5f9-292d-4c57-a448-81a0671ac499",
+      "transactionHash": "0xdbc62dd18e957eb6bde3c554d15f98d085474f3c34c418e921efa5376abc2a69",
+      "principalJournalId": "dcfb3d17-ae75-4717-89f2-47120af213c8",
+      "capJournalId": "98aa6bbe-42dc-4d68-a1c0-8bb4fabf6739",
+      "capAtomic": "1000000000000000",
+      "ethereumNonce": "3",
+      "unsignedRawSha256": "2ee1e438132480f8754d2edbae9cb73095c355eb409a8490375341f8694eb67d",
+      "preparedBudgetAtomic": "25221111331852",
+      "actualFeeAtomic": "21006967128000",
+      "approvalRecordedAt": "2026-10-19T15:31:30.152Z",
+      "outgoingPreparedAt": "2026-10-19T15:31:31.182Z",
+      "authorizationHash": "18bf2970a2d6647fc9f13f3c2a828a3da3c44e48b928f633a993a39b7263a0b7",
+      "receiptSha256": "854c81bfc4ff7b99dbed850ff86f4288f80a612a005a573d271ea084f85e3906",
+      "decisionSource": "auto_approve"
+    }
+  ],
+  "phase": "external rejection and explicit auto approval ambiguity",
+  "createdCrash": {
+    "outgoingId": "691a31ce-3ce7-4faf-ac5b-50a20686296d",
+    "ethereumNonce": "1",
+    "rawTransactionSha256": "07ce56adb2f36184f9d5b1eef1454f569f2c0935c2fbcef31113ba78dc0861ae"
+  },
+  "nullDowngrade": {
+    "ledgerId": "e9b0e8f9-f1ea-4a06-be36-f3a2220addc0",
+    "boundary": "current backend v2 legacy null/null with capability=false; configured current Co gate",
+    "execution": "FAILED"
+  },
+  "oldCo": {
+    "revision": "37da3c1e8181db440a7f1c2e3cbef27b4ba8669a",
+    "binarySha256": "de4b9ad1b1dd63c35f2d94662ff49c65db71f13f0718ecc1877f75549acfc74e",
+    "observedRequiredPending": true
+  },
+  "rejectedRequest": "fb1496f9-a62a-42d3-8131-3d922d6d6203",
+  "cancelledRequest": "a7616bb5-a064-4ebd-b606-88d7e54bfd2e",
+  "repositories": {
+    "backend": "72a20dcb6cf284ca8c1a8d7312a61ab613e4d6f9",
+    "signer": "79d61c2fd0968cf222643c2d2069c94b4665bbb9",
+    "coSigner": "9cc15089c66e934229e65209237b3926be505365"
+  },
+  "binaries": {
+    "signer": "f2785946a7deb3ea0f10986cf91057d24fe353a56361e48cad00d7bcb58ae124",
+    "coSigner": "84c3ba8d48551197f303d317ef30008406d1d2cf33b397b2fcc1bdb6d52940ea"
+  },
+  "organizationCalls": 13,
+  "cleanup": {
+    "postgres": {
+      "owned": true,
+      "verifiedAbsent": true
+    },
+    "nats": {
+      "owned": true,
+      "verifiedAbsent": true
+    },
+    "vault": {
+      "owned": true,
+      "verifiedAbsent": true
+    },
+    "anvil": {
+      "owned": true,
+      "verifiedAbsent": true
+    }
+  }
+}

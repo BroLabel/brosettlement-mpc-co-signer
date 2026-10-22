@@ -39,6 +39,15 @@ Because the Co-Signer host contains both B and C, it is a quorum-bearing trust
 domain. Treat access to the host, both artifact stores, and their shared
 encryption key as security-critical.
 
+TRON signing does not require a blockchain RPC endpoint. Co-Signer checks the
+transaction bytes and approved transfer terms locally, but trusts Backend for
+the selected TRON network and TAPOS block reference. Mainnet and Nile may
+currently share the same derived wallet key/address. A compromised Backend can
+therefore present mainnet transaction bytes under a Nile approval when the
+approved transfer terms match. See the [TRON network trust boundary](docs/approval-prepared-sign-v2.md#tron-network-trust-boundary)
+and the planned derivation-branch separation in
+[BROSET-156](https://brolabel.atlassian.net/browse/BROSET-156).
+
 For the wider product and integration model, see the
 [BroSettlement documentation](https://www.brolabel.io/en/api-reference/brosettlement)
 and the [Co-Signer guide](https://www.brolabel.io/en/api-reference/co-signer).
@@ -277,3 +286,9 @@ DKG completion uses persisted share evidence and public keys. Core no longer
 returns a network address or reports `ErrMissingDKGAddress`. Upgrades preserve
 existing key shares and do not require another DKG. Signer and Co-Signer must pin
 the same reviewed Core revision, without local module replacements in builds.
+
+### Durable transfer approvals
+
+Every SIGN requires durable transfer approval. Configure dispatch explicitly with `CO_SIGNER_APPROVAL_MODE`, `CO_SIGNER_APPROVAL_ORG_ID`, `CO_SIGNER_APPROVAL_ENVIRONMENT`, `CO_SIGNER_APPROVAL_CONFIG_REVISION` and `CO_SIGNER_APPROVAL_JOURNAL_DIR`. External mode also requires the exact HTTPS `CO_SIGNER_APPROVAL_ENDPOINT` and dedicated `CO_SIGNER_APPROVAL_BEARER_TOKEN`. A separately provisioned private durable journal pins admission and exact signed decisions; saved receipts retry independently of backend pending discovery. Automatic mode uses the same durable path and makes no organization calls. Without approval configuration, Co-Signer supports provisioning only: it leaves SIGN work untouched and reports signing readiness as false.
+
+Read [approval operations](docs/approval-operations.md) before provisioning storage, changing modes or restoring history. A missing existing journal is an integrity/recovery event, never a reason to create an empty replacement. Backend and Co-Signer require a coordinated mandatory-approval cutover.

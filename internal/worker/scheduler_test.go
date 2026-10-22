@@ -93,13 +93,6 @@ func (s *stubPendingClient) ClaimIntent(ctx context.Context, kind string, intent
 	return s.claimResult, s.claimErr
 }
 
-func (s *stubPendingClient) PostResult(ctx context.Context, id string, result monolith.IntentResult) error {
-	if s.postFunc != nil {
-		return s.postFunc(ctx, id, result)
-	}
-	return nil
-}
-
 func (s *stubPendingClient) PostSignResult(ctx context.Context, id string, result monolith.SignResultRequest) error {
 	body, err := result.MarshalJSON()
 	if err != nil {
@@ -109,7 +102,10 @@ func (s *stubPendingClient) PostSignResult(ctx context.Context, id string, resul
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		return err
 	}
-	return s.PostResult(ctx, id, decoded)
+	if s.postFunc != nil {
+		return s.postFunc(ctx, id, decoded)
+	}
+	return nil
 }
 
 func (s *stubPendingClient) PostMessage(context.Context, string, monolith.OutboundFrame) error {
@@ -195,6 +191,28 @@ func TestSchedulerSkipsBlockedDKGAndContinuesSIGN(t *testing.T) {
 	}
 	if launched[0].permits.dkg != nil {
 		t.Fatal("SIGN received a DKG guard")
+	}
+}
+
+func TestProvisioningOnlySchedulerLeavesSignUnclaimed(t *testing.T) {
+	for _, status := range []string{"PENDING", "CLAIMED"} {
+		t.Run(status, func(t *testing.T) {
+			s := newDeterministicScheduler(t, 1, func() bool { return true })
+			s.cfg.SigningDisabled = true
+			var launched []launchedSession
+			s.launch = captureLaunches(&launched)
+			s.dispatchBatch(context.Background(), []monolith.Intent{
+				{IntentID: "sign-1", Type: "SIGN", DiscoveryStatus: status},
+				{IntentID: "dkg-1", Type: "DKG"},
+			})
+			defer releaseLaunches(launched)
+			if len(launched) != 1 || launched[0].intent.IntentID != "dkg-1" {
+				t.Fatalf("launched = %v, want DKG only without claiming or failing SIGN", launchedIntentIDs(launched))
+			}
+			if _, reserved := s.inFlightIntentIDs["sign-1"]; reserved {
+				t.Fatal("disabled SIGN consumed an intent reservation")
+			}
+		})
 	}
 }
 
@@ -348,7 +366,7 @@ func TestSchedulerRunsDifferentIntentIDsInParallel(t *testing.T) {
 		},
 		claimErrors: make(map[string]error),
 	}
-	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 2)
+	scheduler := NewScheduler(client, runner, &capturingDKGExecutor{}, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, slog.Default(), 2)
 	defer close(release)
 
 	scheduler.dispatchBatch(context.Background(), []monolith.Intent{firstDiscovery, secondDiscovery})

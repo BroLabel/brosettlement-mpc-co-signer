@@ -73,7 +73,7 @@ func TestRejectedReadinessCannotReplaceTrustedResultIdentity(t *testing.T) {
 				}
 			}
 			runner := controlledSignRunner{run: func(context.Context, coretss.SignSessionRequest) error { coreCalls.Add(1); return nil }}
-			s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+			s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 1)
 			s.dispatchBatch(ctx, []monolith.Intent{discovery})
 			select {
 			case <-retried:
@@ -127,7 +127,7 @@ func TestMatchingTerminalReadinessResolvesLegitimateCleanup(t *testing.T) {
 			runner := controlledSignRunner{run: func(context.Context, coretss.SignSessionRequest) error { coreCalls.Add(1); return nil }}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+			s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 1)
 			s.dispatchBatch(ctx, []monolith.Intent{discovery})
 			waitForIntentRelease(t, s, discovery.IntentID)
 			if ctx.Err() != nil || posts.Load() != 1 || coreCalls.Load() != 0 {
@@ -157,7 +157,7 @@ func TestClaimAmbiguityDoesNotBlockOtherPermits(t *testing.T) {
 		close(otherClaim)
 		return claim, monolith.ErrAlreadyClaimed
 	}
-	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 2)
+	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 2)
 	s.dispatchBatch(ctx, []monolith.Intent{first, second})
 	select {
 	case <-otherClaim:
@@ -215,7 +215,7 @@ func TestMalformedRunningLifecycleRetainsPermitThroughRunnerAndResult(t *testing
 		<-releaseRunner
 		return c.Err()
 	}}
-	s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+	s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 1)
 	s.dispatchBatch(ctx, []monolith.Intent{discovery})
 	select {
 	case <-canceled:
@@ -271,7 +271,7 @@ func TestTerminalWaitingAndRunnerErrorResolveBeforePermitRelease(t *testing.T) {
 			}}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+			s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 1)
 			s.dispatchBatch(ctx, []monolith.Intent{discovery})
 			select {
 			case <-posted:
@@ -328,7 +328,7 @@ func TestLostClaimRetainsOwnerAndRecoversAfterRunning(t *testing.T) {
 		return claim, nil
 	}
 	runner := &notifyingSignRunner{started: make(chan struct{}, 2)}
-	s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 2)
+	s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, slog.Default(), 2)
 	dispatched := make(chan struct{})
 	go func() { s.dispatchBatch(ctx, []monolith.Intent{discovery}); close(dispatched) }()
 	select {
@@ -364,7 +364,7 @@ func TestNoPermitPreventsFirstClaim(t *testing.T) {
 	discovery, claim := rediscoveredSignFixture(t)
 	discovery.DiscoveryStatus = "PENDING"
 	client := &stubPendingClient{claimResult: claim}
-	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 1)
 	lease := s.permits.tryAcquireSIGN()
 	defer lease.Release()
 	s.dispatchBatch(context.Background(), []monolith.Intent{discovery})
@@ -393,7 +393,7 @@ func TestClaimLostThenExpiredConflictCleansBeforePermitRelease(t *testing.T) {
 		return monolith.ClaimResult{}, monolith.ErrAlreadyClaimed
 	}
 	client.postFunc = func(context.Context, string, monolith.IntentResult) error { posted <- struct{}{}; return nil }
-	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 1)
 	s.dispatchBatch(ctx, []monolith.Intent{discovery})
 	select {
 	case <-posted:
@@ -428,7 +428,7 @@ func TestLostResultRetainsPermitWithoutRecomputation(t *testing.T) {
 		}
 	}
 	runner := &notifyingSignRunner{started: make(chan struct{}, 2)}
-	s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, slog.Default(), 1)
+	s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, slog.Default(), 1)
 	s.dispatchBatch(ctx, []monolith.Intent{discovery})
 	select {
 	case <-retry:
@@ -466,7 +466,7 @@ func TestSchedulerRunJoinsBlockedSignAfterCancellation(t *testing.T) {
 	client := &stubPendingClient{intents: []monolith.Intent{discovery}, claimResult: claim}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{MinInterval: time.Millisecond}, slog.Default(), 1)
+	s := NewScheduler(client, runner, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest, MinInterval: time.Millisecond}, slog.Default(), 1)
 	done := make(chan struct{})
 	go func() { s.Run(ctx); close(done) }()
 	select {
@@ -500,7 +500,7 @@ func TestClaimAmbiguityDeadlineRequiresCleanup(t *testing.T) {
 		return monolith.ClaimResult{}, monolith.ErrClaimOutcomeUnknown
 	}
 	client.postFunc = func(_ context.Context, _ string, result monolith.IntentResult) error { posted <- result; return nil }
-	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 1)
 	s.dispatchBatch(context.Background(), []monolith.Intent{discovery})
 	select {
 	case result := <-posted:
@@ -544,8 +544,10 @@ func TestLostResultReconcilesAuthoritativeTerminalWithoutCore(t *testing.T) {
 	runner := &countingSignRunner{}
 	permits := newSchedulerPermits(1, nil)
 	done := make(chan struct{})
+	clock := realReadinessClock()
+	clock.authorize = allowSignForTest
 	go func() {
-		runSessionWithPermits(ctx, discovery, client, runner, nil, nil, coordinatorPrimaryParty, time.Millisecond, permits.tryAcquireSIGN(), slog.Default(), nil)
+		runSessionWithClock(ctx, discovery, client, runner, nil, nil, coordinatorPrimaryParty, time.Millisecond, permits.tryAcquireSIGN(), slog.Default(), nil, clock)
 		close(done)
 	}()
 	select {
@@ -598,7 +600,7 @@ func TestResultReadbackRejectsChangedExecutionIdentity(t *testing.T) {
 			return c.Err()
 		}
 	}
-	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{}, nil, 1)
+	s := NewScheduler(client, &stubRunner{}, nil, coordinatorPrimaryParty, time.Millisecond, SchedulerConfig{AuthorizeSign: allowSignForTest}, nil, 1)
 	s.dispatchBatch(ctx, []monolith.Intent{discovery})
 	select {
 	case <-retried:

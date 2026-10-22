@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func TestPostResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
+func TestPostSignResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
 	var gotIdempotency string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/co-signer/intents/sign/intent-42/result" {
@@ -25,18 +25,20 @@ func TestPostResultAddsIdempotencyHeaderFromIntentID(t *testing.T) {
 	defer srv.Close()
 
 	client, _ := newTestClient(t, srv.URL)
-	err := client.PostResult(context.Background(), "intent-42", IntentResult{
-		Status: "COMPLETED",
-	})
+	request, err := NewSignResultRequest(IntentResult{Status: "COMPLETED"})
 	if err != nil {
-		t.Fatalf("PostResult() error = %v", err)
+		t.Fatal(err)
+	}
+	err = client.PostSignResult(context.Background(), "intent-42", request)
+	if err != nil {
+		t.Fatalf("PostSignResult() error = %v", err)
 	}
 	if gotIdempotency != "intent-42" {
 		t.Fatalf("X-Idempotency-Key = %q, want %q", gotIdempotency, "intent-42")
 	}
 }
 
-func TestPostResultPublishesMinimalCompletedAndFailedSignResults(t *testing.T) {
+func TestPostSignResultPublishesMinimalCompletedAndFailedSignResults(t *testing.T) {
 	tests := []struct {
 		name, fixture, response string
 		result                  IntentResult
@@ -62,31 +64,39 @@ func TestPostResultPublishesMinimalCompletedAndFailedSignResults(t *testing.T) {
 			}))
 			defer srv.Close()
 			client, _ := newTestClient(t, srv.URL)
-			if err := client.PostResult(context.Background(), "intent-125", tt.result); err != nil {
-				t.Fatalf("PostResult() error = %v", err)
+			request, err := NewSignResultRequest(tt.result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := client.PostSignResult(context.Background(), "intent-125", request); err != nil {
+				t.Fatalf("PostSignResult() error = %v", err)
 			}
 		})
 	}
 }
 
-func TestPostResultClassifiesAuthoritativeTerminalConflict(t *testing.T) {
+func TestPostSignResultClassifiesAuthoritativeTerminalConflict(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusConflict)
 		_, _ = w.Write([]byte(`{"authoritativeStatus":"FAILED","httpStatus":409,"outcome":"TERMINAL_CONFLICT"}`))
 	}))
 	defer srv.Close()
 	client, _ := newTestClient(t, srv.URL)
-	err := client.PostResult(context.Background(), "intent-125", IntentResult{Status: "COMPLETED"})
+	request, err := NewSignResultRequest(IntentResult{Status: "COMPLETED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.PostSignResult(context.Background(), "intent-125", request)
 	if !errors.Is(err, ErrTerminalConflict) {
-		t.Fatalf("PostResult() error = %v, want ErrTerminalConflict", err)
+		t.Fatalf("PostSignResult() error = %v, want ErrTerminalConflict", err)
 	}
 	var conflict *ResultConflictError
 	if !errors.As(err, &conflict) || conflict.AuthoritativeStatus != "FAILED" {
-		t.Fatalf("PostResult() conflict = %#v", conflict)
+		t.Fatalf("PostSignResult() conflict = %#v", conflict)
 	}
 }
 
-func TestPostResultRejectsMalformedAuthoritativeOutcome(t *testing.T) {
+func TestPostSignResultRejectsMalformedAuthoritativeOutcome(t *testing.T) {
 	for _, body := range []string{
 		`{"authoritativeStatus":"COMPLETED","httpStatus":200,"outcome":"ACCEPTED","unknown":true}`,
 		`{"authoritativeStatus":"COMPLETED","httpStatus":200,"outcome":"TERMINAL_CONFLICT"}`,
@@ -94,8 +104,12 @@ func TestPostResultRejectsMalformedAuthoritativeOutcome(t *testing.T) {
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) }))
 		client, _ := newTestClient(t, srv.URL)
-		if err := client.PostResult(context.Background(), "intent-125", IntentResult{Status: "COMPLETED"}); err == nil {
-			t.Fatalf("PostResult() accepted malformed outcome %s", body)
+		request, err := NewSignResultRequest(IntentResult{Status: "COMPLETED"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := client.PostSignResult(context.Background(), "intent-125", request); err == nil {
+			t.Fatalf("PostSignResult() accepted malformed outcome %s", body)
 		}
 		srv.Close()
 	}

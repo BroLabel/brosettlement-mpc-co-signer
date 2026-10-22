@@ -11,14 +11,6 @@ import (
 	"net/url"
 )
 
-func (c *Client) PostResult(ctx context.Context, intentID string, result IntentResult) error {
-	request, err := NewSignResultRequest(result)
-	if err != nil {
-		return err
-	}
-	return c.PostSignResult(ctx, intentID, request)
-}
-
 // SignResultRequest retains the exact serialized result for its live owner.
 // Strings and private fields prevent mutation between delivery attempts.
 type SignResultRequest struct{ body, status string }
