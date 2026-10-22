@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -770,7 +771,7 @@ func TestV2InvalidEnvelopeRetainsUnknownClaimOwnership(t *testing.T) {
 	}
 }
 
-func TestDkgV1RejectsSignV2Fields(t *testing.T) {
+func TestDkgClaimRejectsSignFields(t *testing.T) {
 	raw, e := os.ReadFile("../../testdata/mpc-co-signer-http/v1/claim-response.json")
 	if e != nil {
 		t.Fatal(e)
@@ -785,7 +786,7 @@ func TestDkgV1RejectsSignV2Fields(t *testing.T) {
 			}
 			poisoned, _ := json.Marshal(v)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if !strings.HasPrefix(r.URL.Path, "/api/v1/") {
+				if !strings.HasPrefix(r.URL.Path, "/api/v2/") {
 					t.Error("DKG endpoint changed")
 				}
 				_, _ = w.Write(poisoned)
@@ -793,7 +794,7 @@ func TestDkgV1RejectsSignV2Fields(t *testing.T) {
 			defer srv.Close()
 			c, _ := newTestClient(t, srv.URL)
 			if _, e := c.ClaimIntent(context.Background(), "DKG", "synthetic-dkg"); e == nil {
-				t.Fatal("SIGN-only field accepted on DKG v1")
+				t.Fatal("SIGN-only field accepted on DKG claim")
 			}
 		})
 	}
@@ -842,5 +843,29 @@ func TestV2ApprovedClaimDecodesSharedProducerBindings(t *testing.T) {
 				t.Fatal("approved binding lost across HTTP and worker intent")
 			}
 		})
+	}
+}
+
+func TestClaimIntentUsesOnlyV2WithoutFallback(t *testing.T) {
+	for _, kind := range []string{"DKG", "SIGN"} {
+		for _, status := range []int{http.StatusNotFound, http.StatusConflict, http.StatusInternalServerError} {
+			t.Run(fmt.Sprintf("%s/%d", kind, status), func(t *testing.T) {
+				var paths []string
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					paths = append(paths, r.URL.Path)
+					w.WriteHeader(status)
+				}))
+				defer srv.Close()
+				client, _ := newTestClient(t, srv.URL)
+				_, err := client.ClaimIntent(context.Background(), kind, "intent-1")
+				if err == nil {
+					t.Fatal("failed claim accepted")
+				}
+				want := []string{"/api/v2/co-signer/intents/" + strings.ToLower(kind) + "/intent-1/claim"}
+				if !reflect.DeepEqual(paths, want) {
+					t.Fatalf("claim requests = %v, want %v", paths, want)
+				}
+			})
+		}
 	}
 }

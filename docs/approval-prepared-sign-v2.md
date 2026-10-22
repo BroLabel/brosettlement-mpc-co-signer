@@ -1,9 +1,10 @@
 # Approved prepared SIGN v2
 
-SIGN claims use only `POST /api/v2/co-signer/intents/sign/:intentId/claim`.
-DKG, frame transport, terminal delivery, worker ownership, startup cleanup and
-absolute SIGN execution lifetimes retain their existing v1 protocols. There is
-no v1 retry or metadata-only fallback. A configured approval Co-Signer rejects
+DKG and SIGN claims use only `POST /api/v2/co-signer/intents/{dkg|sign}/:intentId/claim`.
+V1 claim routes are removed and return 404. DKG response data, frame transport,
+terminal delivery, worker ownership, startup cleanup and absolute SIGN execution
+lifetimes retain their existing contracts. There is no version switching, V1 retry
+or metadata-only fallback. A configured approval Co-Signer rejects
 both-null legacy claims, including work for another organization.
 
 Before Core, the worker validates the closed v2 envelope, existing policy and
@@ -96,12 +97,11 @@ These are byte/producer compatibility checks; signed authorization is unchanged.
 
 ## HTTP error boundary
 
-Only the new v2 SIGN claim joins the existing public error target registry.
+Both V2 claim routes use the existing public error target registry.
 Its existing public error envelope is `{code,message,details,requestId,retryable}`.
 `APPROVAL_PROTOCOL_REQUIRED` is 409, `MPC_INTENT_CONFLICT` is the fixed safe 409
 for the existing expired/terminal/binding/claimed conflicts, and scoped missing
 work is `RESOURCE_NOT_FOUND` 404. Existing real Ed25519 signed-request auth,
-`mpc:raw`, and nonempty `X-Idempotency-Key` remain mandatory. V1 SIGN/DKG stay
-outside that registry and retain their legacy envelope. Only the new
-protocol-required v1 rejection explicitly supplies its stable code to the
-existing legacy filter; other v1 branches and frozen trust fixtures are unchanged.
+`mpc:raw`, and nonempty `X-Idempotency-Key` remain mandatory for both DKG and SIGN.
+V1 claim routes are absent. Other V1 endpoints and frozen authentication vectors
+remain unchanged; they do not provide claim fallback.

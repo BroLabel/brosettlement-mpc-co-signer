@@ -23,11 +23,7 @@ func (c *Client) ClaimIntent(ctx context.Context, intentType, intentID string) (
 	if err != nil {
 		return ClaimResult{}, err
 	}
-	version := "v1"
-	if pathType == "sign" {
-		version = "v2"
-	}
-	path := "/api/" + version + "/co-signer/intents/" + pathType + "/" + url.PathEscape(intentID) + "/claim"
+	path := "/api/v2/co-signer/intents/" + pathType + "/" + url.PathEscape(intentID) + "/claim"
 	var out ClaimResult
 	if err := c.doJSONAttempts(ctx, http.MethodPost, path, nil, intentID, &out, http.StatusOK, 1); err != nil {
 		switch {
