@@ -9,9 +9,9 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 )
 
-const expectedPreparedProducerCommit = "1cbdee66c09492098c81dd2d8e320f469400776e"
+const expectedPreparedProducerCommit = "50a9f299fde34e1c5ba1ff5564f7f992afa15b9a"
 const expectedPreparedProducerSHA256 = "e8ac4e4ae7329393957118a3772465ace9951b2e85a758a889cd004f50911773"
-const expectedPreparedBundleIdentity = "nTWG-LUo9SEyoB5G0LbxpmLMEf1Jxf60VSrRuxMhp_k"
+const expectedPreparedBundleIdentity = "_lJqcPZNAXXMdCxzZWNDAh7Y3ytTMUoeDFE32772VC8"
 
 type preparedManifest struct {
 	BundleVersion      int            `json:"bundleVersion"`

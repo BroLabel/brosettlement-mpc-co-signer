@@ -10,9 +10,9 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
 )
 
-const expectedApprovalProducerCommit = "1cbdee66c09492098c81dd2d8e320f469400776e"
+const expectedApprovalProducerCommit = "50a9f299fde34e1c5ba1ff5564f7f992afa15b9a"
 const expectedApprovalProducerSHA256 = "e0405837791ff64ebcb1dffee05a72c69037ad39111b67ab82c59bcd9537ff15"
-const expectedApprovalBundleIdentity = "IP7Vqa0vY0cLmgCsnnh58IvHA3Zew2IXS24bN96rZJU"
+const expectedApprovalBundleIdentity = "wIZBGwrhlPrsPS8JpuU8cMDemC9Sjtwukav2INrTF6E"
 
 type approvalManifest struct {
 	BundleVersion      int    `json:"bundleVersion"`
