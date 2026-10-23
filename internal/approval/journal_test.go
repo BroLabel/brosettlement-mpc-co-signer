@@ -25,15 +25,15 @@ func privateDir(t *testing.T) string {
 	return p
 }
 func testConfig(t *testing.T) Config {
-	return Config{Mode: "auto_approve", OrgID: "org-1", Environment: "test", Revision: "rev-1", JournalDir: privateDir(t), MinInterval: time.Millisecond, MaxInterval: time.Second, Timeout: time.Second, BackoffFactor: 2}
+	return Config{Mode: "auto_approve", JournalDir: privateDir(t), MinInterval: time.Millisecond, MaxInterval: time.Second, Timeout: time.Second, BackoffFactor: 2}
 }
 func testAdmission() Admission {
-	return Admission{1, "org-1", "../../request", string(bytes.Repeat([]byte("a"), 64)), "auto_approve", "test", "rev-1", nil, "2026-10-19T01:00:00.000Z"}
+	return Admission{1, "org-1", "../../request", string(bytes.Repeat([]byte("a"), 64)), "auto_approve", nil, "2026-10-19T01:00:00.000Z"}
 }
 func testReceipt(t *testing.T, a Admission) SavedReceipt {
 	t.Helper()
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
-	env := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "environment": a.Environment, "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": "APPROVED", "reason": nil, "source": a.Mode, "externalDecisionReference": nil, "decidedAt": "2026-10-19T02:00:00.000Z", "signingKeyId": "key-1", "configRevision": a.ConfigRevision}
+	env := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": "APPROVED", "reason": nil, "source": a.Mode, "externalDecisionReference": nil, "decidedAt": "2026-10-19T02:00:00.000Z", "signingKeyId": "key-1"}
 	raw, _ := json.Marshal(env)
 	raw, _ = jcs.Transform(raw)
 	sig := ed25519.Sign(key, append([]byte("brosettlement.co-signer.approval-decision/v1\n"), raw...))
@@ -81,7 +81,7 @@ func TestJournalReopenPreservesExactReceiptAndRejectsConflict(t *testing.T) {
 		t.Fatal("missing known receipt accepted")
 	}
 }
-func TestJournalPrivateExistingDirectoryAndSeparateProcessLock(t *testing.T) {
+func TestJournalExistingDirectoryAndSeparateProcessLock(t *testing.T) {
 	dir := privateDir(t)
 	if _, e := OpenJournal(filepath.Join(dir, "missing")); !errors.Is(e, os.ErrNotExist) {
 		t.Fatalf("missing journal recreated: %v", e)
@@ -96,11 +96,95 @@ func TestJournalPrivateExistingDirectoryAndSeparateProcessLock(t *testing.T) {
 	if out, e := c.CombinedOutput(); e != nil {
 		t.Fatalf("lock child: %s %v", out, e)
 	}
-	if e = os.Chmod(dir, 0755); e != nil {
+	if e = os.Chmod(dir, 0775); e != nil {
 		t.Fatal(e)
 	}
 	if e = j.Admit(testAdmission()); e == nil {
 		t.Fatal("unsafe permissions accepted")
+	}
+}
+
+func TestJournalAcceptsOwnerControlledDirectoriesAndKeepsFilesPrivate(t *testing.T) {
+	for _, mode := range []os.FileMode{0700, 0750, 0755} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			dir := privateDir(t)
+			if err := os.Chmod(dir, mode); err != nil {
+				t.Fatal(err)
+			}
+			journal, err := OpenJournal(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { journal.Close() })
+			admission := testAdmission()
+			if err := journal.Admit(admission); err != nil {
+				t.Fatal(err)
+			}
+			receipt := testReceipt(t, admission)
+			if err := journal.SaveReceipt(receipt); err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := OpenJournal(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			state, err := reopened.Load(admission.OrgID, admission.RequestID)
+			if err != nil || state.Receipt == nil || !bytes.Equal(state.Receipt.Bytes, receipt.Bytes) {
+				t.Fatalf("saved decision did not survive reopen: %v", err)
+			}
+			info, err := os.Stat(dir)
+			if err != nil || info.Mode().Perm() != mode {
+				t.Fatalf("journal changed directory permissions: %v", err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				info, err := entry.Info()
+				if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+					t.Fatalf("journal file is not private: %s, %v", entry.Name(), err)
+				}
+			}
+			if err := os.Chmod(reopened.path(admission.OrgID, admission.RequestID, "receipt"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := reopened.Load(admission.OrgID, admission.RequestID); !errors.Is(err, ErrIntegrity) {
+				t.Fatalf("accepted public receipt file: %v", err)
+			}
+		})
+	}
+}
+
+func TestJournalRejectsDirectoryWriteAccessForOthers(t *testing.T) {
+	for _, mode := range []os.FileMode{0720, 0702, 0770, 0775, 0777} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			dir := privateDir(t)
+			journal, err := OpenJournal(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer journal.Close()
+			if err := os.Chmod(dir, mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.Admit(testAdmission()); !errors.Is(err, ErrIntegrity) {
+				t.Fatalf("accepted writable directory at runtime: %v", err)
+			}
+			if err := journal.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if reopened, err := OpenJournal(dir); !errors.Is(err, ErrIntegrity) {
+				if reopened != nil {
+					reopened.Close()
+				}
+				t.Fatalf("accepted writable directory at startup: %v", err)
+			}
+		})
 	}
 }
 func TestJournalLockChild(t *testing.T) {
@@ -186,7 +270,7 @@ func (f *faultFile) Sync() error {
 	return f.journalFile.Sync()
 }
 
-func TestJournalRejectsMissingAndSubstitutedEvidenceAndRevisionReuse(t *testing.T) {
+func TestJournalPinsConfigurationPerRequestAndRejectsMissingOrSubstitutedEvidence(t *testing.T) {
 	j, e := OpenJournal(privateDir(t))
 	if e != nil {
 		t.Fatal(e)
@@ -197,12 +281,15 @@ func TestJournalRejectsMissingAndSubstitutedEvidenceAndRevisionReuse(t *testing.
 		t.Fatal(e)
 	}
 	changed := a
-	changed.RequestID = "other"
 	changed.Mode = "external"
 	endpoint := "https://org.test"
 	changed.Endpoint = &endpoint
 	if e = j.Admit(changed); e == nil {
-		t.Fatal("revision reused for changed nonsecret config")
+		t.Fatal("pending request changed its pinned approval configuration")
+	}
+	changed.RequestID = "other"
+	if e = j.Admit(changed); e != nil {
+		t.Fatalf("new request could not use new configuration: %v", e)
 	}
 	r := testReceipt(t, a)
 	if e = j.SaveReceipt(r); e != nil {

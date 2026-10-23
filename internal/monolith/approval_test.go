@@ -67,7 +67,7 @@ func TestPendingApprovalsRejectsInvalidPagesAtHTTPBoundary(t *testing.T) {
 			}))
 			defer server.Close()
 			client, _ := newTestClient(t, server.URL)
-			if _, err := client.PendingApprovals(context.Background(), "", tc.org); (err == nil) != tc.ok {
+			if _, err := client.PendingApprovals(context.Background(), ""); (err == nil) != tc.ok {
 				t.Fatalf("accepted=%t want=%t err=%v", err == nil, tc.ok, err)
 			}
 		})
@@ -106,7 +106,7 @@ func TestApprovalTransportFreshHTTPAuthenticationAndExactSavedBody(t *testing.T)
 	}))
 	defer server.Close()
 	client.baseURL = server.URL
-	if _, e := client.PendingApprovals(context.Background(), "opaque+/=", "org-1"); e != nil {
+	if _, e := client.PendingApprovals(context.Background(), "opaque+/="); e != nil {
 		t.Fatal(e)
 	}
 	for i := 0; i < 2; i++ {
@@ -171,7 +171,7 @@ func TestPendingApprovalsClassifiesInvalidCursor(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); io.WriteString(w, tc.body) }))
 			defer server.Close()
 			client, _ := newTestClient(t, server.URL)
-			_, err := client.PendingApprovals(context.Background(), "stale", "org-1")
+			_, err := client.PendingApprovals(context.Background(), "stale")
 			if errors.Is(err, ErrInvalidApprovalCursor) != tc.reset {
 				t.Fatalf("reset=%v err=%v", tc.reset, err)
 			}

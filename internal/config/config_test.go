@@ -171,9 +171,6 @@ func setRequiredEnv(t *testing.T) {
 	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
 	for name, value := range map[string]string{
 		"CO_SIGNER_APPROVAL_MODE":                    "",
-		"CO_SIGNER_APPROVAL_ORG_ID":                  "",
-		"CO_SIGNER_APPROVAL_ENVIRONMENT":             "",
-		"CO_SIGNER_APPROVAL_CONFIG_REVISION":         "",
 		"CO_SIGNER_APPROVAL_JOURNAL_DIR":             "",
 		"CO_SIGNER_APPROVAL_ENDPOINT":                "",
 		"CO_SIGNER_APPROVAL_BEARER_TOKEN":            "",
@@ -218,10 +215,40 @@ func setApprovalEnv(t *testing.T) {
 	setRequiredEnv(t)
 	dir := t.TempDir()
 	os.Chmod(dir, 0700)
-	for k, v := range map[string]string{"CO_SIGNER_APPROVAL_MODE": "external", "CO_SIGNER_APPROVAL_ORG_ID": "org", "CO_SIGNER_APPROVAL_ENVIRONMENT": "test", "CO_SIGNER_APPROVAL_CONFIG_REVISION": "rev", "CO_SIGNER_APPROVAL_JOURNAL_DIR": dir, "CO_SIGNER_APPROVAL_ENDPOINT": "https://org.test/exact?integration=1", "CO_SIGNER_APPROVAL_BEARER_TOKEN": "dedicated-secret", "CO_SIGNER_HTTP_TIMEOUT": "1s", "CO_SIGNER_POLL_MIN_INTERVAL": "1s", "CO_SIGNER_POLL_MAX_INTERVAL": "10s", "CO_SIGNER_POLL_BACKOFF_FACTOR": "1.5"} {
+	for k, v := range map[string]string{"CO_SIGNER_APPROVAL_MODE": "external", "CO_SIGNER_APPROVAL_JOURNAL_DIR": dir, "CO_SIGNER_APPROVAL_ENDPOINT": "https://org.test/exact?integration=1", "CO_SIGNER_APPROVAL_BEARER_TOKEN": "dedicated-secret", "CO_SIGNER_HTTP_TIMEOUT": "1s", "CO_SIGNER_POLL_MIN_INTERVAL": "1s", "CO_SIGNER_POLL_MAX_INTERVAL": "10s", "CO_SIGNER_POLL_BACKOFF_FACTOR": "1.5"} {
 		t.Setenv(k, v)
 	}
 }
+func TestApprovalDefaultsToAutoApproveWhenModeIsUnset(t *testing.T) {
+	setRequiredEnv(t)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Approval == nil || cfg.Approval.Mode != "auto_approve" || cfg.Approval.JournalDir != "/var/lib/co-signer/approval" {
+		t.Fatal("approval must default to auto_approve with the default durable journal")
+	}
+}
+
+func TestApprovalDoesNotRequireEnvironment(t *testing.T) {
+	setApprovalEnv(t)
+	if _, err := config.Load(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExternalApprovalUsesDefaultJournalWithoutPinnedOrganizationOrRevision(t *testing.T) {
+	setApprovalEnv(t)
+	t.Setenv("CO_SIGNER_APPROVAL_JOURNAL_DIR", "")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Approval == nil || cfg.Approval.JournalDir != "/var/lib/co-signer/approval" {
+		t.Fatal("external approval did not use the default journal")
+	}
+}
+
 func TestApprovalSettingsEnforceTrustedBoundaryAndRedactCredential(t *testing.T) {
 	setApprovalEnv(t)
 	cfg, e := config.Load()
@@ -235,7 +262,8 @@ func TestApprovalSettingsEnforceTrustedBoundaryAndRedactCredential(t *testing.T)
 		t.Fatal("formatted configuration leaked bearer credential")
 	}
 	for _, tc := range []struct{ k, v string }{
-		{"CO_SIGNER_APPROVAL_ENDPOINT", "http://org.test"}, {"CO_SIGNER_APPROVAL_ENDPOINT", "https://user:password@org.test"}, {"CO_SIGNER_APPROVAL_ENDPOINT", "https://org.test/#fragment"}, {"CO_SIGNER_APPROVAL_BEARER_TOKEN", "secret\r\nheader"}, {"CO_SIGNER_APPROVAL_ORG_ID", "org\nother"}, {"CO_SIGNER_APPROVAL_JOURNAL_DIR", "relative"}, {"CO_SIGNER_POLL_BACKOFF_FACTOR", "NaN"}, {"CO_SIGNER_POLL_BACKOFF_FACTOR", "+Inf"}, {"CO_SIGNER_POLL_BACKOFF_FACTOR", "0.9"}, {"CO_SIGNER_HTTP_TIMEOUT", "0s"},
+		{"CO_SIGNER_APPROVAL_MODE", "automatic"}, {"CO_SIGNER_APPROVAL_ENDPOINT", ""}, {"CO_SIGNER_APPROVAL_BEARER_TOKEN", ""},
+		{"CO_SIGNER_APPROVAL_ENDPOINT", "http://org.test"}, {"CO_SIGNER_APPROVAL_ENDPOINT", "https://user:password@org.test"}, {"CO_SIGNER_APPROVAL_ENDPOINT", "https://org.test/#fragment"}, {"CO_SIGNER_APPROVAL_BEARER_TOKEN", "secret\r\nheader"}, {"CO_SIGNER_APPROVAL_JOURNAL_DIR", "relative"}, {"CO_SIGNER_POLL_BACKOFF_FACTOR", "NaN"}, {"CO_SIGNER_POLL_BACKOFF_FACTOR", "+Inf"}, {"CO_SIGNER_POLL_BACKOFF_FACTOR", "0.9"}, {"CO_SIGNER_HTTP_TIMEOUT", "0s"},
 	} {
 		t.Run(tc.k+tc.v, func(t *testing.T) {
 			setApprovalEnv(t)

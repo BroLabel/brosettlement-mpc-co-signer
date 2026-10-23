@@ -21,6 +21,11 @@ import (
 
 func pendingItem(t *testing.T, id string) Item {
 	t.Helper()
+	return pendingItemForOrg(t, id, "org-1")
+}
+
+func pendingItemForOrg(t *testing.T, id, orgID string) Item {
+	t.Helper()
 	raw, e := os.ReadFile("../../testdata/approval-v1/vectors.json")
 	if e != nil {
 		t.Fatal(e)
@@ -37,7 +42,7 @@ func pendingItem(t *testing.T, id string) Item {
 			b, _ := base64.StdEncoding.DecodeString(v.Input)
 			var a map[string]any
 			json.Unmarshal(b, &a)
-			a["orgId"] = "org-1"
+			a["orgId"] = orgID
 			a["requestId"] = id
 			b, _ = json.Marshal(a)
 			b, _ = jcs.Transform(b)
@@ -55,7 +60,7 @@ type fakeBackend struct {
 	mu           sync.Mutex
 }
 
-func (b *fakeBackend) PendingApprovals(ctx context.Context, cursor, org string) (Page, error) {
+func (b *fakeBackend) PendingApprovals(ctx context.Context, cursor string) (Page, error) {
 	return b.page(cursor)
 }
 func (b *fakeBackend) SendApprovalDecision(ctx context.Context, id string, raw []byte) ([]byte, error) {
@@ -95,6 +100,36 @@ func makeDispatcher(t *testing.T, c Config, b Backend, o Organization) (*Dispatc
 	}
 	d.jitter = func(ceiling time.Duration) time.Duration { return ceiling }
 	return d, j
+}
+
+func TestDispatcherUsesOrganizationFromAuthorizationAndRecoversItAfterRestart(t *testing.T) {
+	c := testConfig(t)
+	item := pendingItemForOrg(t, "request-org-2", "org-2")
+	b := &fakeBackend{page: func(string) (Page, error) { return Page{Version: 1, Items: []Item{item}}, nil }, failDelivery: true}
+	d, j := makeDispatcher(t, c, b, nil)
+	if err := d.Step(context.Background()); err == nil {
+		t.Fatal("expected delivery outage")
+	}
+	s, err := j.Load("org-2", item.RequestID)
+	if err != nil || s.Receipt == nil {
+		t.Fatalf("request organization was not retained: %v", err)
+	}
+	if other, err := j.Load("org-1", item.RequestID); err != nil || other.Admission != nil {
+		t.Fatal("request written under a different organization")
+	}
+	if err := j.Close(); err != nil {
+		t.Fatal(err)
+	}
+	b.failDelivery = false
+	b.page = func(string) (Page, error) { return Page{Version: 1, Items: []Item{}}, nil }
+	restarted, reopened := makeDispatcher(t, c, b, nil)
+	if err := restarted.Step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s, err = reopened.Load("org-2", item.RequestID)
+	if err != nil || len(s.Application) == 0 || len(b.delivered) != 2 || !bytes.Equal(b.delivered[0], b.delivered[1]) {
+		t.Fatal("restart did not deliver the exact saved decision with its original organization")
+	}
 }
 func TestDispatcherIdlePendingFinalIdleAndLostACK(t *testing.T) {
 	c := testConfig(t)
@@ -171,7 +206,6 @@ func TestDispatcherAutoAndPinnedAdmissionAcrossRestart(t *testing.T) {
 	c.Mode = "external"
 	c.Endpoint = "https://org.test"
 	c.BearerToken = "secret"
-	c.Revision = "rev-2"
 	d2, e := NewDispatcher(c, j, b, o, "rotated-key", ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, 32)))
 	if e != nil {
 		t.Fatal(e)
@@ -184,7 +218,7 @@ func TestDispatcherAutoAndPinnedAdmissionAcrossRestart(t *testing.T) {
 	}
 	// An unresolved admission stays pinned even when absent from a cancellation page.
 	item2 := pendingItem(t, "request-2")
-	a := Admission{1, c.OrgID, item2.RequestID, item2.AuthorizationHash, "auto_approve", c.Environment, "rev-1", nil, "2026-10-19T01:00:00.000Z"}
+	a := Admission{1, "org-1", item2.RequestID, item2.AuthorizationHash, "auto_approve", nil, "2026-10-19T01:00:00.000Z"}
 	if e = j.Admit(a); e != nil {
 		t.Fatal(e)
 	}
@@ -254,15 +288,15 @@ func TestDispatcherBackoffMemoryBound(t *testing.T) {
 	c := testConfig(t)
 	d, _ := makeDispatcher(t, c, &fakeBackend{page: func(string) (Page, error) { return Page{Version: 1, Items: []Item{}}, nil }}, nil)
 	for i := 0; i < 1500; i++ {
-		d.suppress("organization:" + fmt.Sprint(i))
+		d.suppress(suppressionKey{"org-1", fmt.Sprint(i), false})
 	}
 	if len(d.backoff) != 1000 {
 		t.Fatalf("unbounded backoff: %d", len(d.backoff))
 	}
-	if _, retained := d.backoff["organization:0"]; retained {
+	if _, retained := d.backoff[suppressionKey{"org-1", "0", false}]; retained {
 		t.Fatal("oldest organization suppression hint was not evicted")
 	}
-	if _, retained := d.backoff["organization:1499"]; !retained {
+	if _, retained := d.backoff[suppressionKey{"org-1", "1499", false}]; !retained {
 		t.Fatal("newest organization suppression hint was not retained")
 	}
 }
@@ -304,7 +338,7 @@ type fairBackend struct {
 	pages     int
 }
 
-func (b *fairBackend) PendingApprovals(context.Context, string, string) (Page, error) {
+func (b *fairBackend) PendingApprovals(context.Context, string) (Page, error) {
 	b.pages++
 	return Page{Version: 1, Items: []Item{}}, nil
 }
@@ -402,24 +436,24 @@ func TestDeliveryRetrySaturationPreservesEvidenceHintsAndResumesEvaluation(t *te
 	fixed := time.Now()
 	d.now = func() time.Time { return fixed }
 	for i := 0; i < 1000; i++ {
-		d.suppress("delivery:" + fmt.Sprint(i))
+		d.suppress(suppressionKey{"org-1", fmt.Sprint(i), true})
 	}
-	d.suppress("organization:must-not-evict")
+	d.suppress(suppressionKey{"org-1", "must-not-evict", false})
 	if d.deliveryHints() != 1000 || len(d.backoff) != 1000 {
 		t.Fatal("organization hint evicted saved retry")
 	}
 	if e := d.Step(context.Background()); e == nil {
 		t.Fatal("saturated delivery did not suspend new auto evaluation")
 	}
-	s, e := j.Load(c.OrgID, item.RequestID)
+	s, e := j.Load("org-1", item.RequestID)
 	if e != nil || s.Admission != nil {
 		t.Fatal("saturation created new local work")
 	}
-	delete(d.backoff, "delivery:0")
+	delete(d.backoff, suppressionKey{"org-1", "0", true})
 	if e = d.Step(context.Background()); e != nil {
 		t.Fatal(e)
 	}
-	s, e = j.Load(c.OrgID, item.RequestID)
+	s, e = j.Load("org-1", item.RequestID)
 	if e != nil || s.Receipt == nil || len(s.Application) == 0 {
 		t.Fatal("evaluation did not resume after capacity released")
 	}
@@ -435,7 +469,7 @@ func TestPublishedFinalAfterDirectorySyncFailureNeverRepollsOrganization(t *test
 	o := &fakeOrganization{status: "APPROVED"}
 	d, j := makeDispatcher(t, c, b, o)
 	endpoint := c.Endpoint
-	if e := j.Admit(Admission{1, c.OrgID, item.RequestID, item.AuthorizationHash, c.Mode, c.Environment, c.Revision, &endpoint, "2026-10-19T01:00:00.000Z"}); e != nil {
+	if e := j.Admit(Admission{1, "org-1", item.RequestID, item.AuthorizationHash, c.Mode, &endpoint, "2026-10-19T01:00:00.000Z"}); e != nil {
 		t.Fatal(e)
 	}
 	j.ops = &faultOperations{journalOperations: j.ops, stage: "directory-sync"}
@@ -537,7 +571,7 @@ func TestPendingAndErrorsHaveNoTotalWaitingDeadline(t *testing.T) {
 			o.err = nil
 		}
 		_ = d.Step(context.Background())
-		s, e := j.Load(c.OrgID, item.RequestID)
+		s, e := j.Load("org-1", item.RequestID)
 		if e != nil || s.Receipt != nil {
 			t.Fatal("waiting/error created final receipt")
 		}
@@ -548,7 +582,7 @@ func TestPendingAndErrorsHaveNoTotalWaitingDeadline(t *testing.T) {
 	if e := d.Step(context.Background()); e != nil {
 		t.Fatal(e)
 	}
-	s, e := j.Load(c.OrgID, item.RequestID)
+	s, e := j.Load("org-1", item.RequestID)
 	if e != nil || s.Receipt == nil || len(s.Application) == 0 {
 		t.Fatal("unlimited waiting lost eventual decision")
 	}
@@ -581,7 +615,7 @@ func TestThirtyAnd365DayPendingSurvivesJournalReopen(t *testing.T) {
 			if err := d.Step(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			s, err := j.Load(c.OrgID, item.RequestID)
+			s, err := j.Load("org-1", item.RequestID)
 			if err != nil || s.Admission == nil || s.Receipt != nil || o.calls != 2 || len(b.delivered) != 0 {
 				t.Fatal("age/reopen changed pending approval")
 			}
@@ -590,7 +624,7 @@ func TestThirtyAnd365DayPendingSurvivesJournalReopen(t *testing.T) {
 			if err := d.Step(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			s, err = j.Load(c.OrgID, item.RequestID)
+			s, err = j.Load("org-1", item.RequestID)
 			if err != nil || s.Receipt == nil || len(s.Application) == 0 || o.calls != 3 || len(b.delivered) != 1 {
 				t.Fatal("aged approval did not resume exactly once")
 			}
@@ -620,7 +654,7 @@ func TestDispatcherRecoversInvalidCursorWithoutReevaluatingSavedDecisions(t *tes
 			if err := d.Step(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			saved, _ := j.Load(c.OrgID, item.RequestID)
+			saved, _ := j.Load("org-1", item.RequestID)
 			if err := d.Step(context.Background()); err == nil {
 				t.Fatal("missing discovery error")
 			}
@@ -632,7 +666,7 @@ func TestDispatcherRecoversInvalidCursorWithoutReevaluatingSavedDecisions(t *tes
 			if fresh != want {
 				t.Fatalf("fresh=%d stale=%d reset=%v", fresh, stale, reset)
 			}
-			after, _ := j.Load(c.OrgID, item.RequestID)
+			after, _ := j.Load("org-1", item.RequestID)
 			if !bytes.Equal(saved.Receipt.Bytes, after.Receipt.Bytes) || len(b.delivered) != 1 {
 				t.Fatal("saved decision recreated or redelivered")
 			}

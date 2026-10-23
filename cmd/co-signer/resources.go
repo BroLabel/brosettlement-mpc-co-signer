@@ -182,9 +182,6 @@ func openApplicationResources(
 	if approvalJournal != nil {
 		gate.Journal = approvalJournal
 	}
-	if cfg.Approval != nil {
-		gate.OrgID = cfg.Approval.OrgID
-	}
 	scheduler := worker.NewScheduler(
 		client,
 		tssService,

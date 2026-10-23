@@ -9,9 +9,9 @@ import (
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 )
 
-const expectedPreparedProducerCommit = "491b2487c023486aa7eee3db72b687967b2d85f3"
-const expectedPreparedProducerSHA256 = "0049521c3970db161996d24220605f7e11ff2a62fe2b970d878a268f4ab1aca1"
-const expectedPreparedBundleIdentity = "YZUUZADKcVypRx12Mq-FTlsMfV2c_8feM32kiARIL60"
+const expectedPreparedProducerCommit = "50a9f299fde34e1c5ba1ff5564f7f992afa15b9a"
+const expectedPreparedProducerSHA256 = "e8ac4e4ae7329393957118a3772465ace9951b2e85a758a889cd004f50911773"
+const expectedPreparedBundleIdentity = "_lJqcPZNAXXMdCxzZWNDAh7Y3ytTMUoeDFE32772VC8"
 
 type preparedManifest struct {
 	BundleVersion      int            `json:"bundleVersion"`
@@ -34,7 +34,7 @@ func VerifyPreparedBundle(root string) (string, error) {
 		if e := decodeClosed(raw, &m, []string{"bundleVersion", "producerRepository", "producerCommit", "producerPath", "producerSHA256", "claimVersion", "preparedVersion", "files"}); e != nil {
 			return e
 		}
-		if m.BundleVersion != 1 || m.ProducerRepository != "https://github.com/BroLabel/BroSettlement" || m.ProducerCommit != expectedPreparedProducerCommit || m.ProducerPath != "apps/client-api/src/transactions/approval/prepared-sign.fixture.ts" || m.ProducerSHA256 != expectedPreparedProducerSHA256 || m.ClaimVersion != 2 || m.PreparedVersion != 1 || len(m.Files) != 1 || m.Files[0].Path != "corpus.json" {
+		if m.BundleVersion != 1 || m.ProducerRepository != "https://github.com/BroLabel/BroSettlement" || m.ProducerCommit != expectedPreparedProducerCommit || m.ProducerPath != "apps/client-api/test/contracts/approval/prepared-sign.producer.ts" || m.ProducerSHA256 != expectedPreparedProducerSHA256 || m.ClaimVersion != 2 || m.PreparedVersion != 1 || len(m.Files) != 1 || m.Files[0].Path != "corpus.json" {
 			return fmt.Errorf("invalid prepared bundle provenance")
 		}
 		var e error

@@ -33,7 +33,11 @@ func NewExternal(c Config, client *http.Client) (*External, error) {
 	return &External{c, &copy}, nil
 }
 func (o *External) Evaluate(ctx context.Context, item Item) (wire.Object, error) {
-	raw, e := json.Marshal(map[string]any{"version": 1, "orgId": o.cfg.OrgID, "requestId": item.RequestID, "authorizationHash": item.AuthorizationHash, "authorization": item.Authorization})
+	orgID, e := item.OrganizationID()
+	if e != nil {
+		return nil, e
+	}
+	raw, e := json.Marshal(map[string]any{"version": 1, "orgId": orgID, "requestId": item.RequestID, "authorizationHash": item.AuthorizationHash, "authorization": item.Authorization})
 	if e != nil {
 		return nil, e
 	}
@@ -62,7 +66,7 @@ func (o *External) Evaluate(ctx context.Context, item Item) (wire.Object, error)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("organization approval HTTP status %d", resp.StatusCode)
 	}
-	v, e := wire.ParseOrganizationResponse(body, o.cfg.OrgID, item.RequestID, item.AuthorizationHash)
+	v, e := wire.ParseOrganizationResponse(body, orgID, item.RequestID, item.AuthorizationHash)
 	if e != nil {
 		return nil, errors.New("invalid organization approval response contract or bindings")
 	}

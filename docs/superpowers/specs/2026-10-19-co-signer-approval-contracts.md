@@ -155,7 +155,6 @@ type DecisionEnvelopeV1 = {
   version: 1;
   domain: "brosettlement.co-signer.approval-decision";
   audience: "brosettlement-transfer-approval";
-  environment: Reference;
   orgId: Id;
   requestId: Id;
   authorizationHash: Hex256;
@@ -165,7 +164,6 @@ type DecisionEnvelopeV1 = {
   externalDecisionReference: Reference | null;
   decidedAt: Timestamp;
   signingKeyId: Id;
-  configRevision: Reference;
 };
 type SignedDecisionReceiptV1 = {
   version: 1;
@@ -180,7 +178,7 @@ type DecisionApplicationV1 = {
 };
 ```
 
-Compute `envelopeBytes = UTF8(JCS(DecisionEnvelopeV1))`; sign **`UTF8("brosettlement.co-signer.approval-decision/v1\n") || envelopeBytes`** with the existing Co-Signer Ed25519 identity. `envelopeBase64` stores exactly those JCS bytes; `signatureBase64` decodes to 64 bytes. Require the decoded JSON to already equal its JCS serialization. APPROVED requires null reason; REJECTED requires Reason. Auto mode produces APPROVED with null reason/reference through the same store/sign/delivery path. Source, environment and revision must match durable local admission. Environment must equal trusted deployment configuration on both sides; no hostname/request-derived fallback.
+Compute `envelopeBytes = UTF8(JCS(DecisionEnvelopeV1))`; sign **`UTF8("brosettlement.co-signer.approval-decision/v1\n") || envelopeBytes`** with the existing Co-Signer Ed25519 identity. `envelopeBase64` stores exactly those JCS bytes; `signatureBase64` decodes to 64 bytes. Require the decoded JSON to already equal its JCS serialization. APPROVED requires null reason; REJECTED requires Reason. Auto mode produces APPROVED with null reason/reference through the same store/sign/delivery path. Source must match durable local admission. The authenticated API key, request authorization and decision must belong to the same organization. Use separate API signing keys for separate deployments.
 
 Persist admission and then immutable exact receipt bytes/signature with the DESIGN's create-only publication/fsync protocol before delivery. Decision envelope maximum is 4096 bytes; decision POST body maximum is 8192 bytes. Retry sends the same wrapper/decoded bytes, refreshing only HTTP auth. `decidedAt` is audit time, never an expiry or a license to backdate a revoked key. Verify historical applied receipts with retained public keys, but validate current signing-key eligibility before accepting a previously unseen executable receipt. Current HTTP identity, receipt signing key and request must be tenant-bound; key rotation cannot automatically replace a saved business decision.
 
@@ -243,23 +241,20 @@ Persist a create-only closed local `ExecutionBindingV1 = {version:1, orgId, requ
 
 ## Trusted configuration and admission v1
 
-New required settings when advertising/using approval protocol support:
+Approval settings (updated before deployment on 2026-10-22):
 
 | Setting | Exact rule |
 | --- | --- |
-| CO_SIGNER_APPROVAL_MODE | Exactly `external` or `auto_approve`; no implicit default or error fallback. |
-| CO_SIGNER_APPROVAL_ORG_ID | Id; must match authenticated discovery, receipt, wallet/key and claim org. |
-| CO_SIGNER_APPROVAL_ENVIRONMENT | Reference; same trusted value configured in backend verification. |
-| CO_SIGNER_APPROVAL_CONFIG_REVISION | Reference identifying the immutable operational configuration. |
-| CO_SIGNER_APPROVAL_JOURNAL_DIR | Absolute private durable directory, distinct from primary/recovery share directories; files 0600, directory 0700, single-writer lock and fsync support required. |
+| CO_SIGNER_APPROVAL_MODE | `external` or `auto_approve`; defaults to `auto_approve`. Invalid external configuration and API failures never fall back to auto. |
+| CO_SIGNER_APPROVAL_JOURNAL_DIR | Defaults to `/var/lib/co-signer/approval`; must already exist as an absolute durable directory owned by the process user, distinct from primary/recovery share directories; owner read/write/search required, group/other write forbidden (0700, 0750 and 0755 accepted), files 0600, single-writer lock and fsync support required. |
 | CO_SIGNER_APPROVAL_ENDPOINT | Required only for external; absolute HTTPS URL with authority, no userinfo/fragment; exact configured URL, no payload override. |
 | CO_SIGNER_APPROVAL_BEARER_TOKEN | Required nonempty only for external; dedicated integration secret; never included in receipts, persisted public config, logs or organization payload. |
 
-In auto mode endpoint/token are never used and zero organization calls are made. Missing approval configuration supports provisioning only and rejects every SIGN. Invalid configuration prevents startup; neither case silently changes an existing admission. Reuse CO_SIGNER_API_KEY_ID/private key for receipt signing and existing MONOLITH_URL/HTTPTimeout/PollMinInterval/PollMaxInterval/PollBackoffFactor for transport/discovery and suppressive full-jitter backoff. Validate finite factor >= 1 and positive intervals/timeout for this dispatcher. No new generic config service or secret store.
+In auto mode endpoint/token are never used and zero organization calls are made. Missing approval variables select auto mode with the default journal path. Invalid configuration or unavailable journal prevents startup. Backend scopes discovery by the authenticated API key; Co-Signer uses each validated `authorization.orgId` without a separate startup lookup. SIGN always requires matching local approved evidence. Reuse CO_SIGNER_API_KEY_ID/private key for receipt signing and existing MONOLITH_URL/HTTPTimeout/PollMinInterval/PollMaxInterval/PollBackoffFactor for transport/discovery and suppressive full-jitter backoff. Validate finite factor >= 1 and positive intervals/timeout for this dispatcher. No new generic config service or secret store.
 
 V1 approval dispatch has one bounded in-flight organization call, independent of SIGN permits; page limit 50 (server max 100), at most 1000 in-memory suppressive backoff entries (oldest entry may be evicted). Backoff ceiling is min(PollMaxInterval, PollMinInterval * factor^attempt), full jitter from zero to ceiling. Neither retry count nor backoff can terminalize a request. Timer reset/eviction after restart still requires fresh discovery. Durable admission/decision/execution records are read on demand and never all loaded into memory; do not evict replay protection or unresolved durable evidence for these memory bounds.
 
-Admission is a closed local record `{version:1, orgId, requestId, authorizationHash, mode, environment, configRevision, endpoint, admittedAt}` with endpoint null for auto, configured exact endpoint for external, and Timestamp admittedAt. Persist it before evaluation. Reject changed hash or reuse of a revision for different nonsecret config. Config switching never changes an admitted request's mode/environment/revision/endpoint. If its pinned configuration/credential is unavailable, suspend evaluation visibly; no auto migration or reapproval. Credentials may rotate operationally for the same pinned integration, without changing decision identity or forwarding platform credentials. Starting auto for unseen backlog remains an explicit reviewed operational action, as DESIGN requires.
+Admission is a closed local record `{version:1, orgId, requestId, authorizationHash, mode, endpoint, admittedAt}` with endpoint null for auto, configured exact endpoint for external, and Timestamp admittedAt. Persist it before evaluation. Reject changed hash, mode or endpoint for an existing admission. Config switching affects only new requests. If its pinned configuration/credential is unavailable, suspend evaluation visibly; no auto migration or reapproval. Credentials may rotate operationally for the same pinned integration, without changing decision identity or forwarding platform credentials. Review unseen backlog before starting with auto approval.
 
 There is no organization enablement flag. The coordinated cutover must prove discovery/receipt plus v2 prepared claim support and drain old writers/work before resuming intake. The database migration refuses active non-approval outgoing transfers or SIGN sessions.
 
@@ -282,7 +277,7 @@ IDs below are reserved immutable identifiers. STEP-001 now materializes authoriz
 | APPROVAL-V1-005 | External APPROVED receipt, deterministic signing seed and exact canonical signature bytes | TEST-007/009/019 |
 | APPROVAL-V1-006 | External REJECTED receipt with bounded reason; reject missing/oversized/invalid reason | TEST-008/010/023 |
 | APPROVAL-V1-007 | Auto APPROVED receipt/admission; zero organization calls | TEST-007/009 |
-| APPROVAL-V1-008 | Duplicate/unknown fields, wrong hash/org/key/environment/domain/audience, bad base64/signature, revoked new receipt | TEST-008/019/021 |
+| APPROVAL-V1-008 | Duplicate/unknown fields, wrong hash/org/key/domain/audience, bad base64/signature, revoked new receipt | TEST-008/019/021 |
 | APPROVAL-V1-009 | All decision HTTP/disposition outcomes and immutable exact replay after cancel/execution | TEST-010/011/019 |
 | APPROVAL-V1-010 | Existing cursor service token, fixed upper/after, wrong org/resource/MAC, invalid position | TEST-019/022 |
 | APPROVAL-V1-011 | Fresh-only multi-page/repeated sweep, cancellation/outage/continuous arrivals, bounded dispatch/backoff | TEST-007/009/022 |
@@ -294,7 +289,7 @@ IDs below are reserved immutable identifiers. STEP-001 now materializes authoriz
 | APPROVAL-V1-017 | Mutated recipient/amount/token/chain/calldata/nonce/TAPOS/encoding/signature/quote/budget/digest; no MPC | TEST-017/019 |
 | APPROVAL-V1-018 | Same execution binding replay versus changed outgoing/digest; no replacement or orphan restart | TEST-018/020 |
 | APPROVAL-V1-019 | Legacy v1/v2 compatibility and approval-required null/missing binding/v1 bypass rejection | TEST-021/026 |
-| APPROVAL-V1-020 | Config/admission revision switch, missing journal/durability, saved final receipt redelivery without organization call | TEST-007/009/026 |
+| APPROVAL-V1-020 | Config/admission mode or endpoint switch, missing journal/durability, saved final receipt redelivery without organization call | TEST-007/009/026 |
 
 ## Source anchors and technical rulings
 

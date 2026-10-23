@@ -4,6 +4,7 @@ package approval
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"syscall"
@@ -11,10 +12,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func privateDirectory(i os.FileInfo) error {
+func validateJournalDirectory(i os.FileInfo) error {
 	s, ok := i.Sys().(*syscall.Stat_t)
-	if !i.IsDir() || i.Mode().Perm() != 0700 || !ok || s.Uid != uint32(os.Geteuid()) {
-		return ErrIntegrity
+	if !i.IsDir() || !ok || s.Uid != uint32(os.Geteuid()) {
+		return fmt.Errorf("%w: approval directory must be owned by the running process user", ErrIntegrity)
+	}
+	// Other users may list the directory, but cannot replace its journal files.
+	// File contents remain private through the separate 0600 checks below.
+	permissions := i.Mode().Perm()
+	if permissions&0700 != 0700 || permissions&0022 != 0 {
+		return fmt.Errorf("%w: approval directory requires owner read/write/search access and no group or other write access (mode %04o)", ErrIntegrity, permissions)
 	}
 	return nil
 }

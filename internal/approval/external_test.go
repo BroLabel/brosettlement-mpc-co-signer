@@ -152,3 +152,43 @@ func TestExternalRejectsUnauthenticatedTLSAndOversizedResponse(t *testing.T) {
 		t.Fatal("oversized organization response accepted")
 	}
 }
+
+func TestExternalBindsOrganizationToValidatedAuthorization(t *testing.T) {
+	for _, scenario := range []string{"matching", "wrong-response-org", "altered-authorization"} {
+		t.Run(scenario, func(t *testing.T) {
+			item := pendingItemForOrg(t, "request", "org-2")
+			if scenario == "altered-authorization" {
+				item.AuthorizationHash = strings.Repeat("0", 64)
+			}
+			var calls atomic.Int32
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				var body struct {
+					OrgID string `json:"orgId"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.OrgID != "org-2" {
+					t.Error("outbound organization did not match authorization")
+				}
+				orgID := "org-2"
+				if scenario == "wrong-response-org" {
+					orgID = "org-1"
+				}
+				json.NewEncoder(w).Encode(map[string]any{"version": 1, "orgId": orgID, "requestId": item.RequestID, "authorizationHash": item.AuthorizationHash, "status": "APPROVED", "reason": nil, "decisionReference": nil})
+			}))
+			defer server.Close()
+			cfg := testConfig(t)
+			cfg.Mode, cfg.Endpoint, cfg.BearerToken = "external", server.URL, "dedicated"
+			organization, err := NewExternal(cfg, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = organization.Evaluate(context.Background(), item)
+			if (err == nil) != (scenario == "matching") {
+				t.Fatalf("unexpected decision result: %v", err)
+			}
+			if scenario == "altered-authorization" && calls.Load() != 0 {
+				t.Fatal("sent invalid authorization to organization")
+			}
+		})
+	}
+}

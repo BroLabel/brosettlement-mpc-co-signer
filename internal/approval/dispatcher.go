@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,14 +20,17 @@ import (
 type Item = wire.PendingItem
 type Page = wire.PendingPage
 type Backend interface {
-	// PendingApprovals returns a page validated against the closed wire contract
-	// and the authenticated organization at the HTTP boundary.
-	PendingApprovals(context.Context, string, string) (Page, error)
+	PendingApprovals(context.Context, string) (Page, error)
 	SendApprovalDecision(context.Context, string, []byte) ([]byte, error)
 }
 type Organization interface {
 	Evaluate(context.Context, Item) (wire.Object, error)
 }
+type suppressionKey struct {
+	orgID, requestID string
+	savedReceipt     bool
+}
+
 type suppression struct {
 	attempts uint
 	until    time.Time
@@ -42,7 +44,7 @@ type Dispatcher struct {
 	keyID        string
 	key          ed25519.PrivateKey
 	cursor       string
-	backoff      map[string]suppression
+	backoff      map[suppressionKey]suppression
 	sequence     uint64
 	recoveryTurn bool
 	now          func() time.Time
@@ -57,7 +59,7 @@ func NewDispatcher(c Config, j *Journal, b Backend, o Organization, keyID string
 	if j == nil || b == nil || !wire.ValidReference(keyID) || len(key) != ed25519.PrivateKeySize || c.Mode == "external" && o == nil {
 		return nil, ErrIntegrity
 	}
-	return &Dispatcher{cfg: c, journal: j, backend: b, organization: o, keyID: keyID, key: append(ed25519.PrivateKey(nil), key...), backoff: make(map[string]suppression), now: time.Now, jitter: func(max time.Duration) time.Duration {
+	return &Dispatcher{cfg: c, journal: j, backend: b, organization: o, keyID: keyID, key: append(ed25519.PrivateKey(nil), key...), backoff: make(map[suppressionKey]suppression), now: time.Now, jitter: func(max time.Duration) time.Duration {
 		if max <= 0 {
 			return 0
 		}
@@ -79,11 +81,11 @@ func (d *Dispatcher) Run(ctx context.Context, report func(error)) {
 		}
 	}
 }
-func (d *Dispatcher) due(key string) bool {
+func (d *Dispatcher) due(key suppressionKey) bool {
 	s, ok := d.backoff[key]
 	return !ok || !d.now().Before(s.until)
 }
-func (d *Dispatcher) suppress(key string) {
+func (d *Dispatcher) suppress(key suppressionKey) {
 	s := d.backoff[key]
 	if s.attempts < 1024 {
 		s.attempts++
@@ -97,17 +99,17 @@ func (d *Dispatcher) suppress(key string) {
 	d.sequence++
 	s.sequence = d.sequence
 	if _, ok := d.backoff[key]; !ok && len(d.backoff) >= 1000 {
-		var oldest string
+		var oldest suppressionKey
 		seq := uint64(math.MaxUint64)
 		for k, v := range d.backoff {
-			if strings.HasPrefix(k, "organization:") && v.sequence < seq {
+			if !k.savedReceipt && v.sequence < seq {
 				oldest = k
 				seq = v.sequence
 			}
 		}
 		// Saved-delivery hints cannot be evicted by fresh evaluations. Once all
 		// capacity belongs to saved evidence, discovery continues with backpressure.
-		if oldest == "" {
+		if oldest == (suppressionKey{}) {
 			return
 		}
 		delete(d.backoff, oldest)
@@ -127,7 +129,7 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 	result = errors.Join(result, d.recoverSaved(ctx))
 
 	pageCtx, cancel := context.WithTimeout(ctx, d.cfg.Timeout)
-	page, e := d.backend.PendingApprovals(pageCtx, d.cursor, d.cfg.OrgID)
+	page, e := d.backend.PendingApprovals(pageCtx, d.cursor)
 	cancel()
 	if e != nil {
 		// Cursor key rotation invalidates a sweep, not saved decisions. Restart
@@ -135,6 +137,13 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 		if errors.Is(e, monolith.ErrInvalidApprovalCursor) {
 			d.cursor = ""
 		}
+		return errors.Join(result, e)
+	}
+	raw, e := json.Marshal(page)
+	if e != nil {
+		return errors.Join(result, e)
+	}
+	if e = wire.ParsePendingPage(raw); e != nil {
 		return errors.Join(result, e)
 	}
 	if len(page.Items) > 50 {
@@ -155,7 +164,11 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 	return result
 }
 func (d *Dispatcher) process(ctx context.Context, item Item) error {
-	state, e := d.journal.Load(d.cfg.OrgID, item.RequestID)
+	orgID, e := item.OrganizationID()
+	if e != nil {
+		return e
+	}
+	state, e := d.journal.Load(orgID, item.RequestID)
 	if e != nil {
 		return e
 	}
@@ -163,7 +176,7 @@ func (d *Dispatcher) process(ctx context.Context, item Item) error {
 		return ErrConflict
 	}
 	if state.Receipt != nil {
-		if len(state.Application) == 0 && d.due("delivery:"+item.RequestID) {
+		if len(state.Application) == 0 && d.due(suppressionKey{orgID, item.RequestID, true}) {
 			return d.deliver(ctx, *state.Receipt)
 		}
 		return nil
@@ -171,7 +184,7 @@ func (d *Dispatcher) process(ctx context.Context, item Item) error {
 	if d.deliveryHints() >= 1000 {
 		return errors.New("approval delivery retry capacity exhausted; new evaluations suspended")
 	}
-	key := "organization:" + item.RequestID
+	key := suppressionKey{orgID, item.RequestID, false}
 	if !d.due(key) {
 		return nil
 	}
@@ -180,7 +193,7 @@ func (d *Dispatcher) process(ctx context.Context, item Item) error {
 		v := d.cfg.Endpoint
 		endpoint = &v
 	}
-	a := Admission{1, d.cfg.OrgID, item.RequestID, item.AuthorizationHash, d.cfg.Mode, d.cfg.Environment, d.cfg.Revision, endpoint, d.now().UTC().Format("2006-01-02T15:04:05.000Z")}
+	a := Admission{1, orgID, item.RequestID, item.AuthorizationHash, d.cfg.Mode, endpoint, d.now().UTC().Format("2006-01-02T15:04:05.000Z")}
 	if e = d.journal.Admit(a); e != nil {
 		return e
 	}
@@ -214,7 +227,7 @@ func (d *Dispatcher) process(ctx context.Context, item Item) error {
 	return d.deliver(ctx, saved)
 }
 func (d *Dispatcher) receipt(a Admission, response wire.Object) ([]byte, error) {
-	envelope := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "environment": a.Environment, "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": field(response, "status"), "reason": response["reason"], "source": a.Mode, "externalDecisionReference": response["decisionReference"], "decidedAt": d.now().UTC().Format("2006-01-02T15:04:05.000Z"), "signingKeyId": d.keyID, "configRevision": a.ConfigRevision}
+	envelope := map[string]any{"version": 1, "domain": "brosettlement.co-signer.approval-decision", "audience": "brosettlement-transfer-approval", "orgId": a.OrgID, "requestId": a.RequestID, "authorizationHash": a.AuthorizationHash, "decision": field(response, "status"), "reason": response["reason"], "source": a.Mode, "externalDecisionReference": response["decisionReference"], "decidedAt": d.now().UTC().Format("2006-01-02T15:04:05.000Z"), "signingKeyId": d.keyID}
 	raw, e := json.Marshal(envelope)
 	if e != nil {
 		return nil, e
@@ -230,7 +243,7 @@ func (d *Dispatcher) receipt(a Admission, response wire.Object) ([]byte, error) 
 	return json.Marshal(map[string]any{"version": 1, "envelopeBase64": base64.StdEncoding.EncodeToString(raw), "signatureBase64": base64.StdEncoding.EncodeToString(signature)})
 }
 func (d *Dispatcher) deliver(ctx context.Context, r SavedReceipt) error {
-	key := "delivery:" + r.RequestID
+	key := suppressionKey{r.OrgID, r.RequestID, true}
 	attemptCtx, cancel := context.WithTimeout(ctx, d.cfg.Timeout)
 	application, e := d.backend.SendApprovalDecision(attemptCtx, r.RequestID, r.Bytes)
 	cancel()
@@ -256,26 +269,25 @@ func (d *Dispatcher) deliver(ctx context.Context, r SavedReceipt) error {
 func (d *Dispatcher) deliveryHints() int {
 	n := 0
 	for k := range d.backoff {
-		if strings.HasPrefix(k, "delivery:") {
+		if k.savedReceipt {
 			n++
 		}
 	}
 	return n
 }
 func (d *Dispatcher) retrySavedHint(ctx context.Context) (bool, error) {
-	key := ""
+	var key suppressionKey
 	order := uint64(math.MaxUint64)
 	for k, v := range d.backoff {
-		if strings.HasPrefix(k, "delivery:") && d.due(k) && v.sequence < order {
+		if k.savedReceipt && d.due(k) && v.sequence < order {
 			key = k
 			order = v.sequence
 		}
 	}
-	if key == "" {
+	if key == (suppressionKey{}) {
 		return false, nil
 	}
-	id := strings.TrimPrefix(key, "delivery:")
-	s, e := d.journal.Load(d.cfg.OrgID, id)
+	s, e := d.journal.Load(key.orgID, key.requestID)
 	if e != nil {
 		d.suppress(key)
 		return true, e
@@ -302,10 +314,7 @@ func (d *Dispatcher) recoverSaved(ctx context.Context) error {
 	receipts, e := d.journal.PendingReceipts(50)
 	result := e
 	for _, r := range receipts {
-		if r.OrgID != d.cfg.OrgID {
-			return errors.Join(result, ErrIntegrity)
-		}
-		if d.due("delivery:" + r.RequestID) {
+		if d.due(suppressionKey{r.OrgID, r.RequestID, true}) {
 			return errors.Join(result, d.deliver(ctx, r))
 		}
 	}
