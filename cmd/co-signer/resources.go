@@ -278,7 +278,7 @@ func openApprovalWorker(cfg config.Config, key ed25519.PrivateKey, backend appro
 	if err := approval.ValidateDirectories(cfg.Approval.JournalDir, shares...); err != nil {
 		return nil, nil, err
 	}
-	journal, err := approval.OpenJournal(cfg.Approval.JournalDir)
+	journal, err := approval.OpenManagedJournal(cfg.Approval.JournalDir, cfg.PrimaryStore.Directory(), cfg.Approval.AutoInitializeJournal)
 	if err != nil {
 		return nil, nil, err
 	}

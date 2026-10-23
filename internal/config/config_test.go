@@ -237,6 +237,29 @@ func TestApprovalDoesNotRequireEnvironment(t *testing.T) {
 	}
 }
 
+func TestApprovalModesUseSiblingStorageWithoutJournalEnv(t *testing.T) {
+	for _, mode := range []string{"auto_approve", "external"} {
+		t.Run(mode, func(t *testing.T) {
+			setRequiredEnv(t)
+			root := t.TempDir()
+			t.Setenv("CO_SIGNER_PRIMARY_SHARES_DIR", filepath.Join(root, "primary"))
+			t.Setenv("CO_SIGNER_RECOVERY_SHARES_DIR", filepath.Join(root, "recovery"))
+			t.Setenv("CO_SIGNER_APPROVAL_MODE", mode)
+			if mode == "external" {
+				t.Setenv("CO_SIGNER_APPROVAL_ENDPOINT", "https://org.test/approve")
+				t.Setenv("CO_SIGNER_APPROVAL_BEARER_TOKEN", "dedicated-secret")
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Approval.JournalDir != filepath.Join(root, "approval") || !cfg.Approval.AutoInitializeJournal || cfg.Approval.Mode != mode {
+				t.Fatal("journal default changed decision mode or did not follow share storage")
+			}
+		})
+	}
+}
+
 func TestExternalApprovalUsesDefaultJournalWithoutPinnedOrganizationOrRevision(t *testing.T) {
 	setApprovalEnv(t)
 	t.Setenv("CO_SIGNER_APPROVAL_JOURNAL_DIR", "")

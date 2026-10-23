@@ -13,10 +13,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-const (
-	defaultPreParamsGenerationParallelism = 2
-	defaultApprovalJournalDir             = "/var/lib/co-signer/approval"
-)
+const defaultPreParamsGenerationParallelism = 2
 
 type Config struct {
 	Approval                       *approval.Config
@@ -135,10 +132,12 @@ func Load() (Config, error) {
 		mode = "auto_approve"
 	}
 	journalDir := os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR")
+	autoInitializeJournal := journalDir == ""
 	if journalDir == "" {
-		journalDir = defaultApprovalJournalDir
+		journalDir = filepath.Join(filepath.Dir(primaryStore.Directory()), "approval")
 	}
 	a := approval.Config{Mode: mode, JournalDir: journalDir, Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
+	a.AutoInitializeJournal = autoInitializeJournal
 	if err := a.Validate(); err != nil {
 		return Config{}, err
 	}
