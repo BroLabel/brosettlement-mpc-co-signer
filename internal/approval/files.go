@@ -47,7 +47,11 @@ func (j *Journal) publish(path string, raw []byte) error {
 	if e := j.check(); e != nil {
 		return e
 	}
-	f, e := j.ops.CreateTemp(j.directory, ".approval-tmp-*")
+	return publishJournalFile(j.ops, path, raw)
+}
+
+func publishJournalFile(ops journalOperations, path string, raw []byte) error {
+	f, e := ops.CreateTemp(filepath.Dir(path), ".approval-tmp-*")
 	if e != nil {
 		return e
 	}
@@ -69,10 +73,10 @@ func (j *Journal) publish(path string, raw []byte) error {
 	if e = f.Close(); e != nil {
 		return e
 	}
-	if e = j.ops.Publish(f.Name(), path); e != nil {
+	if e = ops.Publish(f.Name(), path); e != nil {
 		return e
 	}
-	return j.ops.SyncDirectory(filepath.Dir(path))
+	return ops.SyncDirectory(filepath.Dir(path))
 }
 
 func digest(raw []byte) string             { h := sha256.Sum256(raw); return hex.EncodeToString(h[:]) }

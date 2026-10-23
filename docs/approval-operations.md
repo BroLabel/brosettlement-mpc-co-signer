@@ -4,28 +4,38 @@ Approval is mandatory for every new backend transfer and every SIGN. Upgrade bac
 
 ## First installation
 
-Provision a **new**, empty durable directory on the intended storage, owned by the user running Co-Signer, outside both primary and recovery share directories. Under a parent directory writable by that user, ordinary directory creation is sufficient with the usual `022` or `027` umask:
+Keep primary and recovery share directories on persistent storage. With no journal override, Co-Signer derives `approval` beside the primary directory and creates it on first initialization. For example:
 
-```sh
-mkdir -p /var/lib/co-signer/approval
+```text
+/data/primary/                       # Existing share store
+/data/primary/.approval-journal.json  # Private initialization marker
+/data/recovery/                      # Existing recovery store
+/data/approval/                      # Automatically created, mode 0700
+/data/approval/.approval-journal.json # Matching journal identity
 ```
 
-This is first-time provisioning only. Never run this as a repair for a missing journal after an installation has admitted work. The application requires the directory to exist; it never creates a replacement. Both lexical and resolved symlink overlap with share directories are rejected. The directory must support create-only rename, file fsync and directory fsync. Linux uses RENAME_NOREPLACE; macOS uses RENAME_EXCL and F_FULLFSYNC for files. Startup probes these operations, checks directory ownership and permissions, and retains an independent lifetime writer lock. The owner must have read/write/search access; group and other write access are rejected. Standard `0755`, `0750` and private `0700` directories are accepted without changing their permissions. Directory listing may expose filenames and metadata to other local users; file contents remain private. A second installation using different primary shares still cannot share this journal concurrently. Files are 0600 and read without following symlinks.
+No new environment variable or separate volume is required. The common parent must already exist, be owned and writable by the service user, and reside on the same filesystem as primary shares. Mount the common parent, not just each share subdirectory: a sibling outside a mounted share volume is not a safe automatic storage location. Filesystem identity is checked, but the application cannot prove that a host filesystem is persistent across replacement.
 
-The Docker image stages the default approval directory with the same service ownership as the share stores. All three directories still require durable storage; image contents are not a backup, and a mounted host directory must grant the container user access.
+While holding the primary store lifetime lock, startup creates a random journal identity and publishes the marker inside primary before the matching identity inside the journal. Both files are private, create-only and fsynced. Dispatch and signing start only after both are durable. A later startup requires their exact agreement, including the canonical journal path. A missing journal, empty replacement, changed path, missing marker or partial identity pair stops startup; nothing is reconstructed from backend claims. A crash before the outer marker is published can retry initialization because no work has been admitted. A crash leaving only the outer marker requires operator reconciliation. An existing unmarked journal can be enrolled without rewriting its request evidence.
+
+This guard applies after enrollment. Before upgrading an installation that already used approvals, verify and back up its existing journal: missing pre-upgrade evidence cannot be distinguished from a first installation by a marker that did not yet exist. If the old implicit `/var/lib/co-signer/approval` exists and differs from the newly derived path, startup stops rather than abandoning it. Keep the existing `CO_SIGNER_APPROVAL_JOURNAL_DIR` override for that installation or perform a reviewed storage migration. Do not delete the old directory to bypass this check.
+
+Both lexical and resolved symlink overlap with share directories are rejected. Existing directory aliases resolve to the same canonical identity; identity files themselves cannot be symlinks. The directory must support create-only rename, file fsync and directory fsync. Linux uses RENAME_NOREPLACE; macOS uses RENAME_EXCL and F_FULLFSYNC for files. Startup probes these operations, checks directory ownership and permissions, and retains an independent lifetime writer lock. The owner must have read/write/search access; group and other write access are rejected. Existing `0755`, `0750` and private `0700` directories are accepted without changing their permissions. Files are `0600` and read without following symlinks. A journal enrolled by another primary store cannot be silently reused.
+
+The Docker image stages only the share directories. Mount durable storage over `/var/lib/co-signer` so the automatically created journal and initialization marker survive container replacement. Image contents are not a backup.
 
 Configure approval as follows:
 
 | Setting | Value |
 | --- | --- |
 | `CO_SIGNER_APPROVAL_MODE` | `external` or `auto_approve`; defaults to `auto_approve`, including when no approval variables are set |
-| `CO_SIGNER_APPROVAL_JOURNAL_DIR` | Defaults to `/var/lib/co-signer/approval`; the durable directory must already exist and be owned by the service user |
+| `CO_SIGNER_APPROVAL_JOURNAL_DIR` | Optional existing journal override; otherwise creates `approval` beside primary shares on first initialization |
 | `CO_SIGNER_APPROVAL_ENDPOINT` | For external mode, the exact HTTPS URL; no userinfo or fragment |
 | `CO_SIGNER_APPROVAL_BEARER_TOKEN` | For external mode, a dedicated organization integration credential |
 
 The bearer credential is never copied into persisted evidence, receipt envelopes, organization payloads or formatted configuration. Platform API credentials are used only for signed backend requests. Endpoint redirects are disabled. Every organization call has one transport attempt, including on reused connections; automatic HTTP body replay is disabled. Standard TLS server authentication remains required.
 
-With no approval variables, startup selects auto approval and the default journal path. A missing or unsafe journal or an invalid configuration fails startup. Backend derives the organization from the authenticated API key; Co-Signer uses each validated `authorization.orgId` for journal keys, organization calls and signed receipts. There is no separate startup organization lookup. Backend checks that the API key, request and signed decision belong to the same organization. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
+With no approval variables, startup selects auto approval and initializes the derived journal on first use. A missing initialized journal, unsafe storage or invalid configuration fails startup. External mode uses the same storage lifecycle. Backend derives the organization from the authenticated API key; Co-Signer uses each validated `authorization.orgId` for journal keys, organization calls and signed receipts. There is no separate startup organization lookup. Backend checks that the API key, request and signed decision belong to the same organization. `CO_SIGNER_STATE_DIR` and `CO_SIGNER_LOCK_PATH` remain unsupported. Existing `CO_SIGNER_HTTP_TIMEOUT`, `CO_SIGNER_POLL_MIN_INTERVAL`, `CO_SIGNER_POLL_MAX_INTERVAL` and finite `CO_SIGNER_POLL_BACKOFF_FACTOR >= 1` control bounded attempts and full-jitter suppression. Waiting has no total deadline or maximum age.
 
 Omitting `CO_SIGNER_APPROVAL_MODE` selects `auto_approve` even when no other approval variables are set. Set `external` explicitly to require organization approval. Review unseen pending backlog before enabling auto mode. This mode produces durable signed APPROVED receipts through the same path and makes zero organization calls. Endpoint and token settings are ignored in auto mode.
 
@@ -57,9 +67,9 @@ Execution evidence uses the frozen `ExecutionBindingV1` and one narrow create-on
 
 ## Recovery and restore
 
-Stop admission and coordinate with the backend operator before repairing or restoring storage. Keep transfer intake and SIGN admission paused during cutover or recovery until the complete workflow is proven. Retain all journal files and historical public keys. Use a coordinated whole-volume backup/restore with the backend, preserving file ownership, permissions and all admission/receipt/ACK/execution/marker evidence. Do not delete evidence, manually rewrite a decision, create an empty replacement, restore an older subset or silently switch modes to bypass a conflict. Preserve partial artifacts for investigation; external idempotency alone is not sufficient authorization to reconstruct local history.
+Stop admission and coordinate with the backend operator before repairing or restoring storage. Keep transfer intake and SIGN admission paused during cutover or recovery until the complete workflow is proven. Retain all journal files and historical public keys. Use a coordinated whole-volume backup/restore with the backend, preserving file ownership, permissions and all admission/receipt/ACK/execution/marker evidence, including the initialization marker inside primary and the matching journal identity. Do not delete evidence, manually rewrite a decision, create an empty replacement, restore an older subset or silently switch modes to bypass a conflict. Preserve partial artifacts for investigation; external idempotency alone is not sufficient authorization to reconstruct local history.
 
-Detected missing dependencies or a single missing execution artifact fail closed. This does not claim detection of arbitrary rollback or deletion of every related file: erasing both execution artifacts or all request evidence can remove the local fact that they existed. Preventing that event relies on the approved coordinated-volume/restore discipline; this feature does not introduce a global history registry. Investigate the original publication outcome and authoritative backend state, then restore verified exact evidence under a reviewed operational procedure. Never regenerate a business decision or execution binding from a claim echo.
+Detected missing dependencies or a single missing execution artifact fail closed. This does not claim detection of arbitrary rollback or deletion of every related file: erasing both execution artifacts or all request evidence can remove the local fact that they existed. Likewise, deleting both journal identity files or rolling back the whole volume is outside the initialization guard; the outer marker must be retained with shares. Preventing that event relies on the approved coordinated-volume/restore discipline; this feature does not introduce a global history registry. Investigate the original publication outcome and authoritative backend state, then restore verified exact evidence under a reviewed operational procedure. Never regenerate a business decision or execution binding from a claim echo.
 
 ## Verification boundary
 
@@ -75,6 +85,6 @@ The backend runbook `docs/runbooks/transfer-approval-rollout.md` specifies the c
 
 ## Mandatory approval cutover
 
-Every SIGN requires a v2 claim with nonnull approval and prepared bytes, the configured organization, and the matching durable local receipt and application ACK. Missing configuration, journal, approval, or byte binding never permits signing. `auto_approve` remains an explicit decision mode and writes the same signed evidence.
+Every SIGN requires a v2 claim with nonnull approval and prepared bytes, the authenticated organization, and the matching durable local receipt and application ACK. Missing configuration, journal, approval, or byte binding never permits signing. `auto_approve` is the default decision mode and writes the same signed evidence.
 
 Upgrade backend and Co-Signer together under paused transfer intake and SIGN admission. The backend migration refuses nonterminal transfers or active SIGN sessions without approval. Drain them with the compatible old release before retrying; never rewrite their origin, delete their holds, or synthesize approval evidence. Historical settled transfers remain readable.

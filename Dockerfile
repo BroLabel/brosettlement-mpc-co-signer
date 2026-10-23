@@ -36,10 +36,10 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
         -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" \
         -o /out/co-signer ./cmd/co-signer
 
-# Share stores and the approval journal must exist before startup. Stage private
-# defaults here because the runtime image has no shell to mkdir/chmod with.
-RUN mkdir -p /state/primary /state/recovery /state/approval \
-    && chmod 0700 /state/primary /state/recovery /state/approval
+# Share stores must exist before startup; the approval journal is initialized
+# beside them on first use. The runtime image has no shell to mkdir/chmod with.
+RUN mkdir -p /state/primary /state/recovery \
+    && chmod 0700 /state/primary /state/recovery
 
 # ------------------------------------------------------------------------------
 # Stage 2 — runtime
@@ -59,8 +59,8 @@ COPY --from=build /out/co-signer /usr/local/bin/co-signer
 # 65532 is the distroless "nonroot" uid/gid; numeric to avoid name lookups.
 COPY --from=build --chown=65532:65532 /state/ /var/lib/co-signer/
 
-# Defaults matching the staged directories. Mount durable storage over all three in
-# production — an image path alone does not survive container replacement.
+# Mount durable storage at their common parent /var/lib/co-signer, including the
+# automatically created approval directory. Image paths are not durable storage.
 ENV CO_SIGNER_PRIMARY_SHARES_DIR=/var/lib/co-signer/primary \
     CO_SIGNER_RECOVERY_SHARES_DIR=/var/lib/co-signer/recovery
 

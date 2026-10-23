@@ -25,6 +25,12 @@ func validateJournalDirectory(i os.FileInfo) error {
 	}
 	return nil
 }
+
+func sameFilesystem(a, b os.FileInfo) bool {
+	x, xOK := a.Sys().(*syscall.Stat_t)
+	y, yOK := b.Sys().(*syscall.Stat_t)
+	return xOK && yOK && x.Dev == y.Dev
+}
 func readJournalFile(path string) ([]byte, error) {
 	fd, e := unix.Open(path, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if e != nil {

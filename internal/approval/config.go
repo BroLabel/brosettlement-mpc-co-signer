@@ -14,6 +14,7 @@ import (
 
 type Config struct {
 	Mode, JournalDir, Endpoint        string
+	AutoInitializeJournal             bool
 	BearerToken                       string
 	MinInterval, MaxInterval, Timeout time.Duration
 	BackoffFactor                     float64
