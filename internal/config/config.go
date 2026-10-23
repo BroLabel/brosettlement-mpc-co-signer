@@ -13,10 +13,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-const (
-	defaultPreParamsGenerationParallelism = 2
-	legacyApprovalJournalDir              = "/var/lib/co-signer/approval"
-)
+const defaultPreParamsGenerationParallelism = 2
 
 type Config struct {
 	Approval                       *approval.Config
@@ -137,10 +134,7 @@ func Load() (Config, error) {
 	journalDir := os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR")
 	autoInitializeJournal := journalDir == ""
 	if journalDir == "" {
-		journalDir, err = defaultJournalDirectory(primaryStore.Directory(), legacyApprovalJournalDir)
-		if err != nil {
-			return Config{}, err
-		}
+		journalDir = filepath.Join(filepath.Dir(primaryStore.Directory()), "approval")
 	}
 	a := approval.Config{Mode: mode, JournalDir: journalDir, Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
 	a.AutoInitializeJournal = autoInitializeJournal
@@ -152,19 +146,6 @@ func Load() (Config, error) {
 	}
 	cfg.Approval = &a
 	return cfg, nil
-}
-
-func defaultJournalDirectory(primary, legacy string) (string, error) {
-	directory := filepath.Join(filepath.Dir(primary), "approval")
-	// Never silently abandon evidence at the old implicit path on upgrade.
-	if directory != legacy {
-		if _, err := os.Lstat(legacy); err == nil {
-			return "", errors.New("existing legacy approval journal: set CO_SIGNER_APPROVAL_JOURNAL_DIR to its path before upgrading")
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("inspect legacy approval journal: %w", err)
-		}
-	}
-	return directory, nil
 }
 
 func loadDotEnv() error {
