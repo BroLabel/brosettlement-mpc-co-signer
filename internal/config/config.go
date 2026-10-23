@@ -135,10 +135,16 @@ func Load() (Config, error) {
 		mode = "auto_approve"
 	}
 	journalDir := os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR")
-	if journalDir == "" { journalDir = defaultApprovalJournalDir }
+	if journalDir == "" {
+		journalDir = defaultApprovalJournalDir
+	}
 	a := approval.Config{Mode: mode, JournalDir: journalDir, Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
-	if err := a.Validate(); err != nil { return Config{}, err }
-	if err := approval.ValidateDirectories(a.JournalDir, primaryStore.Directory(), recoveryStore.Directory()); err != nil { return Config{}, err }
+	if err := a.Validate(); err != nil {
+		return Config{}, err
+	}
+	if err := approval.ValidateDirectories(a.JournalDir, primaryStore.Directory(), recoveryStore.Directory()); err != nil {
+		return Config{}, err
+	}
 	cfg.Approval = &a
 	return cfg, nil
 }

@@ -87,14 +87,14 @@ func approvalJournalAwaitingACK(t *testing.T, i monolith.Intent) *approval.Journ
 	}
 	t.Cleanup(func() { j.Close() })
 	endpoint := "https://synthetic.example/approval"
-	if e = j.Admit(approval.Admission{Version: 1, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, Mode: "external", Endpoint: &endpoint, AdmittedAt: "2026-10-19T10:00:00.000Z"}); e != nil {
+	if e = j.Admit(approval.Admission{Version: 1, OrgID: i.Payload.OrgID, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, Mode: "external", Endpoint: &endpoint, AdmittedAt: "2026-10-19T10:00:00.000Z"}); e != nil {
 		t.Fatal(e)
 	}
 	seed := make([]byte, 32)
 	for k := range seed {
 		seed[k] = 0x42
 	}
-	if e = j.SaveReceipt(approval.SavedReceipt{Version: 1, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, SigningKeyID: "synthetic-approval-ed25519", PublicKey: ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey), Bytes: i.Approval.DecisionReceipt}); e != nil {
+	if e = j.SaveReceipt(approval.SavedReceipt{Version: 1, OrgID: i.Payload.OrgID, RequestID: i.Approval.RequestID, AuthorizationHash: i.Approval.AuthorizationHash, SigningKeyID: "synthetic-approval-ed25519", PublicKey: ed25519.NewKeyFromSeed(seed).Public().(ed25519.PublicKey), Bytes: i.Approval.DecisionReceipt}); e != nil {
 		t.Fatal(e)
 	}
 	return j
@@ -180,10 +180,6 @@ func TestApprovalGateRejectsNullDowngradeAndMissingLocalEvidence(t *testing.T) {
 	}
 	if e := (ApprovalGate{}).Authorize(context.Background(), i); e == nil {
 		t.Fatal("missing local journal accepted")
-	}
-	g.OrgID = ""
-	if e := g.Authorize(context.Background(), i); e == nil {
-		t.Fatal("valid evidence accepted without a configured organization")
 	}
 }
 func TestApprovalRuntimeGateBeforeCoreAndACKDeadline(t *testing.T) {

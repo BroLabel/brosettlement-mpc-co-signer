@@ -10,7 +10,6 @@ func TestApprovalGateAuthorizesTronWithoutRPC(t *testing.T) {
 	i, now := approvalIntent(t, true)
 	j := approvalJournal(t, i)
 	gate := ApprovalGate{
-		OrgID:   i.Payload.OrgID,
 		Journal: j,
 		Now:     func() time.Time { return time.UnixMilli(now) },
 	}

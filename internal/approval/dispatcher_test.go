@@ -654,7 +654,7 @@ func TestDispatcherRecoversInvalidCursorWithoutReevaluatingSavedDecisions(t *tes
 			if err := d.Step(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			saved, _ := j.Load(c.OrgID, item.RequestID)
+			saved, _ := j.Load("org-1", item.RequestID)
 			if err := d.Step(context.Background()); err == nil {
 				t.Fatal("missing discovery error")
 			}
@@ -666,7 +666,7 @@ func TestDispatcherRecoversInvalidCursorWithoutReevaluatingSavedDecisions(t *tes
 			if fresh != want {
 				t.Fatalf("fresh=%d stale=%d reset=%v", fresh, stale, reset)
 			}
-			after, _ := j.Load(c.OrgID, item.RequestID)
+			after, _ := j.Load("org-1", item.RequestID)
 			if !bytes.Equal(saved.Receipt.Bytes, after.Receipt.Bytes) || len(b.delivered) != 1 {
 				t.Fatal("saved decision recreated or redelivered")
 			}

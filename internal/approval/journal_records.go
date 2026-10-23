@@ -76,7 +76,6 @@ func (a Admission) validate() error {
 	return ErrIntegrity
 }
 
-
 func equalJSON(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)

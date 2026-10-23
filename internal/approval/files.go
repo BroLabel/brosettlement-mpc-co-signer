@@ -153,7 +153,3 @@ func (j *Journal) read(org, req, kind string, out any, fields string) (bool, err
 	}
 	return true, decodeRecord(raw, out, fields)
 }
-
-func (j *Journal) revisionPath(org, revision string) string {
-	return filepath.Join(j.directory, recordKey(org, revision)+".config.json")
-}

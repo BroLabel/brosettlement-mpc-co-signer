@@ -1,8 +1,6 @@
 package approval
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"io"
 	"os"

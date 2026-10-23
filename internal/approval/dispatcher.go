@@ -140,8 +140,12 @@ func (d *Dispatcher) Step(ctx context.Context) error {
 		return errors.Join(result, e)
 	}
 	raw, e := json.Marshal(page)
-	if e != nil { return errors.Join(result, e) }
-	if e = wire.ParsePendingPage(raw); e != nil { return errors.Join(result, e) }
+	if e != nil {
+		return errors.Join(result, e)
+	}
+	if e = wire.ParsePendingPage(raw); e != nil {
+		return errors.Join(result, e)
+	}
 	if len(page.Items) > 50 {
 		return errors.Join(result, ErrIntegrity)
 	}
