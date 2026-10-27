@@ -4,7 +4,7 @@
 # Pinned to the build platform so the Go toolchain always runs natively and
 # cross-compiles for TARGETARCH. Emulating the compiler under QEMU would make
 # the arm64 build several times slower for no benefit.
-FROM --platform=${BUILDPLATFORM} golang:1.24-alpine AS build
+FROM --platform=${BUILDPLATFORM} golang:1.27.3-alpine AS build
 
 # CGO is unused (the only platform call, unix.Statfs, comes from
 # golang.org/x/sys), so the binary links statically and needs no libc at
