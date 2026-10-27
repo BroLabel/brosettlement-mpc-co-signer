@@ -20,6 +20,7 @@ jobs:
         run: |
           ./scripts/check-release-identity.test.sh
           ./scripts/check-image-tag-available.test.sh
+          bash scripts/fetch-release-source.test.sh
       - uses: actions/setup-go@v6
         with:
           go-version: '1.27.3'
@@ -54,7 +55,7 @@ jobs:
           IMAGE: ${{ steps.image.outputs.name }}
           REF: ${{ github.ref }}
         run: |
-          git fetch origin main eks-staging
+          bash scripts/fetch-release-source.sh
           export REVISION=$(git rev-parse HEAD)
           ./scripts/check-release-identity.sh >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@v3

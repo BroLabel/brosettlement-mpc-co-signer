@@ -19,11 +19,10 @@ then a new corrective release if clients need a new default.
 
 ## Existing releases
 
-- `v2.0.2` is the production-compatible release at the time these channels were
-  introduced. Its existing Git tag and container are preserved.
-- `v2.1.0` is a historical staging preview, marked as a GitHub pre-release. The
-  tag is already occupied and must not be recreated or moved. Use a new version,
-  such as `2.1.1`, for the next candidate and stable release.
+`v2.2.0` is the stable release published on 27 October 2026. Historical tags,
+including `v2.0.2`, `v2.1.0` and `v2.1.1`, remain occupied and must not be moved
+or reused. Before starting the next candidate/stable cycle, bump `VERSION`
+above the published stable version, for example to `2.2.1`.
 
 Clients resolve GitHub Latest once, then install the exact returned tag or image
 digest. Staging clients explicitly choose their approved preview. Do not select
@@ -36,8 +35,8 @@ the highest Git tag or assume the default branch is the supported release.
 
    ```bash
    git fetch origin eks-staging
-   git tag v2.1.1-rc.1 origin/eks-staging
-   git push origin v2.1.1-rc.1
+   git tag v2.2.1-rc.1 origin/eks-staging
+   git push origin v2.2.1-rc.1
    ```
 
 3. The publish workflow runs tests, checks tag/branch identity, refuses an
@@ -68,7 +67,10 @@ verify its digest and source revision from the original workflow, then finish
 only the missing release metadata or alias promotion. Never delete the image or
 move its Git tag to make a rerun pass. A source correction gets a new version.
 
-Branch checks are refreshed at publication time. Older delayed tag runs are
+Branch checks are refreshed at publication time. Fetch only the source required
+by the selected channel: stable/main uses `main`, while staging and RC use
+`eks-staging`. A missing staging branch cannot block a stable publication; an RC
+still requires its own staging source. Older delayed tag runs are
 rejected once the corresponding branch has advanced. Protect release tags and
 branches with repository access controls; a workflow cannot prevent an admin
 from force-moving a tag or rerunning a historical workflow that predates these
