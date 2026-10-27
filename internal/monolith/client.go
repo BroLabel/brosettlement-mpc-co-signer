@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -96,10 +97,21 @@ func (c *Client) doJSONAttempts(ctx context.Context, method, path string, payloa
 			return lastErr
 		}
 
-		respBody, readErr := io.ReadAll(resp.Body)
+		var reader io.Reader = resp.Body
+		claimResponse := strings.HasPrefix(path, "/api/v2/co-signer/intents/sign/") && strings.HasSuffix(path, "/claim")
+		if claimResponse {
+			reader = io.LimitReader(resp.Body, 128*1024+1)
+		}
+		respBody, readErr := io.ReadAll(reader)
+		if claimResponse && (len(respBody) > 128*1024 || !utf8.Valid(respBody)) {
+			readErr = ErrClaimEnvelopeInvalid
+		}
 		_ = resp.Body.Close()
 		if readErr != nil {
 			lastErr = readErr
+			if claimResponse {
+				lastErr = errors.Join(ErrClaimOutcomeUnknown, ErrClaimEnvelopeInvalid, readErr)
+			}
 			if attempt < attempts {
 				time.Sleep(backoff(attempt))
 				continue
@@ -127,12 +139,18 @@ func (c *Client) doJSONAttempts(ctx context.Context, method, path string, payloa
 			return nil
 		}
 		if err := strictjson.DecodeClosed(respBody, out); err != nil {
+			if claimResponse {
+				return errors.Join(ErrClaimOutcomeUnknown, ErrClaimEnvelopeInvalid, err)
+			}
 			return err
 		}
 		if observer, ok := out.(interface {
 			retainExactResponseFields([]byte) error
 		}); ok {
 			if err := observer.retainExactResponseFields(respBody); err != nil {
+				if claimResponse {
+					return errors.Join(ErrClaimOutcomeUnknown, ErrClaimEnvelopeInvalid, err)
+				}
 				return err
 			}
 		}

@@ -4,7 +4,7 @@
 # Pinned to the build platform so the Go toolchain always runs natively and
 # cross-compiles for TARGETARCH. Emulating the compiler under QEMU would make
 # the arm64 build several times slower for no benefit.
-FROM --platform=${BUILDPLATFORM} golang:1.24-alpine AS build
+FROM --platform=${BUILDPLATFORM} golang:1.27.3-alpine AS build
 
 # CGO is unused (the only platform call, unix.Statfs, comes from
 # golang.org/x/sys), so the binary links statically and needs no libc at
@@ -36,9 +36,8 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
         -ldflags="-s -w -X main.version=${VERSION} -X main.revision=${REVISION}" \
         -o /out/co-signer ./cmd/co-signer
 
-# The share stores must exist and be private before startup: sharestore rejects
-# any directory carrying a group or other permission bit. They are staged here
-# because the runtime image has no shell to mkdir/chmod with.
+# Share stores must exist before startup; the approval journal is initialized
+# beside them on first use. The runtime image has no shell to mkdir/chmod with.
 RUN mkdir -p /state/primary /state/recovery \
     && chmod 0700 /state/primary /state/recovery
 
@@ -60,8 +59,8 @@ COPY --from=build /out/co-signer /usr/local/bin/co-signer
 # 65532 is the distroless "nonroot" uid/gid; numeric to avoid name lookups.
 COPY --from=build --chown=65532:65532 /state/ /var/lib/co-signer/
 
-# Defaults matching the staged directories. Mount durable storage over both in
-# production — an image path alone does not survive container replacement.
+# Mount durable storage at their common parent /var/lib/co-signer, including the
+# automatically created approval directory. Image paths are not durable storage.
 ENV CO_SIGNER_PRIMARY_SHARES_DIR=/var/lib/co-signer/primary \
     CO_SIGNER_RECOVERY_SHARES_DIR=/var/lib/co-signer/recovery
 

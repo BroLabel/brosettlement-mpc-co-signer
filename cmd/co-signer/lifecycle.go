@@ -19,6 +19,7 @@ func newLifecycleCoordinator(log *slog.Logger, cfg config.Config, privateKey ed2
 	var resources *applicationResources
 	var healthListener net.Listener
 	return lifecycle.NewCoordinator(lifecycle.Dependencies{
+		SigningDisabled: cfg.Approval == nil,
 		AcquireLock: func() (io.Closer, error) {
 			return lifecycle.AcquireLifetimeLock(cfg.LockPath)
 		},

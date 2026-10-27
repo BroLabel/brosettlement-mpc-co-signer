@@ -8,15 +8,15 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/approval"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/sharestore"
 	"github.com/joho/godotenv"
 )
 
-const (
-	defaultPreParamsGenerationParallelism = 2
-)
+const defaultPreParamsGenerationParallelism = 2
 
 type Config struct {
+	Approval                       *approval.Config
 	MonolithURL                    string
 	APIKeyID                       string
 	APIPrivateKey                  string
@@ -127,6 +127,24 @@ func Load() (Config, error) {
 		return Config{}, errors.New("CO_SIGNER_PREPARAMS_GENERATION_PARALLELISM must be >= 1")
 	}
 
+	mode := os.Getenv("CO_SIGNER_APPROVAL_MODE")
+	if mode == "" {
+		mode = "auto_approve"
+	}
+	journalDir := os.Getenv("CO_SIGNER_APPROVAL_JOURNAL_DIR")
+	autoInitializeJournal := journalDir == ""
+	if journalDir == "" {
+		journalDir = filepath.Join(filepath.Dir(primaryStore.Directory()), "approval")
+	}
+	a := approval.Config{Mode: mode, JournalDir: journalDir, Endpoint: os.Getenv("CO_SIGNER_APPROVAL_ENDPOINT"), BearerToken: os.Getenv("CO_SIGNER_APPROVAL_BEARER_TOKEN"), MinInterval: cfg.PollMinInterval, MaxInterval: cfg.PollMaxInterval, BackoffFactor: cfg.PollBackoffFactor, Timeout: cfg.HTTPTimeout}
+	a.AutoInitializeJournal = autoInitializeJournal
+	if err := a.Validate(); err != nil {
+		return Config{}, err
+	}
+	if err := approval.ValidateDirectories(a.JournalDir, primaryStore.Directory(), recoveryStore.Directory()); err != nil {
+		return Config{}, err
+	}
+	cfg.Approval = &a
 	return cfg, nil
 }
 

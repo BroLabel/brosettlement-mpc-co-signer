@@ -183,7 +183,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func canRefreshProvisioning(snapshot Snapshot) bool {
-	if !snapshot.ProcessReady || !snapshot.SigningReady {
+	if !snapshot.ProcessReady {
 		return false
 	}
 	return snapshot.ProvisioningReason == ReasonNone ||

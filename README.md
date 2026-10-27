@@ -39,6 +39,15 @@ Because the Co-Signer host contains both B and C, it is a quorum-bearing trust
 domain. Treat access to the host, both artifact stores, and their shared
 encryption key as security-critical.
 
+TRON signing does not require a blockchain RPC endpoint. Co-Signer checks the
+transaction bytes and approved transfer terms locally, but trusts Backend for
+the selected TRON network and TAPOS block reference. Mainnet and Nile may
+currently share the same derived wallet key/address. A compromised Backend can
+therefore present mainnet transaction bytes under a Nile approval when the
+approved transfer terms match. See the [TRON network trust boundary](docs/approval-prepared-sign-v2.md#tron-network-trust-boundary)
+and the planned derivation-branch separation in
+[BROSET-156](https://brolabel.atlassian.net/browse/BROSET-156).
+
 For the wider product and integration model, see the
 [BroSettlement documentation](https://www.brolabel.io/en/api-reference/brosettlement)
 and the [Co-Signer guide](https://www.brolabel.io/en/api-reference/co-signer).
@@ -90,7 +99,7 @@ staging development. Publishing a release does not update an installed client.
 
 ### Configure
 
-Create two separate private artifact directories:
+Create two separate private artifact directories on the same persistent volume:
 
 ```bash
 install -d -m 0700 "$PWD/.local/co-signer/primary"
@@ -115,6 +124,11 @@ export CO_SIGNER_RECOVERY_SHARES_DIR="$PWD/.local/co-signer/recovery"
 export CO_SIGNER_SHARE_ENCRYPTION_KEY="$(openssl rand -base64 32)"
 export CO_SIGNER_SHARE_ENCRYPTION_KEY_ID="local-dev-v1"
 ```
+
+On first startup, the service creates `approval` beside the primary directory,
+with a private initialization marker inside primary and a matching identity in
+the journal. Keep their common parent on persistent storage. No approval env is
+required. After initialization, a lost or empty replacement journal stops startup.
 
 The service also loads a local `.env` file. Never commit `.env`, API private
 keys, share-encryption keys, or generated share artifacts.
@@ -277,3 +291,9 @@ DKG completion uses persisted share evidence and public keys. Core no longer
 returns a network address or reports `ErrMissingDKGAddress`. Upgrades preserve
 existing key shares and do not require another DKG. Signer and Co-Signer must pin
 the same reviewed Core revision, without local module replacements in builds.
+
+### Durable transfer approvals
+
+Approval dispatch is enabled by default. `CO_SIGNER_APPROVAL_MODE` defaults to `auto_approve`; set `external` explicitly to require organization approval. Without `CO_SIGNER_APPROVAL_JOURNAL_DIR`, the journal defaults to `approval` beside the primary share directory and is created with `0700` permissions on first initialization. Its parent must be writable by the service user, owned by that user, and on the same filesystem as primary shares; mount their common parent on persistent storage. An explicit journal path remains supported and must already exist. Standard `0755` and `0750` directory permissions are accepted; group/other write access is rejected, and journal files remain `0600`. External mode also requires the exact HTTPS `CO_SIGNER_APPROVAL_ENDPOINT` and dedicated `CO_SIGNER_APPROVAL_BEARER_TOKEN`; invalid configuration or API failures never fall back to auto mode. Backend derives the organization from the API key. Co-Signer uses each validated authorization's `orgId` for its journal, organization API request and signed decision, without a separate startup lookup. No organization ID or configuration revision variable is required. The journal pins each request's mode/endpoint and exact signed decision; saved receipts retry independently of backend pending discovery. Automatic mode uses the same durable path and makes no organization calls. The worker is independent of SIGN permits. Deployments must use separate API signing keys.
+
+Read [approval operations](docs/approval-operations.md) before provisioning storage, changing modes or restoring history. A missing existing journal is an integrity/recovery event, never a reason to create an empty replacement. Backend and Co-Signer require a coordinated mandatory-approval cutover.

@@ -2,11 +2,13 @@ package signingpolicy
 
 import (
 	"errors"
-	"math/big"
 	"strings"
 )
 
 const ethereumPayloadType = "ethereum-transaction"
+const ethereumHashAlgorithm = "keccak256"
+
+func isEthereumChain(chain string) bool { return ethereumChainID(chain) != "" }
 
 var ethereumPolicyFields = []string{
 	"amountAtomic", "asset", "chain", "chainId", "fromAddress", "gasLimit", "maxFeePerGas",
@@ -41,6 +43,9 @@ func validateEthereumAddresses(policy *Context) error {
 }
 
 func validateEthereumContext(policy *Context) error {
+	if err := validateEthereumAddresses(policy); err != nil {
+		return err
+	}
 	wantChainID := ethereumChainID(policy.Chain)
 	if policy.Version != 1 || policy.TransactionType != 2 || wantChainID == "" || policy.ChainID != wantChainID ||
 		!canonicalUint(policy.AmountAtomic) || !canonicalUint(policy.Nonce) || !canonicalPositiveUint(policy.GasLimit) ||
@@ -62,33 +67,7 @@ func validateEthereumContext(policy *Context) error {
 }
 
 func validEthereumTuple(tuple Tuple) bool {
-	return ethereumChainID(tuple.Chain) != "" && tuple.HashAlgorithm == "keccak256" && tuple.AddressEncoding == "evm_hex"
-}
-
-func canonicalUint(value string) bool {
-	if value == "0" {
-		return true
-	}
-	if value == "" || value[0] < '1' || value[0] > '9' {
-		return false
-	}
-	for i := 1; i < len(value); i++ {
-		if value[i] < '0' || value[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func canonicalPositiveUint(value string) bool { return value != "0" && canonicalUint(value) }
-
-func compareUint(left, right string) int {
-	leftInt, leftOK := new(big.Int).SetString(left, 10)
-	rightInt, rightOK := new(big.Int).SetString(right, 10)
-	if !leftOK || !rightOK {
-		return 1
-	}
-	return leftInt.Cmp(rightInt)
+	return isEthereumChain(tuple.Chain) && tuple.AddressEncoding == "evm_hex"
 }
 
 func canonicalEVMAddress(value string) bool {

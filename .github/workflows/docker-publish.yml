@@ -22,7 +22,7 @@ jobs:
           ./scripts/check-image-tag-available.test.sh
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: '1.27.3'
           cache: true
       - name: Test Co-Signer
         run: GOWORK=off go test ./...

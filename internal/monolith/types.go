@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	wire "github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/approval"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/contract/mpc2of3"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/signingpolicy"
 	"github.com/BroLabel/brosettlement-mpc-co-signer/internal/strictjson"
@@ -107,7 +108,10 @@ func (r *MessagesResult) UnmarshalJSON(raw []byte) error {
 }
 
 type Intent struct {
-	Session         SessionLifecycle `json:"session"`
+	Version         int                              `json:"-"`
+	Approval        *signingpolicy.ApprovedExecution `json:"-"`
+	Prepared        *signingpolicy.PreparedTransfer  `json:"-"`
+	Session         SessionLifecycle                 `json:"session"`
 	CreatedAt       time.Time
 	DeadlineRaw     string
 	DiscoveryStatus string
@@ -200,20 +204,23 @@ type InboundMessage struct {
 }
 
 type ClaimResult struct {
-	Session               SessionLifecycle `json:"session"`
-	HTTPStatus            int              `json:"httpStatus,omitempty"`
-	IntentID              string           `json:"intentId,omitempty"`
-	SessionID             string           `json:"sessionId,omitempty"`
-	Type                  string           `json:"type,omitempty"`
-	Payload               IntentPayload    `json:"payload,omitempty"`
-	Status                string           `json:"status,omitempty"`
-	Deadline              time.Time        `json:"deadline"`
-	DeadlineRaw           string           `json:"-"`
-	OrgID                 string           `json:"orgId,omitempty"`
-	KeyID                 string           `json:"keyId,omitempty"`
-	DescriptorBytes       []byte           `json:"descriptorBytesBase64,omitempty"`
-	DescriptorFingerprint string           `json:"descriptorFingerprint,omitempty"`
-	ChainCode             []byte           `json:"chainCodeBase64,omitempty"`
+	Version               int                              `json:"version,omitempty"`
+	Approval              *signingpolicy.ApprovedExecution `json:"approval,omitempty"`
+	Prepared              *signingpolicy.PreparedTransfer  `json:"prepared,omitempty"`
+	Session               SessionLifecycle                 `json:"session"`
+	HTTPStatus            int                              `json:"httpStatus,omitempty"`
+	IntentID              string                           `json:"intentId,omitempty"`
+	SessionID             string                           `json:"sessionId,omitempty"`
+	Type                  string                           `json:"type,omitempty"`
+	Payload               IntentPayload                    `json:"payload,omitempty"`
+	Status                string                           `json:"status,omitempty"`
+	Deadline              time.Time                        `json:"deadline"`
+	DeadlineRaw           string                           `json:"-"`
+	OrgID                 string                           `json:"orgId,omitempty"`
+	KeyID                 string                           `json:"keyId,omitempty"`
+	DescriptorBytes       []byte                           `json:"descriptorBytesBase64,omitempty"`
+	DescriptorFingerprint string                           `json:"descriptorFingerprint,omitempty"`
+	ChainCode             []byte                           `json:"chainCodeBase64,omitempty"`
 }
 
 func (r *ClaimResult) retainExactResponseFields(raw []byte) error {
@@ -222,6 +229,39 @@ func (r *ClaimResult) retainExactResponseFields(raw []byte) error {
 	}
 	if err := json.Unmarshal(raw, &exact); err != nil {
 		return err
+	}
+	var allFields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &allFields); err != nil {
+		return err
+	}
+	if r.Type != "SIGN" {
+		for _, name := range []string{"version", "approval", "prepared"} {
+			if _, ok := allFields[name]; ok {
+				return ErrClaimEnvelopeInvalid
+			}
+		}
+	}
+	if r.Type == "SIGN" {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil || len(fields) != 11 || r.Version != 2 {
+			return ErrClaimEnvelopeInvalid
+		}
+		for _, key := range []string{"version", "approval", "prepared", "httpStatus", "intentId", "sessionId", "type", "payload", "status", "deadline", "session"} {
+			if fields[key] == nil {
+				return ErrClaimEnvelopeInvalid
+			}
+		}
+		if r.Approval == nil || r.Prepared == nil {
+			return ErrClaimEnvelopeInvalid
+		}
+		var payload map[string]json.RawMessage
+		if json.Unmarshal(fields["payload"], &payload) != nil {
+			return ErrClaimEnvelopeInvalid
+		}
+		var encoded string
+		if json.Unmarshal(payload["digest"], &encoded) != nil || !wire.ValidExecutionDigest(encoded) {
+			return ErrClaimEnvelopeInvalid
+		}
 	}
 	r.DeadlineRaw = exact.Deadline
 	return nil
@@ -257,6 +297,7 @@ func (r ClaimResult) Intent() Intent {
 		}
 	}
 	return Intent{
+		Version: r.Version, Approval: r.Approval, Prepared: r.Prepared,
 		Session:   r.Session,
 		IntentID:  r.IntentID,
 		SessionID: r.SessionID,
