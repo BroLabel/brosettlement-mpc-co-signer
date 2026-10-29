@@ -90,9 +90,9 @@ GOWORK=off go build -trimpath \
   -o ./bin/co-signer ./cmd/co-signer
 ```
 
-For staging, replace the first command with an explicitly approved preview tag
-(for the current staging backend, `COSIGNER_VERSION=v2.1.0`). Future previews use
-`vX.Y.Z-rc.N`. Match the API URL and credentials below to the selected environment.
+For staging, select an explicitly approved RC tag (`vX.Y.Z-rc.N`) or the
+immutable digest of the `staging` image. Confirm its compatibility with the
+staging backend; historical previews are not current installation defaults.
 The [Latest release](https://github.com/BroLabel/brosettlement-mpc-co-signer/releases/latest)
 is reserved for the production-compatible version.
 
