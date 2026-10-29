@@ -4,7 +4,15 @@ Approval is mandatory for every new backend transfer and every SIGN. Upgrade bac
 
 ## First installation
 
-Keep primary and recovery share directories on persistent storage. With no journal override, Co-Signer derives `approval` beside the primary directory and creates it on first initialization. For example:
+Keep the primary store, configured recovery publication directory and approval
+journal on persistent storage. Existing activated keys' C artifacts may be
+retained outside the Co-Signer after a verified custody transfer; see the
+[recovery custody procedure](runbooks/recovery-artifact.md#post-activation-share-c-custody).
+The recovery directory is still needed for new DKG, while B and approval
+history remain local for normal operation.
+
+With no journal override, Co-Signer derives `approval` beside the primary
+directory and creates it on first initialization. For example:
 
 ```text
 /data/primary/                       # Existing share store

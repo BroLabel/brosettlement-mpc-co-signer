@@ -3,10 +3,11 @@
 [![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
-A customer-hosted co-signing service for 2-of-3 threshold signatures. It holds
-two of the three key shares—primary and recovery—and participates in
-multi-party computation so transactions can be signed without any single party
-ever holding a complete private key.
+A customer-hosted co-signing service for 2-of-3 threshold signatures. It creates
+primary Share B and recovery Share C during DKG and uses B for normal A+B
+signing. After confirmed DKG completion and key activation, C may be retained
+outside the Co-Signer in independent customer-controlled storage. Transactions
+are signed without reconstructing a complete private key.
 
 The service is built for BroSettlement and uses threshold ECDSA over secp256k1,
 implemented with the GG18 protocol through
@@ -22,12 +23,12 @@ flowchart LR
     Monolith <-->|"Ed25519-authenticated HTTPS<br/>MPC frames and results"| CoSigner["Customer-hosted Co-Signer"]
     Monolith --- A["A · platform share"]
     CoSigner --- B["B · primary share"]
-    CoSigner --- C["C · recovery share"]
+    CoSigner -->|"creates during DKG; export after activation"| C["C · recovery share<br/>Independent customer storage"]
 ```
 
 The client backend initiates wallet and transaction operations, but it is not
 itself an MPC party. The three MPC parties are the BroSettlement platform share
-and the two purpose-bound shares managed by the Co-Signer:
+and the two purpose-bound shares created locally by the Co-Signer during DKG:
 
 - **Distributed key generation:** A + B + C participate in GG18 DKG.
 - **Normal signing:** A + B form the production 2-of-3 quorum.
@@ -35,9 +36,12 @@ and the two purpose-bound shares managed by the Co-Signer:
   isolated recovery proof, but does not provide a supported recovery CLI or
   SDK.
 
-Because the Co-Signer host contains both B and C, it is a quorum-bearing trust
-domain. Treat access to the host, both artifact stores, and their shared
-encryption key as security-critical.
+While B, C and their decryption material are accessible to the Co-Signer host,
+it is a quorum-bearing trust domain. Permanent co-location is not required.
+Keep C in an independent trust domain after verifying its external copy; normal
+A+B signing does not need C. Treat access during DKG and before separation as
+security-critical. Later removal cannot revoke copies already obtained by an
+attacker.
 
 TRON signing does not require a blockchain RPC endpoint. Co-Signer checks the
 transaction bytes and approved transfer terms locally, but trusts Backend for
@@ -99,7 +103,9 @@ staging development. Publishing a release does not update an installed client.
 
 ### Configure
 
-Create two separate private artifact directories on the same persistent volume:
+Create two separate private artifact directories on the same persistent volume
+for local DKG publication. This is not a requirement to retain C files there
+permanently after key activation:
 
 ```bash
 install -d -m 0700 "$PWD/.local/co-signer/primary"
@@ -187,7 +193,7 @@ DKG completion under unlimited queueing or load.
 | `CO_SIGNER_API_KEY_ID` | ID of an Ed25519 API key authorized for Co-Signer operations. |
 | `CO_SIGNER_API_PRIVATE_KEY` | Ed25519 private key as PKCS#8 PEM, 32- or 64-byte hex, or standard Base64. |
 | `CO_SIGNER_PRIMARY_SHARES_DIR` | Absolute, pre-existing private directory for primary B artifacts. |
-| `CO_SIGNER_RECOVERY_SHARES_DIR` | Absolute, pre-existing private directory for recovery C artifacts; it must not equal or overlap the primary directory. |
+| `CO_SIGNER_RECOVERY_SHARES_DIR` | Absolute, pre-existing private destination for C publication during DKG; it must not equal or overlap primary. Activated keys' C files may be retained externally. |
 | `CO_SIGNER_SHARE_ENCRYPTION_KEY` | Canonical padded standard Base64 encoding of exactly 32 random bytes. |
 | `CO_SIGNER_SHARE_ENCRYPTION_KEY_ID` | Stable printable ASCII identifier, 1–255 bytes, for the encryption-key reference. |
 
@@ -215,9 +221,24 @@ fail.
 
 The primary and recovery stores use one in-memory AES-256 key provider and the
 same stable key reference. The raw encryption key is never returned by store
-configuration or written to logs. Back up the original key, its reference, and
-both artifact directories together; v1 has no passphrase hashing, key rotation,
-re-encryption, or old-key lookup.
+configuration or written to logs. Preserve the original key and its reference
+for the lifetime of every artifact; v1 has no passphrase hashing, key rotation,
+re-encryption, or old-key lookup. Preserve B and C in independently controlled
+backup locations, with the encryption key protected separately.
+
+After confirmed DKG completion and key activation, the customer may transfer
+the unchanged C artifact to independent storage outside the Co-Signer,
+including offline storage. Verify exact bytes, key identity and recoverability
+with the original encryption key and key reference before removing the local
+copy. Preserve the original filename and never destroy the last recoverable
+copy. The service does not perform this custody transfer automatically.
+
+Keep the configured local recovery directory available for future DKG; an
+empty directory does not imply that existing keys lack externally held C
+artifacts. Preserve primary B, the primary initialization marker and the
+approval journal across restarts and upgrades. Separating C is not permission
+to remove the volume, journal or other share artifacts. See the
+[post-activation custody procedure](docs/runbooks/recovery-artifact.md#post-activation-share-c-custody).
 
 Immutable artifact publication is supported on Linux and macOS. Production
 operations remain Linux-only; macOS support is intended for local development
