@@ -63,8 +63,10 @@ This project assumes:
 
 - the signer side may be compromised
 - the network is untrusted
-- the co-signer host is a quorum-bearing trust domain and is **not protected**
-  by v1: it holds B and C and can authorize threshold signing without A
+- during DKG and while B, C and their decryption material are accessible to
+  the co-signer host, it is a quorum-bearing trust domain and is **not
+  protected** by v1 against full host compromise; it can authorize signing
+  without A. Permanent storage of C on that host is not required
 
 Issues that expose the co-signer host, artifacts, or shared key as a recovery
 quorum are critical. Offline recovery in v1 is only an artifact format and a
@@ -79,8 +81,13 @@ reference. The service rejects passphrases, non-canonical encodings, and keys
 whose decoded length is not exactly 32 bytes; it never derives an encryption key
 by hashing a passphrase.
 
-Operators must preserve the original encryption key, key reference, primary
-artifact directory, and recovery artifact directory. The process lifetime lock
+Operators must preserve the original encryption key, key reference and exact
+B/C artifact bytes. After confirmed DKG completion and activation, C may be
+retained in independent storage outside the co-signer, including offline
+storage. Verify recoverability before removing the local C copy; never destroy
+the last recoverable copy. Keep the configured local directories for future
+DKG publication, and preserve primary B and approval-journal evidence. The
+process lifetime lock
 has the fixed path `<primary artifact directory>/.co-signer.lock`.
 Changing the key or key reference while artifacts remain live makes recovery
 unsafe. There is no rotation, re-encryption, or old-key lookup in v1. A local
@@ -88,10 +95,13 @@ filesystem lock is process fencing for exactly one replica and one local
 writable artifact topology shared by B/C; it is not cross-host or distributed
 fencing. Upgrades require no overlap between old and new writable processes.
 
-The co-signer host is a quorum-bearing trust domain. Compromise of that host,
-or compromise of the shared key together with both B and C artifacts, can
-authorize recovery signing without platform party A. This accepted v1 risk must
-be treated as Critical. Customers retain custody and backup responsibility for
+The co-signer host is quorum-bearing while both B and C and their decryption
+material are accessible to it. Compromise during that period, or compromise of
+the shared key together with both artifacts anywhere, can authorize signing
+without platform A and must be treated as Critical. Moving C to independent
+custody does not undo prior exposure; separate directories or backups still
+accessible with the host's credentials are not independent trust domains.
+Customers retain custody and backup responsibility for
 their artifacts, original key, and key reference. After activation the product
 does not promise to monitor or guarantee C availability, and it provides no
 supported recovery tool. A future tool is `FUTURE-001` in the approved DESIGN,
