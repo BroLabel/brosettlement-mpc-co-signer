@@ -71,7 +71,16 @@ lifetime of every v1 artifact. Preserve the original key, `keyRef`, B artifact,
 and C artifact in backups. A replacement key or key reference fails closed.
 V1 has no key ring, online rotation, or re-encryption path.
 
-The customer owns recovery custody. A missing or corrupt C after activation
-does not change backend state and does not stop normal A+B signing; it removes
-recovery capability. No supported CLI, SDK, endpoint, or distributed recovery
+The customer owns recovery custody. After confirmed DKG completion and key
+activation, the unchanged C artifact may be retained outside the Co-Signer,
+including offline storage. Preserve its original filename, exact bytes, key
+identity and matching encryption key/reference. Verify the independent copy's
+recoverability before removing the active-host copy. Artifact immutability
+constrains content and identity, not permanent residence on the DKG host.
+
+Absence of local C with a valid independent copy does not remove recovery
+capability. Loss or corruption of all recoverable C copies does. Neither event
+changes backend key state or stops normal A+B signing. Local recovery-store
+configuration remains necessary for future DKG publication. No supported CLI,
+SDK, endpoint, or distributed recovery
 binary exists in v1. `FUTURE-001` is DESIGN-only.

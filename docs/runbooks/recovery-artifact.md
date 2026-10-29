@@ -8,7 +8,10 @@ writable filesystem. The process uses the fixed lifetime-lock path
 `<primary directory>/.co-signer.lock`. The advisory lock is local-filesystem
 fencing only; cross-host, shared-NFS, and active-active operation are
 unsupported. It is not distributed fencing. Run with no overlap and one
-writable local artifact topology.
+writable local artifact topology for DKG publication. These writer constraints
+do not require permanent local retention of C files for activated keys. Keep
+the configured recovery directory available for new DKG even after existing C
+artifacts have been transferred to independent custody.
 
 Keep provisioning closed and do not start a replacement process when any of
 the following is true:
@@ -98,7 +101,9 @@ may still be cryptographically capable, so deletion is cleanup rather than a
 security boundary. Never activate or reuse the failed `keyId`.
 
 Cleanup is allowed only after an authoritative outcome of `FAILED` or
-`TIMED_OUT` for the addressed intent. `COMPLETED` artifacts must remain intact.
+`TIMED_OUT` for the addressed intent. `COMPLETED` artifacts must retain their
+exact bytes and identity. A verified post-activation C custody transfer follows
+the separate procedure below; it is not failed-DKG cleanup.
 Files outside the actionable intent's exact paths are never changed. Preserve
 before/after hashes when investigating publication failures and escalate any
 unexpected byte mutation.
@@ -108,9 +113,10 @@ unexpected byte mutation.
 - Missing or corrupt primary B blocks only SIGN operations for that key and
   emits a critical alert. A systemic primary-store or key-provider failure
   makes `signingReady` false.
-- Missing or corrupt recovery C after activation does not disable A+B signing.
-  It removes the customer's recovery capability and requires a custody alert;
-  backend key state remains `ACTIVE`.
+- Absence of local C after a verified transfer to independent custody is
+  expected and does not remove recovery capability. Loss or corruption of all
+  recoverable C copies requires a custody alert and removes B+C recovery;
+  normal A+B signing and backend `ACTIVE` state remain unchanged.
 - Recovery-store or pre-parameter failure closes
   `provisioningReady` only. Do not report signing unavailable unless its own
   dependencies fail.
@@ -126,12 +132,44 @@ Wrong party, session, round, sender sequence, or stream binding is a protocol
 integrity incident. Fail the affected session, preserve redacted diagnostics,
 and investigate backend/co-signer contract compatibility before reopening DKG.
 
+## Post-activation Share C custody
+
+C may be retained in independent customer-controlled storage, including offline
+storage, after DKG is authoritatively terminal `COMPLETED` and the key is
+activated. Do not transfer C while DKG, activation or terminal delivery remains
+unresolved.
+
+1. Identify the exact activated key's `.recovery.json` artifact. Preserve its
+   original filename, exact bytes, key/session identity and encryption key
+   reference; never modify or re-encrypt it.
+2. Establish a durable independent copy outside the Co-Signer's trust domain.
+   Verify byte equality and recoverability with the original 32-byte key and
+   exact `CO_SIGNER_SHARE_ENCRYPTION_KEY_ID` using a reviewed custody procedure.
+   Keep the encryption key protected separately. Do not log share material or
+   expose it through chat, tickets or command arguments.
+3. Only after that verification may the operator remove the active-host copy.
+   Never destroy the last recoverable copy. Retain protected evidence of the
+   custody handover without placing secrets in service logs.
+4. Keep primary B, the configured recovery directory, the primary initialization
+   marker and approval journal intact. This is a file custody transfer, not
+   removal of the storage mount or replacement of journal history. C is not
+   needed for normal A+B signing. New DKG still publishes a new C locally and
+   requires a new custody handover for that key.
+
+The service does not export C or verify external custody automatically. Local
+absence alone is not proof of a completed transfer. This procedure does not
+introduce remote DKG, a remote share-store backend or a new recovery CLI.
+
 ## Backup, restore, and forward recovery
 
-Back up immutable B/C files together with the original 32-byte encryption key
-and exact `CO_SIGNER_SHARE_ENCRYPTION_KEY_ID`. Restore exact bytes to their
-original purpose-bound directories. Do not rename, decrypt/re-encrypt, rotate,
-or adopt an artifact under another key filename.
+Preserve immutable B and C artifacts in independently controlled backup
+locations, plus the original 32-byte encryption key and exact
+`CO_SIGNER_SHARE_ENCRYPTION_KEY_ID` in separately protected key custody. Restore
+B to its purpose-bound directory; C may remain in verified independent custody
+unless an approved recovery procedure needs it. Preserve exact bytes and
+original filenames. Do not decrypt/re-encrypt, rotate, or adopt an artifact
+under another key filename. Preserve approval-journal and initialization-marker
+evidence under the existing coordinated restore procedure.
 
 V1 has no component-level rollback after activation or destructive migration.
 For rollout failure, keep traffic closed and use a coordinated forward fix, or
@@ -140,8 +178,11 @@ binaries against migrated schemas.
 
 ## Security response
 
-Treat co-signer host compromise as a quorum-bearing incident: the host, or the
-shared key plus both artifacts, can authorize B+C signing without platform A.
+Treat co-signer host compromise as quorum-bearing when both artifacts and their
+decryption material were accessible to that host, including during DKG or before
+C separation. The shared key plus both artifacts can authorize B+C signing
+without platform A. Later C removal does not revoke previously obtained copies;
+independent custody reduces continuing exposure, not past compromise.
 Preserve evidence and contact security support. The service offers no supported
 post-activation C guarantee and no recovery command. `FUTURE-001` may define a
 future product only after a separate DESIGN.
